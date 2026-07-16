@@ -1,0 +1,49 @@
+# ---- Secrets / config ----
+.env
+.env.*
+!.env.example
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+*.egg
+
+# Virtual environments (venv lives in server/.venv per CLAUDE.md)
+.venv/
+venv/
+env/
+ENV/
+
+# ---- Tooling / caches ----
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# ---- Runtime data ----
+# Keep the checked-in question bank (server/data/questions.json),
+# but ignore generated session stores / summaries.
+server/data/sessions/
+server/data/sessions.json
+server/data/*session*.json
+*.session.json
+
+# ---- Audio scratch (Phase 4 STT/TTS) ----
+*.wav
+*.mp3
+*.flac
+*.ogg
+recordings/
+
+# ---- Editor / OS ----
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+Desktop.ini
+.DS_Store

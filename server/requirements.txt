@@ -1,0 +1,11 @@
+# Interview Helper — server deps. Mirrors mcp-helpdesk; pin exact versions to match
+# whatever you have working there (check ../mcp-helpdesk/server/requirements.txt).
+fastmcp>=3.4,<4
+pydantic-ai
+python-dotenv
+google-genai
+
+# Phase 4 (audio) — add when you get there; keep them OUT of the text-only skeleton:
+# faster-whisper      # STT (offline)
+# piper-tts           # TTS (offline)  — or pyttsx3 for a zero-download fallback
+# sounddevice         # mic capture / playback

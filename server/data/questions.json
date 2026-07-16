@@ -1,0 +1,60 @@
+{
+  "roles": {
+    "backend-engineer": {
+      "rubric": {
+        "dimensions": [
+          "Clarity of communication",
+          "Technical depth / correctness",
+          "Tradeoff reasoning",
+          "Concrete examples over generalities"
+        ],
+        "scale": "1 (poor) to 5 (excellent) per dimension"
+      },
+      "questions": [
+        {
+          "id": "be-1",
+          "type": "behavioral",
+          "text": "Tell me about a time you had to debug a production issue under pressure. What was the problem and how did you approach it?",
+          "tags": ["debugging", "ownership"]
+        },
+        {
+          "id": "be-2",
+          "type": "system-design",
+          "text": "How would you design a rate limiter for a public API? Walk me through your approach.",
+          "tags": ["system-design", "scalability"]
+        },
+        {
+          "id": "be-3",
+          "type": "technical",
+          "text": "Explain the difference between optimistic and pessimistic locking, and when you'd choose each.",
+          "tags": ["databases", "concurrency"]
+        }
+      ]
+    },
+    "product-manager": {
+      "rubric": {
+        "dimensions": [
+          "Structured thinking",
+          "User empathy",
+          "Prioritization / tradeoffs",
+          "Communication"
+        ],
+        "scale": "1 (poor) to 5 (excellent) per dimension"
+      },
+      "questions": [
+        {
+          "id": "pm-1",
+          "type": "behavioral",
+          "text": "Tell me about a product decision you made that turned out to be wrong. What did you learn?",
+          "tags": ["reflection", "ownership"]
+        },
+        {
+          "id": "pm-2",
+          "type": "product-sense",
+          "text": "How would you improve the onboarding experience for a note-taking app?",
+          "tags": ["product-sense", "ux"]
+        }
+      ]
+    }
+  }
+}
