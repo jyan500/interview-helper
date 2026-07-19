@@ -87,6 +87,40 @@ Everything above this line never learns whether the answer was typed or spoken.
 
 ---
 
+## Phase 3.5 — Same seam, new adapter: a React/Vite frontend
+
+**Goal:** swap the terminal I/O for a browser, proving a **web UI is the same edge adapter as audio** —
+the agent, tools, resources, and prompts stay byte-for-byte unchanged. This is *not* a detour from the
+voice goal; it's another instance of the one idea, and it becomes the natural host for Phase 4's audio.
+
+- **The one genuinely new structural thing:** a browser can't call `input()`. Phase 3's loop is a
+  single synchronous process that owns the whole conversation; a browser talks in discrete
+  request/response. So control inverts — the loop's state has to move **behind an HTTP boundary**,
+  stateless-per-request, keyed by `session_id`. That's the same problem any web backend has, and it's
+  the real learning nugget of this phase.
+- **Backend:** wrap Phase 3's loop in **FastAPI**. `POST /api/session` → new `session_id` + first
+  question; `POST /api/answer {session_id, text}` → feedback + next question. The FastAPI process is the
+  single MCP client (browser → HTTP → FastAPI → stdio → FastMCP), so **the MCP transport stays stdio** —
+  no need to graduate to Streamable HTTP yet. FastAPI now holds `message_history` keyed by `session_id`
+  instead of a local variable — that's the terminal loop's job, relocated.
+- **Frontend:** **React + Vite** (locked-in stack, not vanilla). React holds only what it renders — the
+  current `session_id` and the transcript. The backend stays the source of truth for agent state; don't
+  mirror `message_history` into React.
+- **The one dev wrinkle:** Vite dev server (`:5173`, hot reload) and FastAPI (`:8000`) are cross-origin,
+  so the browser's preflight will block `fetch` unless the server opts in. Add FastAPI's
+  `CORSMiddleware` with `allow_origins=["http://localhost:5173"]` (plus the methods/headers the calls
+  use). React `fetch` then hits the FastAPI origin directly — no Vite proxy. Keep the allowed origin
+  list explicit rather than `["*"]` so it stays honest about who's calling.
+- Guardrails carry over unchanged: `max_tokens`, `request_limit`, turn cap — now enforced server-side.
+
+**Deliverable:** run a full text interview in the browser — question, typed answer, feedback,
+follow-up — with the terminal loop's logic untouched underneath.
+
+**Checkpoint:** what did moving to a browser change *below* the HTTP boundary? (Nothing — same answer as
+audio. The only new work was making the loop stateless-per-request.)
+
+---
+
 ## Phase 4 — The new idea: bolt on audio (STT + TTS)
 
 **Goal:** make it a *voice* app by swapping the terminal I/O for audio adapters — and touching nothing
@@ -100,6 +134,10 @@ else.
 - Start with local/free models to keep spend at zero: e.g. `faster-whisper` (STT), `piper` or
   `pyttsx3` (TTS). Mock them first (`listen()` = `input()`, `speak()` = `print()`) so the seam is
   provably correct before real audio is involved.
+- **If Phase 3.5 exists, the browser is the natural adapter home:** the Web Speech API gives you
+  `SpeechRecognition` (STT) and `SpeechSynthesis` (TTS) natively — free, cross-platform, no local model
+  downloads. `voice/adapters.py`'s `listen()`/`speak()` interface just gets a browser implementation in
+  the React app instead of a Python one. The UI and the audio goal converge here.
 
 **Deliverable:** speak an answer into the mic; hear the follow-up question back.
 

@@ -51,7 +51,17 @@ def next_question(role: str, asked_ids: list[str] | None = None) -> dict:
       - return {"found": True, "done": True, "role": role}   # all asked
     """
     # TODO: implement per the pointers above.
-    ...
+    asked = set(asked_ids or [])
+    role_data = _load()["roles"].get(role)
+    if role_data is None:
+        return {"found": False, "role": role}
+    # this assumes that the questions are asked in sequential order
+    for q in role_data["questions"]:
+        if q["id"] not in asked:
+            return {"found": True, "question": q}
+    # all asked
+    return {"found": True, "done": True, "role": role}
+
 
 
 def get_question(question_id: str) -> dict:
@@ -62,7 +72,12 @@ def get_question(question_id: str) -> dict:
       - not found -> {"found": False, "question_id": question_id}
     """
     # TODO: implement per the pointers above.
-    ...
+    all_roles = _load()["roles"]
+    for role in all_roles:
+        for question in all_roles[role]["questions"]:
+            if question["id"] == question_id:
+                return {"found": True, "question": question}
+    return {"found": False, "question_id": question_id}
 
 
 def get_rubric(role: str) -> dict:
@@ -74,13 +89,16 @@ def get_rubric(role: str) -> dict:
       - else -> {"found": True, "role": role, "rubric": role_data["rubric"]}
     """
     # TODO: implement per the pointers above.
-    ...
+    role_data = _load()["roles"].get(role)
+    if role_data is None:
+        return {"found": False, "role": role}
+    return {"found": True, "role": role, "rubric": role_data["rubric"]}
 
 
 if __name__ == "__main__":
     # Smoke test with no LLM: prove the bank reads and the lookups work.
     print("roles:", list_roles())
     # TODO: once implemented, uncomment:
-    # print("next:", next_question("backend-engineer", asked_ids=["be-1"]))
-    # print("rubric:", get_rubric("backend-engineer"))
-    # print("q:", get_question("be-2"))
+    print("next:", next_question("backend-engineer", asked_ids=["be-1"]))
+    print("rubric:", get_rubric("backend-engineer"))
+    print("q:", get_question("be-2"))
