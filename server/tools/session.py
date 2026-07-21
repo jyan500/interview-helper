@@ -56,8 +56,14 @@ def record_answer(session_id: str, question_id: str, answer: str) -> dict:
       - _write(session_id, data)
       - return {"ok": True, "session_id": session_id, "turn_count": len(data["turns"])}
     """
-    # TODO: implement per the pointers above.
-    ...
+    data = _read(session_id)
+    data["turns"].append({
+        "question_id": question_id,     
+        "answer": answer,
+        "at": datetime.now(timezone.utc).isoformat(),
+    })
+    _write(session_id, data)
+    return {"ok": True, "session_id": session_id, "turn_count": len(data["turns"])}
 
 
 def save_session_summary(session_id: str, feedback: str) -> dict:
@@ -69,13 +75,14 @@ def save_session_summary(session_id: str, feedback: str) -> dict:
       - _write(session_id, data)
       - return {"ok": True, "session_id": session_id, "status": "summarized"}
     """
-    # TODO: implement per the pointers above.
-    ...
-
+    data = _read(session_id)
+    data["summary"] = feedback
+    _write(session_id, data)
+    return {"ok": True, "session_id": session_id, "status": "summarized"}
 
 if __name__ == "__main__":
     # Smoke test with no LLM:
     # TODO: once implemented, uncomment:
-    # print(record_answer("demo", "be-1", "I once traced a memory leak to..."))
-    # print(save_session_summary("demo", "Strong on debugging; work on brevity."))
+    print(record_answer("demo", "be-1", "I once traced a memory leak to..."))
+    print(save_session_summary("demo", "Strong on debugging; work on brevity."))
     print("session store dir:", _SESSIONS)

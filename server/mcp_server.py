@@ -35,22 +35,34 @@ mcp = FastMCP("interview-helper")
 def next_question(role: str, asked_ids: list[str] | None = None) -> dict:
     """Get the next interview question for a role the candidate hasn't been asked yet.
     Pass the ids you've already asked in `asked_ids` so questions don't repeat. Returns
-    the question (id, type, text, tags), or done=true when the bank is exhausted."""
+    {status:"ok", question} with the next question, {status:"exhausted", role} once the
+    bank is used up, or {status:"not_found", role} for an unknown role."""
     return questions.next_question(role, asked_ids)
 
 
-# TODO: record_answer — a side-effecting tool (persists a turn).
+# record_answer — a side-effecting tool (persists a turn).
 #   signature: def record_answer(session_id: str, question_id: str, answer: str) -> dict
 #   docstring: tell the model to call this AFTER the candidate answers, to log the turn.
 #   body:      return session.record_answer(session_id, question_id, answer)
-# @mcp.tool
-# def record_answer(...): ...
+@mcp.tool
+def record_answer(session_id: str, question_id: str, answer: str) -> dict:
+    """ 
+        This tool records the answer that the candidate gives after the answer a given question
+        as a turn within session.json
+    """
+    return session.record_answer(session_id, question_id, answer)
 
 
-# TODO: save_session_summary — persists the final wrap-up feedback.
+# save_session_summary — persists the final wrap-up feedback.
 #   signature: def save_session_summary(session_id: str, feedback: str) -> dict
 #   body:      return session.save_session_summary(session_id, feedback)
 
+@mcp.tool
+def save_session_summary(session_id: str, feedback: str) -> dict:
+    """ 
+        This tool saves the final wrap-up feedback for this session
+    """
+    return session.save_session_summary(session_id, feedback)
 
 # ===========================================================================
 # RESOURCES (read-only context — GET, no side effect)
@@ -65,11 +77,15 @@ def rubric_resource(role: str) -> dict:
     return questions.get_rubric(role)
 
 
-# TODO: question://{question_id} resource — a single question by id.
+# question://{question_id} resource — a single question by id.
 #   @mcp.resource("question://{question_id}")
 #   def question_resource(question_id: str) -> dict:
 #       """One interview question, addressable by id. Read-only context."""
 #       return questions.get_question(question_id)
+@mcp.resource("question://{question_id}")
+def question_resource(question_id: str) -> dict:
+    """ One interview question, addressable by id. Read-only context. """
+    return questions.get_question(question_id)
 
 
 # ===========================================================================
