@@ -39,60 +39,49 @@ def list_roles() -> dict:
 
 
 def next_question(role: str, asked_ids: list[str] | None = None) -> dict:
-    """Return the next unasked question for `role`, or done=True if exhausted.
+    """Return the next unasked question for `role` (the Phase 0 worked tool).
 
-    This is the Phase 0 worked tool. Pointers:
-      - asked = set(asked_ids or [])
-      - role_data = _load()["roles"].get(role)
-      - if role_data is None: return {"found": False, "role": role}
-      - for q in role_data["questions"]:
-            if q["id"] not in asked:
-                return {"found": True, "question": q}
-      - return {"found": True, "done": True, "role": role}   # all asked
+    Returns {"status": "ok", "question": {...}} with the first question not in
+    `asked_ids`, {"status": "exhausted", "role": role} once they're all asked, or
+    {"status": "not_found", "role": role} for an unknown role.
     """
-    # TODO: implement per the pointers above.
     asked = set(asked_ids or [])
     role_data = _load()["roles"].get(role)
     if role_data is None:
-        return {"found": False, "role": role}
-    # this assumes that the questions are asked in sequential order
+        return {"status": "not_found", "role": role}
+    # first unasked question in bank order
     for q in role_data["questions"]:
         if q["id"] not in asked:
-            return {"found": True, "question": q}
-    # all asked
-    return {"found": True, "done": True, "role": role}
+            return {"status": "ok", "question": q}
+    # every question for this role has been asked
+    return {"status": "exhausted", "role": role}
 
 
 
 def get_question(question_id: str) -> dict:
     """Look up a single question by id across all roles (backs the question:// resource).
 
-    Pointers:
-      - walk every role's "questions" list; return the one whose id matches
-      - not found -> {"found": False, "question_id": question_id}
+    Returns {"status": "ok", "question": {...}}, or
+    {"status": "not_found", "question_id": question_id} if no question matches.
     """
-    # TODO: implement per the pointers above.
     all_roles = _load()["roles"]
     for role in all_roles:
         for question in all_roles[role]["questions"]:
             if question["id"] == question_id:
-                return {"found": True, "question": question}
-    return {"found": False, "question_id": question_id}
+                return {"status": "ok", "question": question}
+    return {"status": "not_found", "question_id": question_id}
 
 
 def get_rubric(role: str) -> dict:
     """Return the scoring rubric for a role (backs the rubric:// resource).
 
-    Pointers:
-      - role_data = _load()["roles"].get(role)
-      - None -> {"found": False, "role": role}
-      - else -> {"found": True, "role": role, "rubric": role_data["rubric"]}
+    Returns {"status": "ok", "role": role, "rubric": {...}}, or
+    {"status": "not_found", "role": role} for an unknown role.
     """
-    # TODO: implement per the pointers above.
     role_data = _load()["roles"].get(role)
     if role_data is None:
-        return {"found": False, "role": role}
-    return {"found": True, "role": role, "rubric": role_data["rubric"]}
+        return {"status": "not_found", "role": role}
+    return {"status": "ok", "role": role, "rubric": role_data["rubric"]}
 
 
 if __name__ == "__main__":
