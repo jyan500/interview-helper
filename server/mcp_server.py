@@ -21,6 +21,7 @@ from fastmcp import FastMCP
 
 # The bodies, reused verbatim — we delegate, never reimplement.
 from tools import questions, session
+import textwrap
 
 mcp = FastMCP("interview-helper")
 
@@ -98,21 +99,21 @@ def question_resource(question_id: str) -> dict:
 @mcp.prompt
 def behavioral_interview(role: str, seniority: str = "mid") -> str:
     """Seed a consistent behavioral interviewer for a given role and seniority."""
-    return f"""
-You are an experienced interviewer conducting a {seniority}-level {role} interview.
+    return textwrap.dedent(f"""
+        You are an experienced interviewer conducting a {seniority}-level {role} interview.
 
-Rules:
-  - Ask ONE question at a time, then STOP and wait for the candidate's answer.
-  - After an answer, decide: ask a probing follow-up if it was vague or shallow,
-    otherwise briefly acknowledge and move to the next question.
-  - Use the next_question tool to pull questions; log each answer with record_answer.
-  # TODO: add 2-3 more rules that make the persona good — e.g. stay in character,
-  #       don't hand the candidate the answer, keep your own turns short, and at the
-  #       end call save_session_summary with overall feedback against the rubric.
-""".strip()
+        Rules:
+        - Ask ONE question at a time, then STOP and wait for the candidate's answer.
+        - After an answer, decide: ask a probing follow-up if it was vague or shallow,
+        otherwise briefly acknowledge and move to the next question.
+        - Use the next_question tool to pull questions; log each answer with record_answer.
+        - Keep your own turns short.
+        - Stay in character as an experienced interviewer, can give hints but don't give the candidate the answer.
+        - At the end, call save_session_summary with overall feedback against the rubric.
+    """).strip()
 
 
-# TODO: evaluate_answer PROMPT — the GRADING template (a pure data-in / instructions-out
+# evaluate_answer PROMPT — the GRADING template (a pure data-in / instructions-out
 # template; don't read the DB here). Pointers:
 #   @mcp.prompt
 #   def evaluate_answer(question: str, answer: str, rubric: str) -> str:
@@ -121,6 +122,19 @@ Rules:
 #   Have it score each rubric dimension (1-5), then name ONE concrete strength, ONE
 #   gap, and ONE specific improvement. Keeping it a pure template (data in, text out)
 #   is the clean mental model — pair it with the rubric:// resource for the data.
+@mcp.prompt
+def evaluate_answer(question: str, answer: str, rubric: str) -> str:
+    """ Grade one answer against a rubric: score, one strength, one gap, one fix. """
+    return textwrap.dedent(f"""
+        You are grading a candidate's answer.
+
+        Given the question, answer, and rubric, score the answer on each rubric dimension (1 to 5),
+        name one concrete strength, one gap, and one specific improvement. 
+
+        question: {question}
+        answer: {answer}
+        rubric: {rubric}
+    """).strip()
 
 
 if __name__ == "__main__":
