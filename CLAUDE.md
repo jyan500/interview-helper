@@ -95,4 +95,12 @@ Once the venv + `.env` exist (copy the recipe from `../mcp-helpdesk/server`):
 - **List discovered primitives (no LLM):** `server/.venv/Scripts/python.exe server/mcp_server.py --list`
 - **Run the text-only interview agent:** `server/.venv/Scripts/python.exe server/pydantic_agent.py`
 
+Phase 3.5 (web UI — FastAPI backend + React/Vite/TS frontend, run both together):
+
+- **Backend API (from `server/`):** `.venv/Scripts/fastapi.exe dev api.py` (serves on `:8000`; the
+  FastAPI process is the single MCP client, spawning `mcp_server.py` over stdio via the lifespan).
+- **Frontend (from `client/`):** `npm run dev` (Vite dev server on `:5173`; calls the API's full
+  origin `http://localhost:8000/api` directly — CORS, not a proxy). Both must run for the UI to work.
+- **Frontend deps / typecheck (from `client/`):** `npm install` · `npx tsc --noEmit`.
+
 Update this section as later phases (audio adapters, HTTP transport) get scaffolded.

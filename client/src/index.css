@@ -1,0 +1,5 @@
+/* Tailwind v4 — this single import replaces v3's three @tailwind directives AND the
+   tailwind.config.js. Utilities are generated on demand from the classes it finds in
+   your source. Add design tokens (colors, fonts) here later with a `@theme { ... }`
+   block if you outgrow the defaults. */
+@import "tailwindcss";

@@ -163,6 +163,13 @@ point.)
     off-topic/evasive/vague answers and press for specifics; base acknowledgment on substance; no generic
     praise. Cheap prompt-engineering edit to `behavioral_interview`; do it once scoring is grounded so
     the interviewer's rigor and the rubric score reinforce each other.
+- **Per-answer time limit (optional, toggleable).** Simulate interview pressure: give each answer a
+  configurable countdown; when it expires, auto-submit whatever's in the textarea (or lock input and
+  submit what's there). Mostly a frontend feature — a countdown in the UI (a `useEffect` timer that
+  calls the existing `handleSend` on expiry), with the limit chosen per session (or per question) and an
+  on/off toggle since it's an *option*. Optional server side: record time-taken per answer in the session
+  store, which could later feed the scorecard ("answered under pressure"). Keep the timer client-side
+  first; server-enforced timing is only needed if you don't trust the client.
 - Real-time concerns (streaming TTS, endpointing/knowing when you stopped talking, barge-in) — these
   live entirely in the audio layer; note them as the genuinely *new* engineering vs. `mcp-helpdesk`.
 - Semantic question retrieval: graduate `questions.json` to Postgres + pgvector and add a
