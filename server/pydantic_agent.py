@@ -41,7 +41,7 @@ from voice.adapters import listen, speak  # noqa: E402
 
 # --- MODEL: same Gemini-via-google-genai wiring as the helpdesk. Copy USE_MODEL from
 #     there, or hardcode the model id string for now. --------------------------------
-USE_MODEL = "gemini-3.1-flash-lite-preview"  # TODO: match whatever ../mcp-helpdesk uses
+USE_MODEL = "gemini-3.1-flash-lite-preview"  # confirmed: matches ../mcp-helpdesk USE_MODEL
 model = GoogleModel(
     USE_MODEL,
     provider=GoogleProvider(api_key=os.environ["GEMINI_API_KEY"]),
@@ -59,67 +59,121 @@ interview_toolset = MCPToolset(
 )
 
 
-# TODO 1 — build the AGENT. One object replaces any hand-rolled loop.
-#   agent = Agent(
-#       model,
-#       toolsets=[interview_toolset],
-#       instructions=INTERVIEWER_PROMPT,   # <- still yours; see below
-#       model_settings=ModelSettings(max_tokens=600),  # cost guardrail
-#   )
-# The instructions can lift the same rules as the behavioral_interview PROMPT on the
-# server — or, cleaner, keep them thin here and let the server prompt carry the persona.
-INTERVIEWER_PROMPT = """
-You are conducting a mock interview. Ask ONE question at a time and wait for the
-answer. Use next_question to pull questions (track which ids you've asked), and
-record_answer after each response. Give a brief, specific follow-up or critique,
-then move on. Keep YOUR turns short — this is being read aloud. When the candidate
-says they're done, call save_session_summary with overall feedback and say goodbye.
-"""
-
-# TODO: uncomment once you've confirmed the imports resolve.
-# agent = Agent(
-#     model,
-#     toolsets=[interview_toolset],
-#     instructions=INTERVIEWER_PROMPT,
-#     model_settings=ModelSettings(max_tokens=600),
-# )
-
+# build the AGENT. One object replaces any hand-rolled loop.
+#
+# DESIGN — the SERVER owns the persona. There is deliberately NO interviewer prompt
+# hardcoded in this client. The persona lives ONLY in the server's behavioral_interview
+# PROMPT (Phase 2); this client FETCHES it at runtime (see TODO 2) and passes it as
+# per-run `instructions`. So the agent is built with NO `instructions=` argument:
+#
+agent = Agent(
+    model,
+    toolsets=[interview_toolset],
+    model_settings=ModelSettings(max_tokens=600)
+)
+#
+# Why not set instructions here? The steering text comes FROM THE SERVER, and it's
+# only reachable once the toolset is running (inside `async with agent`). We therefore
+# inject it per-run in the loop, not at construction time. This is the whole "server
+# owns the persona" lesson made concrete — the @mcp.prompt you wrote drives this client
+# over MCP, instead of a local copy of the rules.
 
 # TODO 2 — the MULTI-TURN loop. This is the new part vs. the helpdesk's single run().
+# It also does the SERVER-OWNS-PERSONA fetch: pull behavioral_interview from the server
+# and feed it as `instructions` on EVERY turn.
+
 # Pointers:
 #   async def main():
 #       session_id = uuid.uuid4().hex[:8]
-#       async with agent:
+#       async with agent:                      # toolset is now running -> can fetch prompts
+#           # Fetch the persona FROM THE SERVER (not a local constant). The MCPToolset is
+#           # itself a full MCP client: get_prompt(name, args) -> PromptResult. Unwrap the
+#           # text the same way mcp_client_demo.py did:  .messages[0].content.text
+#           pr = await interview_toolset.get_prompt(
+#               "behavioral_interview",
+#               {"role": "backend-engineer", "seniority": "mid"},
+#           )
+#           persona = pr.messages[0].content.text
+#
 #           history = []
-#           # Kick off: the agent asks the first question.
+#           # Kick off: the agent asks the first question. Note instructions=persona.
 #           result = await agent.run(
-#               f"Start a backend-engineer interview. Session id: {session_id}.",
+#               f"Start the interview. Session id: {session_id}.",
+#               instructions=persona,          # <- server-owned steering, passed EACH run
 #               message_history=history,
 #               usage_limits=UsageLimits(request_limit=8),
 #           )
-#           speak(result.output)              # <- TTS seam (print for now)
-#           history = result.all_messages()   # carry context across turns
+#           speak(result.output)               # <- TTS seam (print for now)
+#           history = result.all_messages()    # carry context across turns
 #
-#           for _ in range(6):                # turn cap = interview-loop guardrail
-#               answer = listen()             # <- STT seam (input for now)
+#           for _ in range(6):                 # turn cap = interview-loop guardrail
+#               answer = listen()              # <- STT seam (input for now)
 #               if answer.strip().lower() in {"quit", "exit", "done"}:
 #                   break
 #               result = await agent.run(
 #                   answer,
+#                   instructions=persona,      # <- MUST re-pass every run: instructions are
+#                                              #    NOT stored in message_history (that's what
+#                                              #    separates them from a system_prompt), so
+#                                              #    passing once wouldn't survive to turn 2.
 #                   message_history=history,
 #                   usage_limits=UsageLimits(request_limit=8),
 #               )
 #               speak(result.output)
 #               history = result.all_messages()
-#               print("USAGE:", result.usage)   # cost visibility per turn
+#               print("USAGE:", result.usage)  # cost visibility per turn (property, no parens)
 #
 #   asyncio.run(main())
 
 
 async def main():
-    # TODO: implement the loop above.
-    raise NotImplementedError("Fill in the multi-turn loop (TODO 2).")
+    # taking only the first 8 characters of hexadecimal string, which strips out the dashes in the uuid
+    session_id = uuid.uuid4().hex[:8]
+    # run the toolset
+    async with agent:
+        # fetch the interview persona from the server
+        prompt = await interview_toolset.get_prompt(
+            "behavioral_interview",
+            {"role": "backend-engineer", "seniority": "mid"}
+        )
+        persona = prompt.messages[0].content.content
+        history = []
+        # agent asks the first question, then the interview answer -> LLM feedback loop begins
+        result = await agent.run(
+            f"Start the interview. Session id: {session_id}.",
+            instructions=persona, # pass the persona on each run of the agent
+            message_history=history,
+            usage_limits=UsageLimits(request_limit=8)
+        )
 
+        # placeholder until Text-To-Speech is implemented
+        speak(result.output)
+
+        # accumulate the result history
+        history = result.all_messages()
+
+        # arbitrary loop guardrail 
+        for _ in range(6):
+            answer = listen()
+            if answer.strip().lower() in {"quit", "exit", "done"}:
+                break
+
+            # send the answer back to the LLM
+            result = await agent.run(
+                answer,
+                instructions=persona,
+                message_history=history,
+                usage_limits=UsageLimits(request_limit=8)
+            )
+
+            # speak LLM output
+            speak(result.output)
+            # notice that it's not appending to a list because when we pass in the previous
+            # messages' history, the agent run will take that into account into its own history,
+            # so we just need to store "all_messages" each time
+            history = result.all_messages()
+            # cost visibility per turn (property, no parens)
+            print("USAGE:", result.usage)  
 
 if __name__ == "__main__":
     asyncio.run(main())

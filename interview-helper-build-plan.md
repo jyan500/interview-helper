@@ -149,6 +149,20 @@ point.)
 ## Phase 5 — Optional polish
 
 - End-of-session scorecard: aggregate per-question feedback into a summary rubric score.
+- Make evaluation *real* (deferred here on purpose — Phases 3–3.5 cared about the agent-loop
+  plumbing, not answer quality, so dummy answers were fine). Two linked pieces:
+  - **Wire in the dormant grader.** `evaluate_answer` + `rubric://{role}` exist but nothing calls them;
+    the live loop only runs the lightweight `behavioral_interview` persona, and the rubric never reaches
+    the agent (it's a *resource* — someone must pull it in). Deliver the rubric to the grader (client
+    reads `rubric://` and passes it, or add a rubric tool), and use `evaluate_answer` — ideally with a
+    Pydantic AI `output_type` for a typed score per dimension instead of prose. This is what feeds the
+    scorecard above.
+  - **Tighten the persona against sycophancy.** Observed in Phase 3.5: a dummy answer like "my answer"
+    gets canned praise ("that sounds reasonable") — the persona leans polite, never told to flag answers
+    that don't address the question, and flash-lite defaults to agreeable. Add explicit rules: call out
+    off-topic/evasive/vague answers and press for specifics; base acknowledgment on substance; no generic
+    praise. Cheap prompt-engineering edit to `behavioral_interview`; do it once scoring is grounded so
+    the interviewer's rigor and the rubric score reinforce each other.
 - Real-time concerns (streaming TTS, endpointing/knowing when you stopped talking, barge-in) — these
   live entirely in the audio layer; note them as the genuinely *new* engineering vs. `mcp-helpdesk`.
 - Semantic question retrieval: graduate `questions.json` to Postgres + pgvector and add a
