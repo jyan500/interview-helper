@@ -128,7 +128,7 @@ agent = Agent(
 
 async def main():
     # taking only the first 8 characters of hexadecimal string, which strips out the dashes in the uuid
-    session_id = uuid.uuidv4().hex[:8]
+    session_id = uuid.uuid4().hex[:8]
     # run the toolset
     async with agent:
         # fetch the interview persona from the server
@@ -136,10 +136,10 @@ async def main():
             "behavioral_interview",
             {"role": "backend-engineer", "seniority": "mid"}
         )
-        persona = prompt.messages[0].content.text
+        persona = prompt.messages[0].content.content
         history = []
         # agent asks the first question, then the interview answer -> LLM feedback loop begins
-        result = agent.run(
+        result = await agent.run(
             f"Start the interview. Session id: {session_id}.",
             instructions=persona, # pass the persona on each run of the agent
             message_history=history,
@@ -159,7 +159,7 @@ async def main():
                 break
 
             # send the answer back to the LLM
-            result = agent.run(
+            result = await agent.run(
                 answer,
                 instructions=persona,
                 message_history=history,
