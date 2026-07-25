@@ -172,6 +172,29 @@ point.)
   first; server-enforced timing is only needed if you don't trust the client.
 - Real-time concerns (streaming TTS, endpointing/knowing when you stopped talking, barge-in) — these
   live entirely in the audio layer; note them as the genuinely *new* engineering vs. `mcp-helpdesk`.
+- **Robust STT (graduate from the browser Web Speech API).** Phase 4 uses the browser's free
+  `SpeechRecognition` for input — but it's Chrome/Edge-only, gives NO endpointing control (Chrome cuts
+  off after its own unconfigurable silence timeout; our workaround is auto-restart + manual Stop), and
+  ships audio to Google. The robust pipeline replaces its *guts* with three pieces you control:
+  1. **Capture raw audio** in the browser via `getUserMedia` + Web Audio/`AudioWorklet` (or MediaRecorder).
+  2. **VAD for endpointing** — run a voice-activity model (e.g. Silero VAD in-browser via `@ricky0123/vad-web`)
+     that exposes the tunable silence threshold the Web Speech API hides (`minSilenceDuration` etc.). This
+     is where "don't cut off a thinking pause" is solved properly.
+  3. **Server-side STT** — send the utterance to a FastAPI `/api/transcribe` route (or a WebSocket for
+     streaming) running **`faster-whisper`** — the exact STT option this build plan named for Phase 4
+     before the browser convergence. Cross-browser, consistent accuracy, offline-capable, audio stays on
+     our server.
+  Key point: this is STILL just a swap of the INPUT edge adapter. `useSpeechRecognition` keeps its
+  `{ supported, listening, start, stop }` contract and `onResult(text) -> setDraft`; only the internals
+  change. `handleSend`, the transcript, the agent, and the MCP server never move — the thesis one more time.
+- **Audio quality polish (observed in Phase 4 testing, non-vital).** Two rough edges, both edge-adapter swaps:
+  - **TTS sounds robotic.** `SpeechSynthesisUtterance` uses the default system voice. Cheap fix: pick a
+    better voice from `speechSynthesis.getVoices()` (many OSes ship neural voices, e.g. Windows "… (Natural)")
+    and tune `rate`/`pitch` on `speak()`. Robust fix: swap the OUTPUT adapter for neural TTS — Piper (local,
+    the build plan's original Phase 4 TTS pick) or a cloud API — same `speak(text)` contract, better audio.
+  - **STT mis-transcribes.** Browser Web Speech accuracy is mediocre and mic quality/volume/ambient noise
+    matter. The real fix is the robust STT above (VAD + server-side `faster-whisper`, far more accurate);
+    user-side, a better mic and clearer/louder speech help. Neither touches the interview loop.
 - Semantic question retrieval: graduate `questions.json` to Postgres + pgvector and add a
   `search_questions` RAG tool — a near-verbatim reuse of `mcp-helpdesk`'s `search_docs`.
 

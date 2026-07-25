@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useStartSessionMutation, useSubmitAnswerMutation } from "./api";
+import { speak, useSpeechRecognition } from "./voice/speech"
 
 type Line = { who: "interviewer" | "you"; text: string };
 
@@ -15,6 +16,8 @@ export default function App() {
     const [startSession, { isLoading: starting }] = useStartSessionMutation();
     const [submitAnswer, { isLoading: answering }] = useSubmitAnswerMutation();
 
+    const { supported, listening, start, stop } = useSpeechRecognition(setDraft) 
+
     // WORKED EXAMPLE — start the interview (drives POST /api/session).
     async function handleStart() {
         // .unwrap() returns the payload on success or THROWS on error (unlike the hook's
@@ -22,9 +25,10 @@ export default function App() {
         const res = await startSession().unwrap();
         setSessionId(res.session_id);
         setTranscript([{ who: "interviewer", text: res.message }]);
+        speak(res.message)
     }
 
-    // TODO — send the candidate's answer (drives POST /api/answer). This is one iteration
+    // send the candidate's answer (drives POST /api/answer). This is one iteration
     // of the interview loop, frontend side. Pointers:
     //   - guard:   if (!sessionId || !draft.trim()) return;
     //   - show it: setTranscript(t => [...t, { who: "you", text: draft }]);
@@ -41,6 +45,7 @@ export default function App() {
         const res = await submitAnswer({ session_id: sessionId, text: draft }).unwrap()
         // include the feedback/next question from the interviewer
         setTranscript(t => [...t, { who: "interviewer", text: res.message }])
+        speak(res.message)
         // reset the textarea text for the next answer
         setDraft("")
     }
@@ -82,6 +87,21 @@ export default function App() {
                         placeholder="Type your answer…"
                         className="mt-4 w-full rounded-md border border-slate-300 p-2 focus:border-slate-500 focus:outline-none"
                     />
+                    {supported && (
+                        <button 
+                            onClick={() => {
+                                if (!listening){
+                                    start()
+                                } 
+                                else {
+                                    stop()
+                                }
+                            }}
+                            className="mt-2 rounded-md bg-slate-800 px-4 py-2 font-medium text-white transition hover:bg-slate-700 disabled:opacity-50"
+                        >
+                            🎤 {!listening ? "Record your answer" : "Stop recording"}
+                        </button>
+                    )}
                     <button
                         onClick={handleSend}
                         /* disabled={answering} */
