@@ -66,6 +66,18 @@ def record_answer(session_id: str, question_id: str, answer: str) -> dict:
     return {"ok": True, "session_id": session_id, "turn_count": len(data["turns"])}
 
 
+def get_session(session_id: str) -> dict:
+    """Read back a whole recorded session (backs the session:// resource).
+
+    Read-only counterpart to the writers above — Phase 5's scorecard needs to pull
+    the recorded turns back out to grade them. Same primitive instinct as the
+    question-bank readers in tools/questions.py: read the store, return a plain dict.
+    `_read` already returns the {session_id, turns, summary} skeleton (or a fresh one
+    if the file doesn't exist yet), so this is a thin pass-through.
+    """
+    return _read(session_id)
+
+
 def save_session_summary(session_id: str, feedback: str) -> dict:
     """Persist the final wrap-up feedback for a session.
 

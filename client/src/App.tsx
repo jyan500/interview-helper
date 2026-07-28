@@ -1,5 +1,10 @@
 import { useState } from "react";
-import { useStartSessionMutation, useSubmitAnswerMutation } from "./api";
+import {
+    useStartSessionMutation,
+    useSubmitAnswerMutation,
+    useGetScorecardMutation,
+    type Scorecard,
+} from "./api";
 import { speak, useSpeechRecognition } from "./voice/speech"
 
 type Line = { who: "interviewer" | "you"; text: string };
@@ -11,10 +16,13 @@ export default function App() {
     const [sessionId, setSessionId] = useState<string | null>(null);
     const [transcript, setTranscript] = useState<Line[]>([]);
     const [draft, setDraft] = useState("");
+    // Phase 5 — the graded scorecard, once the interview is ended. null until requested.
+    const [scorecard, setScorecard] = useState<Scorecard | null>(null);
 
     // RTK Query mutation hooks return [trigger, { isLoading, error, ... }].
     const [startSession, { isLoading: starting }] = useStartSessionMutation();
     const [submitAnswer, { isLoading: answering }] = useSubmitAnswerMutation();
+    const [getScorecard, { isLoading: scoring }] = useGetScorecardMutation();
 
     const { supported, listening, start, stop } = useSpeechRecognition(setDraft) 
 
@@ -48,6 +56,17 @@ export default function App() {
         speak(res.message)
         // reset the textarea text for the next answer
         setDraft("")
+    }
+
+    // WORKED EXAMPLE — end the interview and grade it (drives POST /api/scorecard). This is
+    // the Phase 5 END-OF-SESSION PASS from the frontend: it doesn't add a transcript line, it
+    // asks the backend to grade every answer it already recorded and hands back a Scorecard.
+    async function handleEndInterview() {
+        if (!sessionId) {
+            return
+        }
+        const card = await getScorecard({ session_id: sessionId }).unwrap()
+        setScorecard(card)
     }
 
     return (
@@ -109,8 +128,59 @@ export default function App() {
                     >
                         Send answer
                     </button>
+                    <button
+                        onClick={handleEndInterview}
+                        disabled={scoring}
+                        className="mt-2 ml-2 rounded-md border border-slate-800 px-4 py-2 font-medium text-slate-800 transition hover:bg-slate-100 disabled:opacity-50"
+                    >
+                        {scoring ? "Grading…" : "End interview & see scorecard"}
+                    </button>
+                    {scorecard && <ScorecardView card={scorecard} />}
                 </>
             )}
         </main>
+    );
+}
+
+// TODO — render the graded scorecard. The DATA is done (the backend grades every recorded
+// answer and aggregates it); this is purely the DISPLAY. The overall score + per-dimension
+// averages are wired below as the worked example — fill in the per-answer breakdown where
+// marked. Fields available on `card` (see api.ts Scorecard): overall, dimension_averages
+// (name -> number), answers[] each with { question_text, dimension_scores[], strength, gap,
+// improvement }.
+function ScorecardView({ card }: { card: Scorecard }) {
+    return (
+        <section className="mt-6 rounded-lg border border-slate-300 p-4">
+            <h2 className="text-xl font-bold text-slate-800">
+                Scorecard — {card.overall}/5 overall
+            </h2>
+
+            {/* WORKED EXAMPLE — per-dimension averages. Object.entries turns the
+                {dimension: average} map into rows. */}
+            <ul className="mt-3 space-y-1">
+                {Object.entries(card.dimension_averages).map(([dim, avg]) => (
+                    <li key={dim} className="flex justify-between text-sm">
+                        <span className="text-slate-600">{dim}</span>
+                        <span className="font-semibold text-slate-800">{avg}/5</span>
+                    </li>
+                ))}
+            </ul>
+
+            {/* TODO — the per-answer breakdown. Map over card.answers and, for each, render:
+                  - the question_text (a heading)
+                  - its dimension_scores (each { dimension, score, note })
+                  - the strength / gap / improvement lines
+                Pointers:
+                  {card.answers.map((a, i) => (
+                      <div key={i} className="mt-4">
+                          <p className="font-semibold">{a.question_text}</p>
+                          ... map a.dimension_scores ...
+                          <p>💪 {a.strength}</p>
+                          <p>🕳️ {a.gap}</p>
+                          <p>🔧 {a.improvement}</p>
+                      </div>
+                  ))}
+            */}
+        </section>
     );
 }

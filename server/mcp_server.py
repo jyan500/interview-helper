@@ -89,6 +89,18 @@ def question_resource(question_id: str) -> dict:
     return questions.get_question(question_id)
 
 
+# session://{session_id} — the recorded transcript of a session, read-only. Added in
+# Phase 5 so the end-of-session grader can pull the turns record_answer wrote back out
+# and score them. It's the READ side of the record_answer/save_session_summary TOOLS:
+# writing a turn is a side effect (tool); reading the turns back is context (resource) —
+# the same tools-vs-resources split as everywhere else. Mirrors rubric_resource exactly.
+@mcp.resource("session://{session_id}")
+def session_resource(session_id: str) -> dict:
+    """The recorded turns + summary for a session — read-only context the grader pulls
+    in to score each answer. No side effect, just loads the transcript."""
+    return session.get_session(session_id)
+
+
 # ===========================================================================
 # PROMPTS (reusable interaction templates)
 # ===========================================================================
@@ -110,6 +122,15 @@ def behavioral_interview(role: str, seniority: str = "mid") -> str:
         - Keep your own turns short.
         - Stay in character as an experienced interviewer, can give hints but don't give the candidate the answer.
         - At the end, call save_session_summary with overall feedback against the rubric.
+
+        Be rigorous, not agreeable (this is an interview, not a chat):
+        - If an answer is off-topic, evasive, one-word, or doesn't actually address the
+        question, SAY SO plainly and press for specifics — do not move on as if it were fine.
+        - Base any acknowledgement on the SUBSTANCE of the answer. No generic praise
+        ("great", "sounds reasonable", "good point") unless the answer earned it with
+        concrete detail. Silence is better than empty encouragement.
+        - Push for specifics: concrete examples, real tradeoffs, actual numbers/decisions —
+        not generalities. A vague answer gets a follow-up, not a pass.
     """).strip()
 
 
