@@ -99,7 +99,7 @@ Phase 3.5 (web UI — FastAPI backend + React/Vite/TS frontend, run both togethe
 
 - **Backend API (from `server/`):** `.venv/Scripts/fastapi.exe dev api.py` (serves on `:8000`; the
   FastAPI process is the single MCP client, spawning `mcp_server.py` over stdio via the lifespan).
-- **Frontend (from `client/`):** `npm run dev` (Vite dev server on `:5173`; calls the API's full
+- **Frontend (from `client/`):** `npm run dev` (Vite dev server on `:6173`; calls the API's full
   origin `http://localhost:8000/api` directly — CORS, not a proxy). Both must run for the UI to work.
 - **Frontend deps / typecheck (from `client/`):** `npm install` · `npx tsc --noEmit`.
 

@@ -72,6 +72,25 @@ def get_question(question_id: str) -> dict:
     return {"status": "not_found", "question_id": question_id}
 
 
+def list_questions(role: str) -> dict:
+    """Return ALL questions for a role (backs the questions://{role} resource).
+
+    Phase 5 needs the full id set for a role so the scorecard can normalize an invented
+    follow-up id (e.g. "be-1-probe") back to a real bank id. This is the "list them all"
+    reader the bank didn't have yet (next_question/get_question are one-at-a-time).
+
+    TODO — same shape as get_rubric below (read bank, guard unknown role, return slice):
+      - role_data = _load()["roles"].get(role)
+      - if role_data is None: return {"status": "not_found", "role": role}
+      - return {"status": "ok", "role": role, "questions": role_data["questions"]}
+        (each question dict already carries its "id" — the caller builds the id set from these)
+    """
+    role_data = _load()["roles"].get(role)
+    if role_data is None:
+        return {"status": "not_found", "role": role}
+    return {"status": "ok", "role": role, "questions": role_data["questions"]}
+
+
 def get_rubric(role: str) -> dict:
     """Return the scoring rubric for a role (backs the rubric:// resource).
 

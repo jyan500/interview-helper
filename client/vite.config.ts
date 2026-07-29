@@ -12,5 +12,5 @@ import tailwindcss from "@tailwindcss/vite";
 // a single `@import "tailwindcss";` in src/index.css.
 export default defineConfig({
     plugins: [react(), tailwindcss()],
-    server: { port: 5173 },
+    server: { port: 6173 },
 });

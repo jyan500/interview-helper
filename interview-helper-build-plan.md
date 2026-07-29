@@ -106,9 +106,9 @@ voice goal; it's another instance of the one idea, and it becomes the natural ho
 - **Frontend:** **React + Vite** (locked-in stack, not vanilla). React holds only what it renders — the
   current `session_id` and the transcript. The backend stays the source of truth for agent state; don't
   mirror `message_history` into React.
-- **The one dev wrinkle:** Vite dev server (`:5173`, hot reload) and FastAPI (`:8000`) are cross-origin,
+- **The one dev wrinkle:** Vite dev server (`:6173`, hot reload) and FastAPI (`:8000`) are cross-origin,
   so the browser's preflight will block `fetch` unless the server opts in. Add FastAPI's
-  `CORSMiddleware` with `allow_origins=["http://localhost:5173"]` (plus the methods/headers the calls
+  `CORSMiddleware` with `allow_origins=["http://localhost:6173"]` (plus the methods/headers the calls
   use). React `fetch` then hits the FastAPI origin directly — no Vite proxy. Keep the allowed origin
   list explicit rather than `["*"]` so it stays honest about who's calling.
 - Guardrails carry over unchanged: `max_tokens`, `request_limit`, turn cap — now enforced server-side.

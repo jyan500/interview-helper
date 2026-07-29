@@ -89,6 +89,16 @@ def question_resource(question_id: str) -> dict:
     return questions.get_question(question_id)
 
 
+# questions://{role} — ALL questions for a role (the whole list, not one by id). Added in
+# Phase 5 so the scorecard can build the set of VALID question ids for a role and normalize
+# invented follow-up ids against it. Read-only context = resource, like rubric_resource.
+@mcp.resource("questions://{role}")
+def questions_resource(role: str) -> dict:
+    """Every question for a role — read-only context. The scorecard reads this to get the
+    known-good id set it normalizes follow-up ids against."""
+    return questions.list_questions(role)
+
+
 # session://{session_id} — the recorded transcript of a session, read-only. Added in
 # Phase 5 so the end-of-session grader can pull the turns record_answer wrote back out
 # and score them. It's the READ side of the record_answer/save_session_summary TOOLS:
@@ -115,13 +125,30 @@ def behavioral_interview(role: str, seniority: str = "mid") -> str:
         You are an experienced interviewer conducting a {seniority}-level {role} interview.
 
         Rules:
-        - Ask ONE question at a time, then STOP and wait for the candidate's answer.
-        - After an answer, decide: ask a probing follow-up if it was vague or shallow,
-        otherwise briefly acknowledge and move to the next question.
+        - Ask ONE question at a time, then STOP and wait for the candidate's answer. This
+        applies to follow-ups too — a follow-up IS a full turn: end your message with it
+        and wait for the answer.
+        - After an answer, do EXACTLY ONE of these, never both in the same message:
+            (a) ask a SINGLE probing follow-up, then STOP — do NOT preview, append, or say
+                "moving on" to the next question in that same turn; or
+            (b) briefly acknowledge and ask the next question.
+        Only advance to the next question AFTER the candidate has answered your follow-up.
         - Use the next_question tool to pull questions; log each answer with record_answer.
         - Keep your own turns short.
         - Stay in character as an experienced interviewer, can give hints but don't give the candidate the answer.
         - At the end, call save_session_summary with overall feedback against the rubric.
+
+        Stay on the question bank (do NOT improvise the interview):
+        - Every MAIN question MUST come from the next_question tool. NEVER invent your own
+        main question or switch to a topic the bank didn't give you. The ONLY thing you may
+        write yourself is a short follow-up probe about the candidate's LAST answer.
+        - If the candidate says "I'm not sure" or can't answer, briefly acknowledge and call
+        next_question for the NEXT question — do NOT substitute a topic of your own.
+        - When you call record_answer, use the EXACT question_id that next_question returned
+        for the question being answered (for a follow-up, reuse that id or add a "-followup"
+        suffix). NEVER record an answer under a different question's id.
+        - Keep going through next_question until it returns status "exhausted"; only THEN
+        give your summary and call save_session_summary. Do not end the interview early.
 
         Be rigorous, not agreeable (this is an interview, not a chat):
         - If an answer is off-topic, evasive, one-word, or doesn't actually address the

@@ -181,6 +181,29 @@ function ScorecardView({ card }: { card: Scorecard }) {
                       </div>
                   ))}
             */}
+            {
+                card.answers.map((a, i) => (
+                    <div key={i} className = "mt-4">
+                        <p className="font-semibold">{a.question_text}</p> 
+                        {
+                            a?.dimension_scores?.map((score) => {
+                                return (
+                                    <div key={score.dimension} className = "flex flex-col gap-y-2">
+                                        <div className = "flex flex-row gap-x-2">
+                                            <p>{score.dimension}</p>
+                                            <p>{score.score}</p>
+                                        </div>
+                                        <p>{score.note}</p>
+                                    </div>
+                                )
+                            })
+                        }
+                       <p>💪 {a.strength}</p> 
+                       <p>🕳️ {a.gap}</p> 
+                       <p>🔧 {a.improvement}</p> 
+                    </div>
+                ))
+            }
         </section>
     );
 }
