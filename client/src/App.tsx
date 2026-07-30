@@ -1,11 +1,17 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
     useStartSessionMutation,
     useSubmitAnswerMutation,
     useGetScorecardMutation,
     type Scorecard,
 } from "./api";
-import { speak, useSpeechRecognition } from "./voice/speech"
+import {
+    speak,
+    useSpeechRecognition,
+    useVoices,
+    pickPreferredVoice,
+    setVoicePrefs,
+} from "./voice/speech"
 
 type Line = { who: "interviewer" | "you"; text: string };
 
@@ -26,7 +32,24 @@ export default function App() {
     const [submitAnswer, { isLoading: answering }] = useSubmitAnswerMutation();
     const [getScorecard, { isLoading: scoring }] = useGetScorecardMutation();
 
-    const { supported, listening, start, stop } = useSpeechRecognition(setDraft) 
+    const { supported, listening, start, stop } = useSpeechRecognition(setDraft)
+
+    // Phase 5 TTS polish — the OUTPUT edge adapter, richer knobs. `useVoices()` gives the live
+    // (async-loaded) voice list; `selectedVoiceURI` is what the picker below binds to.
+    const voices = useVoices();
+    const [selectedVoiceURI, setSelectedVoiceURI] = useState<string | null>(null);
+
+    // WORKED EXAMPLE — auto-pick a good voice the moment the list loads, so TTS sounds neural
+    // immediately WITHOUT the user touching any control. Runs once voices are known and nothing
+    // is selected yet; pushes the choice into speak()'s shared prefs via setVoicePrefs.
+    useEffect(() => {
+        if (selectedVoiceURI !== null || voices.length === 0) return;
+        const preferred = pickPreferredVoice(voices);
+        if (preferred) {
+            setSelectedVoiceURI(preferred.voiceURI);
+            setVoicePrefs({ voiceURI: preferred.voiceURI });
+        }
+    }, [voices, selectedVoiceURI]);
 
     // WORKED EXAMPLE — start the interview (drives POST /api/session).
     async function handleStart() {
