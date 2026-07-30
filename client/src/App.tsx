@@ -1,6 +1,17 @@
-import { useState } from "react";
-import { useStartSessionMutation, useSubmitAnswerMutation } from "./api";
-import { speak, useSpeechRecognition } from "./voice/speech"
+import { useEffect, useState } from "react";
+import {
+    useStartSessionMutation,
+    useSubmitAnswerMutation,
+    useGetScorecardMutation,
+    type Scorecard,
+} from "./api";
+import {
+    speak,
+    useSpeechRecognition,
+    useVoices,
+    pickPreferredVoice,
+    setVoicePrefs,
+} from "./voice/speech"
 
 type Line = { who: "interviewer" | "you"; text: string };
 
@@ -11,12 +22,34 @@ export default function App() {
     const [sessionId, setSessionId] = useState<string | null>(null);
     const [transcript, setTranscript] = useState<Line[]>([]);
     const [draft, setDraft] = useState("");
+    // Phase 5 — the graded scorecard, once the interview is ended. null until requested.
+    const [scorecard, setScorecard] = useState<Scorecard | null>(null);
+    // Phase 5 — the backend flips done=true once the client-driven loop exhausts the bank.
+    const [done, setDone] = useState(false);
 
     // RTK Query mutation hooks return [trigger, { isLoading, error, ... }].
     const [startSession, { isLoading: starting }] = useStartSessionMutation();
     const [submitAnswer, { isLoading: answering }] = useSubmitAnswerMutation();
+    const [getScorecard, { isLoading: scoring }] = useGetScorecardMutation();
 
-    const { supported, listening, start, stop } = useSpeechRecognition(setDraft) 
+    const { supported, listening, start, stop } = useSpeechRecognition(setDraft)
+
+    // Phase 5 TTS polish — the OUTPUT edge adapter, richer knobs. `useVoices()` gives the live
+    // (async-loaded) voice list; `selectedVoiceURI` is what the picker below binds to.
+    const voices = useVoices();
+    const [selectedVoiceURI, setSelectedVoiceURI] = useState<string | null>(null);
+
+    // WORKED EXAMPLE — auto-pick a good voice the moment the list loads, so TTS sounds neural
+    // immediately WITHOUT the user touching any control. Runs once voices are known and nothing
+    // is selected yet; pushes the choice into speak()'s shared prefs via setVoicePrefs.
+    useEffect(() => {
+        if (selectedVoiceURI !== null || voices.length === 0) return;
+        const preferred = pickPreferredVoice(voices);
+        if (preferred) {
+            setSelectedVoiceURI(preferred.voiceURI);
+            setVoicePrefs({ voiceURI: preferred.voiceURI });
+        }
+    }, [voices, selectedVoiceURI]);
 
     // WORKED EXAMPLE — start the interview (drives POST /api/session).
     async function handleStart() {
@@ -48,6 +81,21 @@ export default function App() {
         speak(res.message)
         // reset the textarea text for the next answer
         setDraft("")
+        // the client-driven loop tells us when the bank is exhausted — stop taking answers
+        if (res.done) {
+            setDone(true)
+        }
+    }
+
+    // WORKED EXAMPLE — end the interview and grade it (drives POST /api/scorecard). This is
+    // the Phase 5 END-OF-SESSION PASS from the frontend: it doesn't add a transcript line, it
+    // asks the backend to grade every answer it already recorded and hands back a Scorecard.
+    async function handleEndInterview() {
+        if (!sessionId) {
+            return
+        }
+        const card = await getScorecard({ session_id: sessionId }).unwrap()
+        setScorecard(card)
     }
 
     return (
@@ -80,37 +128,122 @@ export default function App() {
                             </li>
                         ))}
                     </ul>
-                    <textarea
-                        value={draft}
-                        onChange={(e) => setDraft(e.target.value)}
-                        rows={3}
-                        placeholder="Type your answer…"
-                        className="mt-4 w-full rounded-md border border-slate-300 p-2 focus:border-slate-500 focus:outline-none"
-                    />
-                    {supported && (
-                        <button 
-                            onClick={() => {
-                                if (!listening){
-                                    start()
-                                } 
-                                else {
-                                    stop()
-                                }
-                            }}
-                            className="mt-2 rounded-md bg-slate-800 px-4 py-2 font-medium text-white transition hover:bg-slate-700 disabled:opacity-50"
-                        >
-                            🎤 {!listening ? "Record your answer" : "Stop recording"}
-                        </button>
+                    {/* answer controls only while the interview is still running. Once the
+                        client-driven loop exhausts the bank (done), stop taking answers and
+                        nudge toward the scorecard. */}
+                    {!done ? (
+                        <>
+                            <textarea
+                                value={draft}
+                                onChange={(e) => setDraft(e.target.value)}
+                                rows={3}
+                                placeholder="Type your answer…"
+                                className="mt-4 w-full rounded-md border border-slate-300 p-2 focus:border-slate-500 focus:outline-none"
+                            />
+                            {supported && (
+                                <button
+                                    onClick={() => {
+                                        if (!listening){
+                                            start()
+                                        }
+                                        else {
+                                            stop()
+                                        }
+                                    }}
+                                    className="mt-2 rounded-md bg-slate-800 px-4 py-2 font-medium text-white transition hover:bg-slate-700 disabled:opacity-50"
+                                >
+                                    🎤 {!listening ? "Record your answer" : "Stop recording"}
+                                </button>
+                            )}
+                            <button
+                                onClick={handleSend}
+                                disabled={answering}
+                                className="mt-2 rounded-md bg-slate-800 px-4 py-2 font-medium text-white transition hover:bg-slate-700 disabled:opacity-50"
+                            >
+                                Send answer
+                            </button>
+                        </>
+                    ) : (
+                        <p className="mt-4 rounded-md bg-slate-100 p-3 text-slate-700">
+                            ✅ The interview has concluded. See your scorecard below.
+                        </p>
                     )}
                     <button
-                        onClick={handleSend}
-                        /* disabled={answering} */
-                        className="mt-2 rounded-md bg-slate-800 px-4 py-2 font-medium text-white transition hover:bg-slate-700 disabled:opacity-50"
+                        onClick={handleEndInterview}
+                        disabled={scoring}
+                        className="mt-2 ml-2 rounded-md border border-slate-800 px-4 py-2 font-medium text-slate-800 transition hover:bg-slate-100 disabled:opacity-50"
                     >
-                        Send answer
+                        {scoring ? "Grading…" : "End interview & see scorecard"}
                     </button>
+                    {scorecard && <ScorecardView card={scorecard} />}
                 </>
             )}
         </main>
+    );
+}
+
+// TODO — render the graded scorecard. The DATA is done (the backend grades every recorded
+// answer and aggregates it); this is purely the DISPLAY. The overall score + per-dimension
+// averages are wired below as the worked example — fill in the per-answer breakdown where
+// marked. Fields available on `card` (see api.ts Scorecard): overall, dimension_averages
+// (name -> number), answers[] each with { question_text, dimension_scores[], strength, gap,
+// improvement }.
+function ScorecardView({ card }: { card: Scorecard }) {
+    return (
+        <section className="mt-6 rounded-lg border border-slate-300 p-4">
+            <h2 className="text-xl font-bold text-slate-800">
+                Scorecard — {card.overall}/5 overall
+            </h2>
+
+            {/* WORKED EXAMPLE — per-dimension averages. Object.entries turns the
+                {dimension: average} map into rows. */}
+            <ul className="mt-3 space-y-1">
+                {Object.entries(card.dimension_averages).map(([dim, avg]) => (
+                    <li key={dim} className="flex justify-between text-sm">
+                        <span className="text-slate-600">{dim}</span>
+                        <span className="font-semibold text-slate-800">{avg}/5</span>
+                    </li>
+                ))}
+            </ul>
+
+            {/* TODO — the per-answer breakdown. Map over card.answers and, for each, render:
+                  - the question_text (a heading)
+                  - its dimension_scores (each { dimension, score, note })
+                  - the strength / gap / improvement lines
+                Pointers:
+                  {card.answers.map((a, i) => (
+                      <div key={i} className="mt-4">
+                          <p className="font-semibold">{a.question_text}</p>
+                          ... map a.dimension_scores ...
+                          <p>💪 {a.strength}</p>
+                          <p>🕳️ {a.gap}</p>
+                          <p>🔧 {a.improvement}</p>
+                      </div>
+                  ))}
+            */}
+            {
+                card.answers.map((a, i) => (
+                    <div key={i} className = "mt-4">
+                        <p className="font-semibold">{a.question_text}</p> 
+                        {
+                            a?.dimension_scores?.map((score) => {
+                                return (
+                                    <div key={score.dimension} className = "flex flex-col gap-y-2">
+                                        <div className = "flex flex-row gap-x-2">
+                                            <p>{score.dimension}</p>
+                                            <p>{score.score}</p>
+                                        </div>
+                                        <p>{score.note}</p>
+                                    </div>
+                                )
+                            })
+                        }
+                       <p>💪 {a.strength}</p> 
+                       <p>🕳️ {a.gap}</p> 
+                       <p>🔧 {a.improvement}</p> 
+                    </div>
+                ))
+            }
+        </section>
     );
 }

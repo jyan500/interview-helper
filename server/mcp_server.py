@@ -89,27 +89,74 @@ def question_resource(question_id: str) -> dict:
     return questions.get_question(question_id)
 
 
+# questions://{role} — ALL questions for a role (the whole list, not one by id). Added in
+# Phase 5 so the scorecard can build the set of VALID question ids for a role and normalize
+# invented follow-up ids against it. Read-only context = resource, like rubric_resource.
+@mcp.resource("questions://{role}")
+def questions_resource(role: str) -> dict:
+    """Every question for a role — read-only context. The scorecard reads this to get the
+    known-good id set it normalizes follow-up ids against."""
+    return questions.list_questions(role)
+
+
+# session://{session_id} — the recorded transcript of a session, read-only. Added in
+# Phase 5 so the end-of-session grader can pull the turns record_answer wrote back out
+# and score them. It's the READ side of the record_answer/save_session_summary TOOLS:
+# writing a turn is a side effect (tool); reading the turns back is context (resource) —
+# the same tools-vs-resources split as everywhere else. Mirrors rubric_resource exactly.
+@mcp.resource("session://{session_id}")
+def session_resource(session_id: str) -> dict:
+    """The recorded turns + summary for a session — read-only context the grader pulls
+    in to score each answer. No side effect, just loads the transcript."""
+    return session.get_session(session_id)
+
+
 # ===========================================================================
 # PROMPTS (reusable interaction templates)
 # ===========================================================================
-# behavioral_interview is the interviewer PERSONA + rules — the reusable template a
-# client invokes to seed a consistent interview. Its parameters become the prompt's
-# arguments; returning a str becomes a single 'user' message (same as helpdesk's
-# triage_ticket). This one is partly written — flesh out the rules in the TODO.
+# behavioral_interview is the interviewer PERSONA — the reusable template the client
+# invokes to seed a consistent interviewer. Its parameters become the prompt's arguments;
+# returning a str becomes a single 'user' message (same as helpdesk's triage_ticket).
+#
+# REDUCED ROLE (client-driven loop): the CLIENT (api.py) now owns the question spine —
+# it picks each bank question (next_question), records every answer (record_answer), caps
+# follow-ups, and ends the interview. So this persona no longer drives any of that; it
+# describes only what the model still does each turn: REACT to the candidate's last answer
+# and DECIDE whether to probe (the ask_followup field of the TurnReply output_type). All
+# the old "use next_question / log with record_answer / run until exhausted" rules are gone
+# BY DESIGN — the model can't invent a question or mislabel an id if it never touches either.
 @mcp.prompt
 def behavioral_interview(role: str, seniority: str = "mid") -> str:
     """Seed a consistent behavioral interviewer for a given role and seniority."""
     return textwrap.dedent(f"""
         You are an experienced interviewer conducting a {seniority}-level {role} interview.
 
-        Rules:
-        - Ask ONE question at a time, then STOP and wait for the candidate's answer.
-        - After an answer, decide: ask a probing follow-up if it was vague or shallow,
-        otherwise briefly acknowledge and move to the next question.
-        - Use the next_question tool to pull questions; log each answer with record_answer.
-        - Keep your own turns short.
-        - Stay in character as an experienced interviewer, can give hints but don't give the candidate the answer.
-        - At the end, call save_session_summary with overall feedback against the rubric.
+        Each turn you get the candidate's latest MESSAGE. First decide what it is:
+
+        - CLARIFYING QUESTION about the current question ("what do you mean by X?", "is this
+          asking about Y?", "what are your thoughts?") — NOT an attempt to answer. Then set
+          is_clarification = true and put a brief, helpful clarification in `reaction` that does
+          NOT reveal the answer. Leave `followup` empty and ask_followup = false. (The candidate
+          may go back and forth clarifying as much as they need — that's fine.)
+        - Otherwise it's an ANSWER. Respond in two parts:
+            - reaction: a short, substantive comment on what they actually said — an assessment,
+              never phrased as a question, never with a question tacked on.
+            - followup + ask_followup: if the answer is weak, vague, or shallow enough to warrant
+              one more probe on the SAME topic, put that single question in `followup` and set
+              ask_followup = true; otherwise leave `followup` empty and ask_followup = false.
+
+        Never ask a NEW main question and never announce "moving on" — the system chooses and
+        presents the next question. You never pick the topic. Keep it short; stay in character.
+
+        Tone — supportive and professional, but not a pushover:
+        - Engage with the SUBSTANCE of what they said. If it's vague, thin, or off-topic, probe
+          for specifics with a follow-up (ask_followup = true) — curious, not accusatory.
+        - Do NOT judge the candidate's overall ability, call out "gaps in their knowledge," or
+          comment on whether their answer is (un)expected for the level. That assessment belongs
+          in the end-of-interview scorecard, NOT the live conversation.
+        - If they're unsure or can't answer, acknowledge it graciously and move on — no scolding.
+        - No hollow praise for answers that didn't earn it, but a warm, encouraging tone is good.
+          Never give away the answer; hints are fine.
     """).strip()
 
 

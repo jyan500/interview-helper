@@ -24,14 +24,72 @@
  *           render a 🎤 button (only when `supported`) that toggles start()/stop(); the hook
  *           writes the transcript into `draft`, and you Send it exactly as a typed answer.
  */
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 // ============================ TTS — the OUTPUT adapter ============================
 // SpeechSynthesis + SpeechSynthesisUtterance ARE in TypeScript's DOM lib, so no extra typing.
+//
+// Phase 5 polish: a bare `new SpeechSynthesisUtterance(text)` uses the OS *default* voice, which
+// usually sounds robotic. Two levers make it better, and BOTH stay entirely inside this OUTPUT
+// edge adapter — nothing above speak() (App.tsx's `speak(res.message)` calls) changes:
+//   1. VOICE  — many OSes ship neural voices (Windows "… (Natural)", Chrome "Google …"). Pick one.
+//   2. RATE / PITCH — tune delivery so it reads like an interviewer, not a screen reader.
+//
+// The prefs live at MODULE scope (below) so the two speak() call sites don't have to thread them
+// through — the voice picker calls setVoicePrefs(), speak() reads them. Same seam, richer knobs.
+
+type VoicePrefs = { voiceURI: string | null; rate: number; pitch: number };
+
+// Sensible defaults: system-default voice until a preferred one is chosen; natural cadence.
+let voicePrefs: VoicePrefs = { voiceURI: null, rate: 1, pitch: 1 };
+
+// The UI (or App's auto-pick on mount) updates the shared prefs. Partial so callers can set just
+// `rate`, just `voiceURI`, etc. without clobbering the rest.
+export function setVoicePrefs(patch: Partial<VoicePrefs>): void {
+    voicePrefs = { ...voicePrefs, ...patch };
+}
+
 export function speak(text: string): void {
     if (!("speechSynthesis" in window)) return; // unsupported browser -> silently no-op
     window.speechSynthesis.cancel(); // interrupt any utterance still playing
-    window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+    const utterance = new SpeechSynthesisUtterance(text);
+    // Match the chosen voice by URI (stable id) out of the live voice list. If it's not found
+    // (e.g. voices not loaded yet, or null), leave utterance.voice unset -> OS default.
+    const chosen = window.speechSynthesis
+        .getVoices()
+        .find((v) => v.voiceURI === voicePrefs.voiceURI);
+    if (chosen) utterance.voice = chosen;
+    utterance.rate = voicePrefs.rate;
+    utterance.pitch = voicePrefs.pitch;
+    window.speechSynthesis.speak(utterance);
+}
+
+/**
+ * Subscribe to the browser's voice list. getVoices() is populated ASYNCHRONOUSLY: on first paint
+ * it's often [], then the browser fires `voiceschanged` once the list is ready. This hook reads it
+ * eagerly AND on that event, so a voice picker re-renders when the real voices arrive.
+ */
+export function useVoices(): SpeechSynthesisVoice[] {
+    const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+    useEffect(() => {
+        if (!("speechSynthesis" in window)) return;
+        const load = () => setVoices(window.speechSynthesis.getVoices());
+        load(); // some browsers already have them synchronously
+        window.speechSynthesis.addEventListener("voiceschanged", load); // others fire later
+        return () => window.speechSynthesis.removeEventListener("voiceschanged", load);
+    }, []);
+    return voices;
+}
+
+/**
+ * Pick the best-sounding English voice from the list, or null if none look good (caller then
+ * falls back to the OS default). Heuristic, best-first: prefer voices whose name advertises a
+ * neural engine ("Natural" on Windows, "Google" on Chrome), restricted to English locales.
+ */
+export function pickPreferredVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | null {
+    const english = voices.filter((v) => v.lang.toLowerCase().startsWith("en"));
+    const neural = english.find((v) => /natural|neural|google/i.test(v.name));
+    return neural ?? english[0] ?? null;
 }
 
 // ============================ STT — the INPUT adapter ============================

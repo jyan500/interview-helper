@@ -20,10 +20,38 @@ export interface SessionResponse {
 }
 export interface AnswerResponse {
     message: string; // feedback + the next question
+    done?: boolean; // true once the client-driven loop exhausts the question bank
 }
 export interface AnswerRequest {
     session_id: string;
     text: string;
+}
+
+// Phase 5 — the scorecard shapes. These mirror server/grading.py's Pydantic models plus
+// the assembly in api.py's /api/scorecard. Keep them in sync by hand (no codegen).
+export interface DimensionScore {
+    dimension: string;
+    score: number; // 1-5
+    note: string;
+}
+export interface AnswerGrade {
+    question_id: string;
+    question_text: string;
+    dimension_scores: DimensionScore[];
+    strength: string;
+    gap: string;
+    improvement: string;
+}
+export interface Scorecard {
+    session_id: string;
+    role: string;
+    answers: AnswerGrade[];
+    dimension_averages: Record<string, number>; // dimension name -> average score
+    overall: number;
+}
+export interface ScorecardRequest {
+    session_id: string;
+    role?: string;
 }
 
 export const interviewApi = createApi({
@@ -43,8 +71,17 @@ export const interviewApi = createApi({
         submitAnswer: builder.mutation<AnswerResponse, AnswerRequest>({
             query: (body) => ({ url: "/answer", method: "POST", body }),
         }),
+        // Phase 5 — grade the whole session. A mutation (not a query): it's a POST that
+        // kicks off server-side grading work, same instinct as startSession/submitAnswer.
+        getScorecard: builder.mutation<Scorecard, ScorecardRequest>({
+            query: (body) => ({ url: "/scorecard", method: "POST", body }),
+        }),
     }),
 });
 
 // RTK Query generates one hook per endpoint. Export the ones the UI consumes.
-export const { useStartSessionMutation, useSubmitAnswerMutation } = interviewApi;
+export const {
+    useStartSessionMutation,
+    useSubmitAnswerMutation,
+    useGetScorecardMutation,
+} = interviewApi;
