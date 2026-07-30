@@ -208,7 +208,11 @@ async def submit_answer(req: AnswerRequest) -> dict:
         sess["current_qtext"] = q["text"]
         sess["asked_ids"].append(q["id"])
         sess["followups_used"] = 0
-        return {"message": f"{decision.reaction}\n\n{q['text']}", "done": False}
+        # explicit transition so a NEW bank question can't be misread as a follow-up. The
+        # CLIENT owns this marker (the model never announces "moving on" — it can't, it doesn't
+        # know a new question is coming), so it's consistent regardless of the reaction's wording.
+        return {"message": f"{decision.reaction}\n\nLet's move on to the next question. {q['text']}",
+                "done": False}
 
     #    (c) END — status "exhausted": the bank is done, so conclude.
     return {"message": f"{decision.reaction}\n\nThat's the end of the interview. "

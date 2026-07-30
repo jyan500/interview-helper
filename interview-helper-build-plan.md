@@ -200,6 +200,38 @@ point.)
 
 ---
 
+## Phase 6 — (future) Retrieval-grounded interviewing & grading
+
+**Goal:** let the interviewer probe *and* the grader evaluate against **real reference material**
+(e.g. a system-design article on rate limiting) instead of only the model's own priors —
+especially for open-ended **system-design** questions, where there's no single rubric answer and
+grounded, source-backed feedback is much higher quality.
+
+**The design idea (and why it's a clean fit):** after Phase 5 the model no longer calls tools —
+question-selection and recording are *deterministic*, so the client owns them. Retrieval is the
+opposite: *which* source to look up and *how* to use it is open-ended judgment only the model can
+make in-context. So this phase **re-grants the model a tool for exactly that**, while the
+deterministic spine stays in the client — the mature hybrid. It's also where the MCP boundary
+stops being overhead and starts paying off: the model becomes an MCP client again and MCP's core
+"the agent decides what to invoke" benefit is finally cashed in.
+
+**Sketch:**
+- Add a RAG **tool** (not a resource — the model chooses the query) to the MCP server, e.g.
+  `search_reference(query)`: embed the query, pull the most relevant chunks from a corpus of
+  system-design articles, return excerpts. This is the same shape as `mcp-helpdesk`'s `search_docs`
+  and reuses the Phase 5 pgvector work — just pointed at an article corpus, not the question bank.
+- Give `turn_agent` (and/or the grader) that toolset: `Agent(model, toolsets=[reference_toolset],
+  output_type=TurnReply, ...)` — pydantic-ai lets an agent call tools *and* still return a typed
+  output (verify the call shape at build time). The model decides mid-turn whether to search, then
+  grounds its follow-up/hint (or the grade) in what it finds.
+
+**Caveats to plan for:** the "don't give away the answer" persona rule gets sharper now that the
+model holds authoritative material (use it to *probe*, not hand over the solution); retrieved text
+is interviewer/grader context, **not** the candidate's answer (keep it out of `record_answer`);
+cost/latency rise per turn, so `request_limit` matters more.
+
+---
+
 ## Cost guardrails (unchanged from `mcp-helpdesk`)
 
 - Local STT/TTS; mocked/test-mode everything else.
