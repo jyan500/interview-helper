@@ -18,6 +18,8 @@ export default function App() {
     const [draft, setDraft] = useState("");
     // Phase 5 — the graded scorecard, once the interview is ended. null until requested.
     const [scorecard, setScorecard] = useState<Scorecard | null>(null);
+    // Phase 5 — the backend flips done=true once the client-driven loop exhausts the bank.
+    const [done, setDone] = useState(false);
 
     // RTK Query mutation hooks return [trigger, { isLoading, error, ... }].
     const [startSession, { isLoading: starting }] = useStartSessionMutation();
@@ -56,6 +58,10 @@ export default function App() {
         speak(res.message)
         // reset the textarea text for the next answer
         setDraft("")
+        // the client-driven loop tells us when the bank is exhausted — stop taking answers
+        if (res.done) {
+            setDone(true)
+        }
     }
 
     // WORKED EXAMPLE — end the interview and grade it (drives POST /api/scorecard). This is
@@ -99,35 +105,46 @@ export default function App() {
                             </li>
                         ))}
                     </ul>
-                    <textarea
-                        value={draft}
-                        onChange={(e) => setDraft(e.target.value)}
-                        rows={3}
-                        placeholder="Type your answer…"
-                        className="mt-4 w-full rounded-md border border-slate-300 p-2 focus:border-slate-500 focus:outline-none"
-                    />
-                    {supported && (
-                        <button 
-                            onClick={() => {
-                                if (!listening){
-                                    start()
-                                } 
-                                else {
-                                    stop()
-                                }
-                            }}
-                            className="mt-2 rounded-md bg-slate-800 px-4 py-2 font-medium text-white transition hover:bg-slate-700 disabled:opacity-50"
-                        >
-                            🎤 {!listening ? "Record your answer" : "Stop recording"}
-                        </button>
+                    {/* answer controls only while the interview is still running. Once the
+                        client-driven loop exhausts the bank (done), stop taking answers and
+                        nudge toward the scorecard. */}
+                    {!done ? (
+                        <>
+                            <textarea
+                                value={draft}
+                                onChange={(e) => setDraft(e.target.value)}
+                                rows={3}
+                                placeholder="Type your answer…"
+                                className="mt-4 w-full rounded-md border border-slate-300 p-2 focus:border-slate-500 focus:outline-none"
+                            />
+                            {supported && (
+                                <button
+                                    onClick={() => {
+                                        if (!listening){
+                                            start()
+                                        }
+                                        else {
+                                            stop()
+                                        }
+                                    }}
+                                    className="mt-2 rounded-md bg-slate-800 px-4 py-2 font-medium text-white transition hover:bg-slate-700 disabled:opacity-50"
+                                >
+                                    🎤 {!listening ? "Record your answer" : "Stop recording"}
+                                </button>
+                            )}
+                            <button
+                                onClick={handleSend}
+                                disabled={answering}
+                                className="mt-2 rounded-md bg-slate-800 px-4 py-2 font-medium text-white transition hover:bg-slate-700 disabled:opacity-50"
+                            >
+                                Send answer
+                            </button>
+                        </>
+                    ) : (
+                        <p className="mt-4 rounded-md bg-slate-100 p-3 text-slate-700">
+                            ✅ The interview has concluded. See your scorecard below.
+                        </p>
                     )}
-                    <button
-                        onClick={handleSend}
-                        /* disabled={answering} */
-                        className="mt-2 rounded-md bg-slate-800 px-4 py-2 font-medium text-white transition hover:bg-slate-700 disabled:opacity-50"
-                    >
-                        Send answer
-                    </button>
                     <button
                         onClick={handleEndInterview}
                         disabled={scoring}

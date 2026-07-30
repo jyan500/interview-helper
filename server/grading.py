@@ -73,6 +73,49 @@ grader_agent = Agent(
 )
 
 
+# --- THE INTERVIEWER'S PER-TURN DECISION (client-driven loop) --------------------------
+# SECOND use of output_type, for a different reason. In the client-driven loop the model NO
+# LONGER drives the interview — the client (api.py) owns which bank question is asked and
+# records answers. The model's job shrinks to two things it, and only it, can do: react to
+# the candidate's last answer, and JUDGE whether that answer is worth probing. We capture
+# both in one typed result so the CLIENT can act on the decision (a bool it can branch on)
+# instead of trying to parse intent out of prose:
+#   reply        -> what the candidate sees (a reaction, plus a follow-up probe IF probing)
+#   ask_followup -> the model's judgement: True = `reply` is a probe on the SAME question;
+#                   False = the answer's been explored enough, ready to move on.
+# The client CAPS follow-ups and picks the next question — so a True here is a *request* to
+# probe, not permission to seize the wheel. That's the whole reliability fix: the model can't
+# invent a main question or mislabel an id, because it never selects one or records one.
+class TurnReply(BaseModel):
+    """The interviewer's response to one answer, SPLIT so the client controls what's shown.
+
+    Why split (vs a single `reply` blob): the client always shows `reaction`, but shows the
+    probe ONLY when it actually follows up. If reaction and probe were one string, a probe the
+    model wanted but the client CAN'T grant (follow-up cap reached -> advancing) would get shown
+    right next to the next bank question — two questions in one turn. Separate fields let the
+    client drop the probe when it advances.
+    """
+    is_clarification: bool = Field(description="true if the candidate's message is a CLARIFYING "
+                                               "QUESTION about the current question (e.g. 'what do "
+                                               "you mean by X?'), NOT an attempt to answer it")
+    reaction: str = Field(description="what to say back: if is_clarification, a brief helpful "
+                                      "clarification that does NOT reveal the answer; otherwise a "
+                                      "substantive comment on the answer, NEVER phrased as a question")
+    followup: str = Field(default="", description="a SINGLE probing question on the SAME "
+                                                  "question when one is warranted; empty otherwise "
+                                                  "(and always empty when is_clarification is true)")
+    ask_followup: bool = Field(description="true only if this is an ANSWER (not a clarification) "
+                                           "that was weak/vague/shallow and warrants one more probe")
+
+
+# No toolset — the model doesn't call tools anymore; the client does. Same max_tokens cap.
+turn_agent = Agent(
+    model,
+    output_type=TurnReply,
+    model_settings=ModelSettings(max_tokens=600),
+)
+
+
 # --- WORKED EXAMPLE — grade ONE answer -------------------------------------------------
 # The server owns the GRADING TEMPLATE (`evaluate_answer`, Phase 2), so we FETCH it rather
 # than hardcode grading instructions here — the same "server owns the persona" lesson as the

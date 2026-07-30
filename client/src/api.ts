@@ -20,6 +20,7 @@ export interface SessionResponse {
 }
 export interface AnswerResponse {
     message: string; // feedback + the next question
+    done?: boolean; // true once the client-driven loop exhausts the question bank
 }
 export interface AnswerRequest {
     session_id: string;
