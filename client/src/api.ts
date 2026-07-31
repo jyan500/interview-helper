@@ -11,6 +11,7 @@
  *   POST /api/answer   -> submitAnswer   (your TODO)
  */
 import { createApi, fetchBaseQuery } from "@reduxjs/toolkit/query/react";
+import { API_BASE_URL } from "./constants";
 
 // These types mirror the FastAPI response/request bodies in server/api.py. There's no
 // codegen wiring them together, so keep them in sync by hand (small enough for now).
@@ -54,11 +55,19 @@ export interface ScorecardRequest {
     role?: string;
 }
 
+// Phase 5 robust STT — the /api/transcribe response. The REQUEST is a FormData (the recorded
+// audio blob), not a JSON body, so there's no matching request interface: fetchBaseQuery detects
+// a FormData body, leaves it un-stringified, and lets the browser set the multipart Content-Type.
+export interface TranscribeResponse {
+    text: string;
+}
+
 export const interviewApi = createApi({
     reducerPath: "interviewApi",
     // FULL origin, not a relative path, because we use CORS (not a Vite proxy). This is the
-    // one concrete consequence of that decision — see vite.config.ts.
-    baseQuery: fetchBaseQuery({ baseUrl: "http://localhost:8000/api" }),
+    // one concrete consequence of that decision — see vite.config.ts. Shared with voice/speech.ts
+    // via constants.ts (sourced from client/.env) so the backend origin is written down once.
+    baseQuery: fetchBaseQuery({ baseUrl: API_BASE_URL }),
     endpoints: (builder) => ({
         // WORKED EXAMPLE — start a session.
         // It's a MUTATION, not a query. Even though it "gets" the first question, the POST
@@ -76,6 +85,12 @@ export const interviewApi = createApi({
         getScorecard: builder.mutation<Scorecard, ScorecardRequest>({
             query: (body) => ({ url: "/scorecard", method: "POST", body }),
         }),
+        // Phase 5 robust STT — transcribe one recorded utterance via /api/transcribe (OpenAI
+        // Whisper). A mutation: it's a POST with a side effect (an API call), same instinct as the
+        // others. The arg is the FormData holding the audio blob; fetchBaseQuery ships it as-is.
+        transcribe: builder.mutation<TranscribeResponse, FormData>({
+            query: (body) => ({ url: "/transcribe", method: "POST", body }),
+        }),
     }),
 });
 
@@ -84,4 +99,5 @@ export const {
     useStartSessionMutation,
     useSubmitAnswerMutation,
     useGetScorecardMutation,
+    useTranscribeMutation,
 } = interviewApi;

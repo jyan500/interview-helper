@@ -112,4 +112,22 @@ Phase 5 (real grading + scorecard):
   strength/gap/fix. Two intentional fill-in TODOs remain: `aggregate()` in `grading.py` and the
   per-answer render in `App.tsx`'s `ScorecardView`.
 
-Update this section as later phases (audio adapters, HTTP transport) get scaffolded.
+Phase 5 (audio polish):
+
+- **TTS voice polish (frontend only):** `voice/speech.ts` now applies a chosen voice + `rate`/`pitch`
+  via module-level `voicePrefs` (`setVoicePrefs()`), with `useVoices()` (async voice-list load) and
+  `pickPreferredVoice()` (prefers "Natural"/"Google" English voices). `App.tsx` auto-picks a good voice
+  on mount so TTS sounds neural with no user action.
+- **Robust STT — cloud Whisper batch:** the browser INPUT adapter swapped its guts, same
+  `{ supported, listening, start, stop }` contract. `useWhisperRecognition` (in `voice/speech.ts`)
+  captures the mic via `getUserMedia` + `MediaRecorder`, then POSTs the utterance to
+  **`POST /api/transcribe`** (`api.py`), which proxies **OpenAI Whisper** (`whisper-1`) and returns
+  `{text}`. `App.tsx` uses this hook instead of the Phase-4 `useSpeechRecognition` (Web Speech). Needs
+  **`OPENAI_API_KEY`** in `server/.env` (openai SDK reads it automatically). Endpointing is manual
+  (user clicks Stop); VAD auto-stop is a later add. One hardening TODO in the route (empty/oversized
+  audio guard + `language` hint).
+- **Frontend config origin:** the backend origin lives in `client/.env` (`VITE_API_BASE_URL`),
+  surfaced through `client/src/constants.ts` (`API_BASE_URL`) and consumed by both `api.ts` and
+  `voice/speech.ts` — written down once, overridable per deploy.
+
+Update this section as later phases (HTTP transport, self-hosted/streaming STT) get scaffolded.
