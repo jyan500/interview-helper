@@ -28,11 +28,13 @@ Smoke-test with curl (no browser needed yet — prove the backend before adding 
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from openai import AsyncOpenAI
 from pydantic import BaseModel
 from pydantic_ai.usage import UsageLimits
 
@@ -217,6 +219,68 @@ async def submit_answer(req: AnswerRequest) -> dict:
     #    (c) END — status "exhausted": the bank is done, so conclude.
     return {"message": f"{decision.reaction}\n\nThat's the end of the interview. "
                        f"Thank you for your time!", "done": True}
+
+
+# ===========================================================================
+# WORKED EXAMPLE — POST /api/transcribe : the robust-STT INPUT edge adapter, server side.
+#
+# THE THESIS, ONE MORE TIME (build-plan Phase 5 "robust STT"): the browser's built-in Web
+# Speech API (useSpeechRecognition in speech.ts) is being swapped for a pipeline we own —
+# capture in the browser, transcribe HERE. The interview loop above never learns which STT
+# produced the text; `record_answer`, the agent, the transcript are all untouched. This
+# route is the entire server-side cost of that swap: audio bytes in, text out.
+#
+# Why CLOUD Whisper (OpenAI) and not self-hosted faster-whisper? Deployability. Self-hosting
+# means a GPU (or slow CPU), a multi-GB model in RAM, and a concurrency queue. Proxying one
+# HTTP call to OpenAI keeps THIS server a thin, deploy-friendly relay — same $/min tradeoff
+# an interview coach happily makes. The seam is identical either way (that's the point): the
+# body of this function is the ONLY thing that would change to go self-hosted.
+
+# Lazy singleton: AsyncOpenAI() reads OPENAI_API_KEY from the env (loaded by pydantic_agent's
+# load_dotenv at import). Built on first use, not at module load, so the app still boots for
+# the text-only flow if the key isn't set yet — you only hit the error when you actually
+# transcribe. AsyncOpenAI so the call `await`s without blocking the event loop.
+_openai_client: AsyncOpenAI | None = None
+
+
+def get_openai_client() -> AsyncOpenAI:
+    global _openai_client
+    if _openai_client is None:
+        if not os.environ.get("OPENAI_API_KEY"):
+            raise HTTPException(status_code=500, detail="OPENAI_API_KEY is not set in server/.env")
+        _openai_client = AsyncOpenAI()
+    return _openai_client
+
+
+@app.post("/api/transcribe")
+async def transcribe(audio: UploadFile = File(...)) -> dict:
+    # The browser records ONE utterance (MediaRecorder -> a webm/opus Blob) and POSTs it as
+    # multipart form-data under the field name "audio". FastAPI hands it to us as an UploadFile.
+    data = await audio.read()
+
+    if len(data) == 0:
+        return {"text": ""}
+
+    megabytes = len(data) / (1024**2)   # data is bytes -> len() IS the payload size in bytes
+    if megabytes > 10:
+        raise HTTPException(status_code=413, detail="Audio file is too large to transcribe")
+
+    # Whisper's file arg takes a (filename, bytes, content_type) tuple. The filename's extension
+    # is how the API infers the container, so keep the browser's (e.g. "answer.webm").
+    result = await get_openai_client().audio.transcriptions.create(
+        model="whisper-1",   # cheap + solid ($0.006/min). gpt-4o-transcribe is the pricier upgrade.
+        file=(audio.filename or "answer.webm", data, audio.content_type or "audio/webm"),
+        language="en"
+    )
+
+    # Same shape the client's onResult(text) expects — mirrors the Web Speech path's output.
+    return {"text": result.text}
+
+    # TODO (hardening, optional) — before the API call, guard the two cheap failure modes a real
+    # deploy hits: (a) an EMPTY recording (len(data) == 0, e.g. the user clicked stop instantly)
+    # -> return {"text": ""} without spending an API call; (b) an oversized upload -> reject with
+    # HTTP 413 so a runaway mic can't ship tens of MB. A `language="en"` hint on create() also
+    # nudges accuracy for this English-only coach. Left as a fill-in so the happy path stays clear.
 
 
 # --- TODO — normalize a follow-up's question_id back to its PARENT bank id. -----------

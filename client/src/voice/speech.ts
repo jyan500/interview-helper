@@ -25,6 +25,7 @@
  *           writes the transcript into `draft`, and you Send it exactly as a typed answer.
  */
 import { useEffect, useRef, useState } from "react";
+import { useTranscribeMutation } from "../api";
 
 // ============================ TTS — the OUTPUT adapter ============================
 // SpeechSynthesis + SpeechSynthesisUtterance ARE in TypeScript's DOM lib, so no extra typing.
@@ -187,4 +188,82 @@ export function useSpeechRecognition(onResult: (text: string) => void) {
     }
 
     return { supported, listening, start, stop };
+}
+
+// ============ STT #2 — the ROBUST INPUT adapter (Phase 5): capture here, transcribe on our server ============
+// SAME { supported, listening, start, stop } CONTRACT as useSpeechRecognition above — and THAT is
+// the whole lesson: App.tsx swaps ONE import and nothing else moves (handleSend, the transcript,
+// the agent, MCP all untouched). Only the GUTS differ. Instead of leasing Chrome's Web Speech API
+// (Chrome-only, no endpointing control, audio -> Google), we:
+//   1. capture raw mic audio in the browser via getUserMedia + MediaRecorder, then
+//   2. POST the recorded utterance to OUR /api/transcribe (OpenAI Whisper) and use the text back.
+// Cross-browser, more accurate, and the audio goes to a vendor WE chose. Endpointing is still
+// MANUAL (user clicks Stop) — same tradeoff as the Web Speech version; VAD auto-stop is a later add.
+
+export function useWhisperRecognition(onResult: (text: string) => void) {
+    const [listening, setListening] = useState(false);
+    // The transcribe POST now goes through RTK Query (the "one place HTTP lives"), so `isLoading`
+    // IS our "transcribing" flag — no hand-rolled useState/finally needed, RTK Query flips it back.
+    const [transcribe, { isLoading: transcribing }] = useTranscribeMutation();
+    const recorderRef = useRef<MediaRecorder | null>(null);
+    const chunksRef = useRef<Blob[]>([]); // audio chunks MediaRecorder emits as it records
+    const streamRef = useRef<MediaStream | null>(null); // the live mic stream, to release on stop
+
+    // getUserMedia + MediaRecorder are STANDARD and broadly supported (incl. Firefox/Safari),
+    // unlike webkitSpeechRecognition. Both need a secure context (https or localhost). Guard for
+    // ancient browsers where they're missing so the mic button hides instead of throwing.
+    const supported =
+        typeof navigator !== "undefined" &&
+        !!navigator.mediaDevices?.getUserMedia &&
+        typeof MediaRecorder !== "undefined";
+
+    async function start(): Promise<void> {
+        if (!supported || listening) return;
+        try {
+            // Prompts for mic permission the first time. Throws if denied -> we stay not-listening.
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            streamRef.current = stream;
+            chunksRef.current = [];
+            const recorder = new MediaRecorder(stream);
+            recorder.ondataavailable = (e) => {
+                if (e.data.size > 0) chunksRef.current.push(e.data);
+            };
+            recorder.onstop = async () => {
+                try {
+                    // release the mic so the browser's "recording" dot goes away
+                    streamRef.current?.getTracks().forEach((t) => t.stop());
+                    // glue the chunks into ONE utterance blob (webm/opus in Chrome; Whisper accepts it)
+                    const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
+                    // ship it through RTK Query, get text back, fill the draft — the SAME onResult the
+                    // Web Speech path calls, just sourced from Whisper instead of Chrome. .unwrap()
+                    // returns the payload OR throws — and it throws on HTTP errors too (413/500), so
+                    // the server's "file too large" guard lands in the catch below, not silently.
+                    const form = new FormData();
+                    form.append("audio", blob, "answer.webm");
+                    const data = await transcribe(form).unwrap();
+                    onResult((data.text ?? "").trim());
+                }
+                catch (e) {
+                    // TODO: need to add a toast notification in the future
+                    console.error("Failed to transcribe...", e);
+                }
+                // no finally — RTK Query flips `isLoading` (our `transcribing`) back on its own.
+            };
+            recorderRef.current = recorder;
+            recorder.start();
+            setListening(true);
+        } catch {
+            // denied mic / no device -> leave listening false so the button resets to "Record".
+            setListening(false);
+        }
+    }
+
+    function stop(): void {
+        recorderRef.current?.stop(); // fires onstop -> builds the blob, POSTs it, calls onResult
+        setListening(false);
+        // `transcribing` (set in onstop) covers the gap between here and the transcript arriving,
+        // so App can show a "Transcribing…" hint during the Whisper round-trip.
+    }
+
+    return { supported, listening, start, stop, transcribing };
 }

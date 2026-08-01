@@ -7,7 +7,7 @@ import {
 } from "./api";
 import {
     speak,
-    useSpeechRecognition,
+    useWhisperRecognition,
     useVoices,
     pickPreferredVoice,
     setVoicePrefs,
@@ -32,10 +32,15 @@ export default function App() {
     const [submitAnswer, { isLoading: answering }] = useSubmitAnswerMutation();
     const [getScorecard, { isLoading: scoring }] = useGetScorecardMutation();
 
-    const { supported, listening, start, stop } = useSpeechRecognition(setDraft)
+    // THE SEAM, made literal: both hooks return the SAME { supported, listening, start, stop }
+    // contract, so swapping the INPUT edge adapter is a one-line change and nothing below moves.
+    //   useSpeechRecognition — Phase 4, browser Web Speech API (Chrome-only, audio -> Google)
+    //   useWhisperRecognition — Phase 5, mic capture here + our /api/transcribe (OpenAI Whisper)
+    const { supported, listening, start, stop, transcribing } = useWhisperRecognition(setDraft)
 
     // Phase 5 TTS polish — the OUTPUT edge adapter, richer knobs. `useVoices()` gives the live
-    // (async-loaded) voice list; `selectedVoiceURI` is what the picker below binds to.
+    // (async-loaded) voice list; `selectedVoiceURI` records which voice we've settled on (also the
+    // "have we auto-picked yet?" guard for the effect below).
     const voices = useVoices();
     const [selectedVoiceURI, setSelectedVoiceURI] = useState<string | null>(null);
 
@@ -157,10 +162,10 @@ export default function App() {
                             )}
                             <button
                                 onClick={handleSend}
-                                disabled={answering}
+                                disabled={answering || transcribing}
                                 className="mt-2 rounded-md bg-slate-800 px-4 py-2 font-medium text-white transition hover:bg-slate-700 disabled:opacity-50"
                             >
-                                Send answer
+                                {!transcribing ? "Send answer" : "Transcribing..."}
                             </button>
                         </>
                     ) : (
@@ -182,7 +187,7 @@ export default function App() {
     );
 }
 
-// TODO — render the graded scorecard. The DATA is done (the backend grades every recorded
+// render the graded scorecard. The DATA is done (the backend grades every recorded
 // answer and aggregates it); this is purely the DISPLAY. The overall score + per-dimension
 // averages are wired below as the worked example — fill in the per-answer breakdown where
 // marked. Fields available on `card` (see api.ts Scorecard): overall, dimension_averages
@@ -205,22 +210,6 @@ function ScorecardView({ card }: { card: Scorecard }) {
                     </li>
                 ))}
             </ul>
-
-            {/* TODO — the per-answer breakdown. Map over card.answers and, for each, render:
-                  - the question_text (a heading)
-                  - its dimension_scores (each { dimension, score, note })
-                  - the strength / gap / improvement lines
-                Pointers:
-                  {card.answers.map((a, i) => (
-                      <div key={i} className="mt-4">
-                          <p className="font-semibold">{a.question_text}</p>
-                          ... map a.dimension_scores ...
-                          <p>💪 {a.strength}</p>
-                          <p>🕳️ {a.gap}</p>
-                          <p>🔧 {a.improvement}</p>
-                      </div>
-                  ))}
-            */}
             {
                 card.answers.map((a, i) => (
                     <div key={i} className = "mt-4">
