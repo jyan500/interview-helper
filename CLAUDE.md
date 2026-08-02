@@ -4,7 +4,7 @@ Guidance for Claude Code when working in this repository.
 
 ## What this project is
 
-**Interview Helper** is a **learning project** that reuses the mental model from
+**Interview Helper** started as a **learning project** that reuses the mental model from
 [`mcp-helpdesk`](../mcp-helpdesk) — a FastMCP **server** of tools/resources/prompts driven by a
 **Pydantic AI** agent loop — and applies it to a *voice interview coach*: it asks you an interview
 question, you answer, the LLM evaluates the answer and either gives feedback or asks a follow-up.
@@ -19,9 +19,11 @@ over **text**. Prove the text loop first; add audio last.
                                   └── this is the whole project. same as mcp-helpdesk's core. ──┘
 ```
 
-> **This is not a production system.** Same posture as `mcp-helpdesk`: paced for part-time learning,
-> favoring clarity over robustness. No auth, no scaling, no exhaustive error handling unless a phase
-> calls for it. Everything stays mocked/local/cheap.
+> **Status — as of 2026-07-31 this pivoted to a production deploy.** The phases below were built
+> learning-first (paced for part-time work, favoring clarity over robustness, everything
+> mocked/local/cheap), and that history explains why the architecture looks the way it does. It is
+> **no longer the current posture**: auth, a real database, and hosted deployment are now in scope.
+> Phased production plan: `C:\Users\janse\.claude\plans\synchronous-greeting-puffin.md`.
 
 ## Guiding principle
 
@@ -54,18 +56,18 @@ you read** (resource); persisting an answer is an **action** (tool); the intervi
 - **MCP server** (`server/`): standalone **`fastmcp`** (3.x, same as `mcp-helpdesk`), decorator-based.
 - **Transport:** **stdio** first (simplest); Streamable HTTP later if you want multi-client.
 - **Framework client:** **Pydantic AI** as the MCP client + agent loop.
-- **Storage:** a JSON question bank (`server/data/questions.json`) and a JSON session store — no
-  Postgres/Docker for the skeleton. (Graduating to Postgres + pgvector for semantic question retrieval
-  is an optional later deepening that mirrors `mcp-helpdesk` exactly.)
+- **Storage:** **Supabase** (Postgres + Auth + pgvector) is the production target — session state moves
+  to Postgres as the single source of truth, replacing the in-memory `SESSIONS` dict. The JSON question
+  bank (`server/data/questions.json`) is the pre-pivot skeleton, still in place.
 - **LLM:** same cheapest-Gemini-Flash-Lite setup as `mcp-helpdesk` (copy the `.env` + provider wiring).
-- **Audio (last phase):** STT/TTS behind a tiny adapter interface (`voice/adapters.py`). Local/free
-  options first (e.g. `faster-whisper` for STT, `piper`/`pyttsx3` for TTS) to keep spend at zero.
+- **Audio:** STT/TTS behind a tiny adapter interface (`voice/adapters.py`). Now **cloud, not local** —
+  OpenAI Whisper for STT, OpenAI TTS for output. That the swap was cheap is the adapter seam paying off.
 
 ## Cost guardrails (apply from day one — same as `mcp-helpdesk`)
 
 - Cap `max_output_tokens` and the agent's `request_limit` — a voice loop that never ends is a runaway.
 - Log token counts + latency per turn.
-- Keep STT/TTS **local**; keep the Gemini Spend Cap in place.
+- STT/TTS are now **paid cloud calls** (OpenAI) — keep the Gemini Spend Cap in place and watch audio spend.
 
 ## Phase roadmap (see build plan for detail)
 
@@ -74,7 +76,8 @@ you read** (resource); persisting an answer is an **action** (tool); the intervi
 - **Phase 2:** the `behavioral_interview` prompt + `evaluate_answer` prompt — the reusable templates.
 - **Phase 3:** Pydantic AI drives the **multi-turn** interview loop, text-only, at the terminal.
 - **Phase 4 (the new idea):** wrap the terminal I/O with STT (input) and TTS (output) adapters.
-- **Phase 5 (optional):** polish, session review/scoring, semantic question retrieval (pgvector).
+- **Phase 5:** polish, session review/scoring. Grading is grounded in authored per-question
+  **reference briefs**, not RAG/pgvector — semantic retrieval is deferred.
 
 When starting work, identify the active phase and stay in its scope.
 
@@ -89,45 +92,5 @@ When starting work, identify the active phase and stay in its scope.
 
 ## Commands
 
-Once the venv + `.env` exist (copy the recipe from `../mcp-helpdesk/server`):
-
-- **Run the MCP server (stdio):** `server/.venv/Scripts/python.exe server/mcp_server.py`
-- **List discovered primitives (no LLM):** `server/.venv/Scripts/python.exe server/mcp_server.py --list`
-- **Run the text-only interview agent:** `server/.venv/Scripts/python.exe server/pydantic_agent.py`
-
-Phase 3.5 (web UI — FastAPI backend + React/Vite/TS frontend, run both together):
-
-- **Backend API (from `server/`):** `.venv/Scripts/fastapi.exe dev api.py` (serves on `:8000`; the
-  FastAPI process is the single MCP client, spawning `mcp_server.py` over stdio via the lifespan).
-- **Frontend (from `client/`):** `npm run dev` (Vite dev server on `:6173`; calls the API's full
-  origin `http://localhost:8000/api` directly — CORS, not a proxy). Both must run for the UI to work.
-- **Frontend deps / typecheck (from `client/`):** `npm install` · `npx tsc --noEmit`.
-
-Phase 5 (real grading + scorecard):
-
-- **Grade one answer (structured-output smoke test, 1 LLM call, from `server/`):**
-  `.venv/Scripts/python.exe grading.py` — runs the typed `grader_agent` on a canned Q/A/rubric.
-- **Scorecard endpoint:** `POST /api/scorecard {session_id, role}` grades every recorded turn
-  (end-of-session pass over the session store) and returns per-dimension averages + per-answer
-  strength/gap/fix. Two intentional fill-in TODOs remain: `aggregate()` in `grading.py` and the
-  per-answer render in `App.tsx`'s `ScorecardView`.
-
-Phase 5 (audio polish):
-
-- **TTS voice polish (frontend only):** `voice/speech.ts` now applies a chosen voice + `rate`/`pitch`
-  via module-level `voicePrefs` (`setVoicePrefs()`), with `useVoices()` (async voice-list load) and
-  `pickPreferredVoice()` (prefers "Natural"/"Google" English voices). `App.tsx` auto-picks a good voice
-  on mount so TTS sounds neural with no user action.
-- **Robust STT — cloud Whisper batch:** the browser INPUT adapter swapped its guts, same
-  `{ supported, listening, start, stop }` contract. `useWhisperRecognition` (in `voice/speech.ts`)
-  captures the mic via `getUserMedia` + `MediaRecorder`, then POSTs the utterance to
-  **`POST /api/transcribe`** (`api.py`), which proxies **OpenAI Whisper** (`whisper-1`) and returns
-  `{text}`. `App.tsx` uses this hook instead of the Phase-4 `useSpeechRecognition` (Web Speech). Needs
-  **`OPENAI_API_KEY`** in `server/.env` (openai SDK reads it automatically). Endpointing is manual
-  (user clicks Stop); VAD auto-stop is a later add. One hardening TODO in the route (empty/oversized
-  audio guard + `language` hint).
-- **Frontend config origin:** the backend origin lives in `client/.env` (`VITE_API_BASE_URL`),
-  surfaced through `client/src/constants.ts` (`API_BASE_URL`) and consumed by both `api.ts` and
-  `voice/speech.ts` — written down once, overridable per deploy.
-
-Update this section as later phases (HTTP transport, self-hosted/streaming STT) get scaffolded.
+See the `run-interview-helper` skill for how to start the MCP server, the agent, and the
+backend/frontend dev servers — including the required `.env` keys.

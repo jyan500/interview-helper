@@ -238,3 +238,189 @@ cost/latency rise per turn, so `request_limit` matters more.
 - Cap `max_output_tokens` and the agent's `request_limit`; add a turn cap on the interview loop.
 - Keep the per-project Gemini Spend Cap.
 - Log token counts / latency per turn.
+
+---
+
+# PRODUCTION MIGRATION (post-learning pivot — started 2026-07-31)
+
+> The phases above (0–6) were the **learning-first scaffold**. From 2026-07-31 the project pivots to a
+> **production deploy**. This section supersedes the "learning project, not production" posture for all
+> NEW work. It is self-contained so a fresh session can pick up mid-migration — read the **Current
+> status** block first to see what's already done.
+
+## Why (goals, in the user's words)
+
+A proper database; user authentication + saved interview sessions; non-robotic voice; grading that
+pulls from real reference material; and **role-level-aware** interviewing/grading (entry / mid / senior
+get different questions and level-calibrated feedback).
+
+## Locked decisions
+
+- **Frontend shape (C):** keep the existing **Vite + React SPA** (do NOT rewrite to Next.js). Add
+  Supabase auth *into it* now. A Next.js marketing/landing site is a **later** add (`www` → SPA `app`),
+  explicitly out of scope for this migration.
+- **Backend stays Python.** FastAPI + Pydantic AI + FastMCP are the untouched agent/MCP core. Supabase
+  provides **Postgres + Auth + pgvector**. The SPA calls FastAPI with the Supabase JWT.
+- **Session state → Postgres as the single source of truth** (drop the in-memory `SESSIONS` dict in
+  `server/api.py`). Each `/api/answer` loads state → runs the turn → writes back. Survives restarts +
+  horizontal scale; gives "resume later" for free. NO in-memory write-through cache (premature; the LLM
+  call dwarfs a DB round-trip). Redis can front this same design later if ever needed.
+- **TTS = OpenAI TTS** — new `/api/tts` proxy route, mirroring the existing `/api/transcribe` swap.
+- **Grading grounding = per-question authored "reference briefs"** we write ourselves (structured like
+  HelloInterview: leveling bands entry/mid/senior + tiered bad/good/great concept anchors + tradeoffs,
+  but our own prose to avoid copyright/ToS). Deterministic `question_id → brief` (a `reference://{id}`
+  MCP **resource**), **NOT** RAG/pgvector — one known brief per question is a join, not retrieval.
+  pgvector/RAG is deferred to when briefs get long or the bank outgrows hand-authoring. Anchors phrased
+  as *demonstrated capability*, not keywords (avoid keyword-bingo grading). Detail is a per-question
+  dial, thickened only where testing shows the grader drifting.
+- **Grader gets its own (stronger) model,** separate from the interviewer's Gemini flash-lite
+  (`gemini-3.1-flash-lite-preview`). Grading runs once per session (low volume) so a better model is
+  cheap and lets us keep briefs minimal.
+- **Auth verification = JWKS, not a shared secret.** Supabase's new projects use asymmetric **JWT
+  signing keys**; the backend verifies tokens against the JWKS endpoint
+  (`{SUPABASE_URL}/auth/v1/.well-known/jwks.json`) with PyJWT's `PyJWKClient`. So there is deliberately
+  **no `SUPABASE_JWT_SECRET`** in the env. (Legacy HS256 fallback only if a project still uses it.)
+- **Frontend libs to add:** `react-router` (page nav: login / app / history — also triggers the SPA
+  rewrite on Vercel), `react-hook-form` (login/signup validation; optionally the interview textarea),
+  `@supabase/supabase-js`.
+- **Deploy:** SPA (static) on **Vercel** (needs `client/vercel.json` SPA rewrite + `VITE_` env vars) ·
+  FastAPI on **Render/Railway/Fly** · Supabase managed.
+- **Future dual-mode (deferred):** a **voice mode** (TTS+STT) vs a **text-only mode**, chosen per
+  session so the two aren't conflated. Design implication NOW: keep audio adapters (`speak()` / the
+  whisper mic hook) invoked behind a single **mode flag** so the later split is trivial — don't
+  hard-wire TTS/STT into the interview flow.
+
+## Environment facts verified this session
+
+- Python **3.14.3**; installed: `sqlalchemy[asyncio]` 2.0.51, `asyncpg` 0.31.0, `alembic` 1.18.5,
+  `pydantic-ai` 2.13.0, `fastmcp` 3.4.4, `openai` 2.46.0, `PyJWT` 2.13.0 (+ `joserfc` available).
+- **DB connection validated** through the Supabase **session pooler** (port **5432**, NOT the 6543
+  transaction pooler which breaks asyncpg prepared statements). `DATABASE_URL` uses the
+  `postgresql+asyncpg://` scheme and the `postgres.<project-ref>` pooler username. Server reports
+  **PostgreSQL 17.6**, **pgvector 0.8.2 enabled**.
+- **pydantic-ai message serialization** (for storing `message_history` as JSONB): dump with
+  `ModelMessagesTypeAdapter.dump_python(messages, mode="json")`, load with
+  `ModelMessagesTypeAdapter.validate_python(...)` (both from `pydantic_ai.messages`);
+  `result.all_messages_json()` also exists. Verified against 2.13.0.
+- **Env files (already configured, gitignored, NOT tracked):**
+  - `client/.env`: `VITE_API_BASE_URL`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` (publishable key
+    `sb_publishable_…`).
+  - `server/.env`: `GEMINI_API_KEY`, `OPENAI_API_KEY`, `DATABASE_URL` (asyncpg session pooler),
+    `SUPABASE_URL`. (No JWT secret — JWKS.)
+- **Schema naming gotcha:** do NOT name a table `references` (SQL reserved word) — use
+  `reference_briefs`.
+
+## Phases (dependency/risk order — storage+auth first, audio+deploy last)
+
+### Phase A — Durable storage on Supabase Postgres  *(IN PROGRESS)*
+- **New `server/db/` package:** SQLAlchemy 2.0 **async** engine + `async_sessionmaker` (`engine.py`),
+  declarative models (`models.py`), reading `DATABASE_URL` from env.
+- **Schema:** `roles`, `rubrics` (per role: dimensions JSONB + scale), `questions` (`id`, `role_id`,
+  `type`, `text`, `tags` JSONB, `level` nullable-until-Phase-D), `sessions` (`id`, `user_id`
+  nullable-until-Phase-B, `role`, `level`, `persona`, `asked_ids` JSONB, `current_qid`, `current_qtext`,
+  `followups_used`, `max_followups`, `message_history` JSONB, `summary`, `done`, `created_at`,
+  `updated_at`), `turns` (`id`, `session_id`, `question_id`, `answer`, `at`), `scorecards` (`session_id`,
+  `overall`, `dimension_averages` JSONB, `answers` JSONB, `role`, `level`, `created_at`),
+  `reference_briefs` (`question_id`, `brief`) — table created now, populated in Phase E.
+- **Alembic** migration setup (env.py points at `db.Base.metadata`, async engine) + initial migration.
+- **Seed script** loading the current `server/data/questions.json` into `roles`/`rubrics`/`questions`.
+- **Rewrite tool BODIES to hit the DB, signatures unchanged** (so `mcp_server.py`, agent, client don't
+  move): `server/tools/questions.py` (`next_question`, `get_question`, `list_questions`, `get_rubric`)
+  and `server/tools/session.py` (`record_answer`, `get_session`, `save_session_summary`). Async DB
+  access inside these — note MCP tool bodies can be `async def`. **← scaffold these as worked-example +
+  TODO (real learning exercise), unlike the engine/models which are written complete.**
+- **Relocate session state** in `server/api.py` from the `SESSIONS` dict to the `sessions`/`turns`
+  tables (load → run turn → write back). Serialize `message_history` per the helpers above.
+- **Verify:** `python -m tools.questions` reads the DB; `curl -X POST localhost:8000/api/session`
+  writes a `sessions` row; a full interview writes `turns`.
+
+### Phase B — Supabase auth end to end
+- **Frontend:** `@supabase/supabase-js` client module; login/signup views (`react-hook-form`
+  validation); `react-router` + a `<ProtectedRoute>`; store the Supabase session; inject the JWT into
+  every API call via RTK Query `prepareHeaders` in `client/src/api.ts`. Supabase config via `VITE_` env
+  (already set) surfaced through `client/src/constants.ts` (extend the existing pattern).
+- **Backend:** a FastAPI dependency that verifies the Supabase JWT **via JWKS** (`PyJWKClient` against
+  `{SUPABASE_URL}/auth/v1/.well-known/jwks.json`, `algorithms=["ES256","RS256"]`,
+  `audience="authenticated"`), extracts `user_id` (`sub`), applied to interview routes; thread `user_id`
+  into session creation.
+- **RLS** policies on the tables as defense-in-depth.
+- **Verify:** sign up in the SPA, confirm the JWT reaches FastAPI; unauthenticated calls → 401.
+
+### Phase C — Save & list interview sessions per user
+- **Backend:** `GET /api/sessions` (my sessions), `GET /api/sessions/{id}` (transcript + persisted
+  scorecard); persist the scorecard on `/api/scorecard` (write a `scorecards` row) instead of only
+  returning it.
+- **Frontend:** a **History** view (role/level/date/overall) drilling into the saved transcript +
+  scorecard, reusing `ScorecardView` in `client/src/App.tsx`.
+- **Verify:** finish an interview, reload, see it in History.
+
+### Phase D — Seniority-aware questions & interviewing
+- **Data:** populate `questions.level` (entry/mid/senior); add enough questions per role×level to run an
+  interview. Rubrics may carry level-specific expectations.
+- **Selection:** extend `next_question(role, level, asked_ids)` to filter by level (body in
+  `server/tools/questions.py`, tool signature in `mcp_server.py`, client calls in `server/api.py`).
+- **Kickoff:** role + **level picker** in the SPA before starting; store `level` on the session; thread
+  `seniority` into the `behavioral_interview` prompt (already accepts it).
+- **Verify:** pick entry vs senior → different questions.
+
+### Phase E — Grounded, level-aware grading
+- **Data:** author `reference_briefs` per question (tiered concept anchors + level bands). Seed the
+  system-design ones first (e.g. `be-2` rate limiter).
+- **MCP:** add `reference://{question_id}` **resource** in `server/mcp_server.py` + `get_reference`
+  body in `server/tools/questions.py`.
+- **Grader (`server/grading.py`):** give `grader_agent` its **own stronger model**; `grade_one` fetches
+  the brief + passes it and the session `level` into `evaluate_answer` (`server/mcp_server.py`), which
+  grounds scoring in the brief, calibrates to level, and rewards demonstrated understanding over
+  keywords. `/api/scorecard` reads `level` from the session and passes it through.
+- **Verify:** grade the same answer at two levels → brief + level change the feedback.
+
+### Phase F — Neural TTS (OpenAI)
+- **Backend:** `POST /api/tts` proxying OpenAI TTS (reuse the lazy `AsyncOpenAI` client already in
+  `server/api.py`), returns audio bytes.
+- **Frontend:** swap the body of `speak()` in `client/src/voice/speech.ts` to POST text → play the
+  returned audio, **keeping the `speak(text)` contract** so `App.tsx` is untouched. Gate `speak()` +
+  the mic behind the **mode flag** (future voice/text-only split). Drop the `SpeechSynthesis`/voice
+  picker once the new path works.
+- **Verify:** hear the OpenAI voice replace the robotic one, no `App.tsx` change.
+
+### Phase G — Production hardening & deploy
+- **Config:** all secrets/URLs via env (`DATABASE_URL`, `SUPABASE_URL`, `OPENAI_API_KEY`,
+  `GEMINI_API_KEY`, grader model id, CORS origins). Make CORS `allow_origins` in `server/api.py`
+  env-driven (the deployed Vercel origin, not just `localhost:6173`).
+- **SPA:** `client/vercel.json` with the SPA rewrite `{"rewrites":[{"source":"/(.*)","destination":
+  "/index.html"}]}`; set `VITE_*` vars in Vercel (build-time, public — never a secret).
+- **Backend:** `Dockerfile` / Render-Railway build config for FastAPI; MCP server runs as its stdio
+  subprocess via the existing lifespan. Keep `max_tokens` / `request_limit` / turn-cap guardrails.
+- **Deferred future:** pgvector RAG; streaming TTS / VAD endpointing; Next.js landing; dual practice
+  modes.
+
+## Files at the center of the work
+
+- `server/db/` (new: `engine.py`, `models.py`, Alembic env + versions, seed script)
+- `server/tools/questions.py`, `server/tools/session.py` — bodies → Postgres; signatures grow `level` /
+  `get_reference` (scaffold-style TODOs)
+- `server/mcp_server.py` — add `reference://{question_id}` resource; thread `level`
+- `server/grading.py` — grader gets its own model; `grade_one` consumes brief + level
+- `server/api.py` — JWKS-auth dependency, `user_id` on sessions, session state → Postgres,
+  `GET /api/sessions[...]`, `/api/tts`, env-driven CORS, persist scorecard
+- `client/src/api.ts` — JWT header injection; session-history + tts endpoints
+- `client/src/App.tsx` — router, auth gate, role+level picker, History view, mode flag
+- `client/src/voice/speech.ts` — `speak()` → `/api/tts`
+- `client/src/constants.ts`, `client/vercel.json`, `client/.env` — Supabase + API config
+- new: Supabase client module, login/signup views, `<ProtectedRoute>`
+
+## CURRENT STATUS (resume point)
+
+**Done this session:**
+- Approved this plan; recorded decisions in memory (`production-pivot-decisions.md`).
+- Supabase project created; `client/.env` + `server/.env` configured and validated (connection smoke
+  test passed: Postgres 17.6, pgvector 0.8.2).
+- Added `sqlalchemy[asyncio]`, `asyncpg`, `alembic`, `pyjwt` to `server/requirements.txt` and installed
+  them into `server/.venv`.
+
+**Next action (Phase A, where we stopped):** create the `server/db/` package — `db/__init__.py`,
+`db/engine.py` (async engine + `AsyncSessionLocal`), `db/models.py` (the schema above; remember
+`reference_briefs`, not `references`). Then Alembic init + initial migration, seed from
+`questions.json`, then the scaffold-style tool-body rewrites and the `api.py` session relocation.
+Nothing in `server/db/` has been written yet (the first `db/__init__.py` write was interrupted by the
+model-switch restart).

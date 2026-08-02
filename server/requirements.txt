@@ -5,6 +5,18 @@ pydantic-ai
 python-dotenv
 google-genai
 
+# Production migration — durable storage on Supabase Postgres (Phase A).
+#   sqlalchemy[asyncio] : async ORM/core; the [asyncio] extra pulls in the async engine bits
+#   asyncpg             : the async Postgres driver SQLAlchemy talks through (postgresql+asyncpg://)
+#   alembic             : schema migrations (versioned DDL), so the DB shape is reproducible
+sqlalchemy[asyncio]>=2.0,<3
+asyncpg>=0.30
+alembic>=1.13
+
+# Auth — verify Supabase-issued JWTs on the backend (Phase B) via the project's JWKS endpoint.
+# PyJWT is already in the venv; pinned here so a fresh install has it.
+pyjwt>=2.8
+
 # Phase 4 (audio) — add when you get there; keep them OUT of the text-only skeleton:
 # faster-whisper      # STT (offline)
 # piper-tts           # TTS (offline)  — or pyttsx3 for a zero-download fallback
