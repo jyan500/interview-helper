@@ -179,7 +179,9 @@ class Profile(Base, TimestampMixin):
     id: Mapped[uuid_pkg.UUID] = mapped_column(Uuid, primary_key=True)  # = auth.users.id
     display_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
-    interviews: Mapped[list[Interview]] = relationship(back_populates="profile")
+    interviews: Mapped[list[Interview]] = relationship(
+        back_populates="profile", lazy="selectin"
+    )
 
 
 # ===========================================================================
@@ -283,7 +285,7 @@ class Rubric(Base, TimestampMixin):
     role_id: Mapped[int] = mapped_column(ForeignKey("roles.id", ondelete="CASCADE"), unique=True)
     scale: Mapped[str] = mapped_column(Text)   # "1 (poor) to 5 (excellent) per dimension"
 
-    role: Mapped[Role] = relationship(back_populates="rubric")
+    role: Mapped[Role] = relationship(back_populates="rubric", lazy="selectin")
     dimensions: Mapped[list[RubricDimension]] = relationship(
         back_populates="rubric", lazy="selectin", order_by="RubricDimension.sort_order",
         cascade="all, delete-orphan",
@@ -314,7 +316,7 @@ class RubricDimension(Base, TimestampMixin):
     name: Mapped[str] = mapped_column(String(128))    # "Tradeoff reasoning" — rewordable
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
-    rubric: Mapped[Rubric] = relationship(back_populates="dimensions")
+    rubric: Mapped[Rubric] = relationship(back_populates="dimensions", lazy="selectin")
 
 
 class Question(Base, TimestampMixin):
@@ -338,7 +340,7 @@ class Question(Base, TimestampMixin):
     # that order for free; a table has no inherent order, so we store it explicitly.
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
-    role: Mapped[Role] = relationship(back_populates="questions")
+    role: Mapped[Role] = relationship(back_populates="questions", lazy="selectin")
     type: Mapped[QuestionType] = relationship(lazy="selectin")
     level: Mapped[Level | None] = relationship(lazy="selectin")
     tags: Mapped[list[Tag]] = relationship(secondary=question_tags, lazy="selectin")
@@ -419,7 +421,7 @@ class Interview(Base, TimestampMixin):
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)   # save_interview_summary
     done: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    profile: Mapped[Profile | None] = relationship(back_populates="interviews")
+    profile: Mapped[Profile | None] = relationship(back_populates="interviews", lazy="selectin")
     role: Mapped[Role] = relationship(lazy="selectin")
     level: Mapped[Level] = relationship(lazy="selectin")
     current_question: Mapped[Question | None] = relationship(lazy="selectin")
@@ -476,7 +478,7 @@ class Turn(Base, TimestampMixin):
     question_id: Mapped[int] = mapped_column(ForeignKey("questions.id"), index=True)
     answer: Mapped[str] = mapped_column(Text)
 
-    interview: Mapped[Interview] = relationship(back_populates="turns")
+    interview: Mapped[Interview] = relationship(back_populates="turns", lazy="selectin")
     question: Mapped[Question] = relationship(lazy="selectin")
 
 
@@ -535,7 +537,7 @@ class ScorecardEntry(Base, TimestampMixin):
     gap: Mapped[str] = mapped_column(Text)
     improvement: Mapped[str] = mapped_column(Text)
 
-    scorecard: Mapped[Scorecard] = relationship(back_populates="entries")
+    scorecard: Mapped[Scorecard] = relationship(back_populates="entries", lazy="selectin")
     question: Mapped[Question] = relationship(lazy="selectin")
     scores: Mapped[list[ScorecardEntryScore]] = relationship(
         back_populates="entry", lazy="selectin", cascade="all, delete-orphan"
@@ -567,5 +569,5 @@ class ScorecardEntryScore(Base, TimestampMixin):
     dimension_id: Mapped[int] = mapped_column(ForeignKey("rubric_dimensions.id"), index=True)
     score: Mapped[int] = mapped_column(Integer)   # 1-5, per rubrics.scale
 
-    entry: Mapped[ScorecardEntry] = relationship(back_populates="scores")
+    entry: Mapped[ScorecardEntry] = relationship(back_populates="scores", lazy="selectin")
     dimension: Mapped[RubricDimension] = relationship(lazy="selectin")
