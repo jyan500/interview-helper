@@ -411,16 +411,57 @@ get different questions and level-calibrated feedback).
 
 ## CURRENT STATUS (resume point)
 
-**Done this session:**
-- Approved this plan; recorded decisions in memory (`production-pivot-decisions.md`).
-- Supabase project created; `client/.env` + `server/.env` configured and validated (connection smoke
-  test passed: Postgres 17.6, pgvector 0.8.2).
-- Added `sqlalchemy[asyncio]`, `asyncpg`, `alembic`, `pyjwt` to `server/requirements.txt` and installed
-  them into `server/.venv`.
+*Last updated 2026-08-07. Branch: `migrating-away-from-json-to-db`.*
 
-**Next action (Phase A, where we stopped):** create the `server/db/` package — `db/__init__.py`,
-`db/engine.py` (async engine + `AsyncSessionLocal`), `db/models.py` (the schema above; remember
-`reference_briefs`, not `references`). Then Alembic init + initial migration, seed from
-`questions.json`, then the scaffold-style tool-body rewrites and the `api.py` session relocation.
-Nothing in `server/db/` has been written yet (the first `db/__init__.py` write was interrupted by the
-model-switch restart).
+### Phase A — DONE so far (all verified against the live Supabase DB)
+
+- **`server/db/` package.** `engine.py` (async engine, `AsyncSessionLocal`, `get_session`),
+  `models.py` (**15 tables**), `seed.py`, `migrations/` (Alembic, async template).
+- **Schema decisions** (the long design pass — reasoning is in `models.py`'s module docstring, and
+  summarized in the `db-schema-conventions` memory):
+  - Every table: autoincrement int `id` + a `slug` natural key. Sole exception: `profiles.id` IS the
+    Supabase auth UUID, so RLS policies are `auth.uid() = id` / `= profile_id` with no subquery.
+  - **"Interview", never "session"** — table `interviews`, HTTP field `interview_id`,
+    `interview://{id}` resource. "Session" = a SQLAlchemy DB session only, always the variable `db`.
+  - Normalized hard: `levels`, `question_types`, `tags` (+`question_tags`), `rubric_dimensions`,
+    `scorecard_entries`, `scorecard_entry_scores` are all tables. Scorecards don't copy role/level.
+  - `interviews.message_history` is the ONLY JSONB column left (pydantic-ai owns that shape).
+  - `Interview.asked_question_ids` is derived from turns + current question, not stored.
+  - `TimestampMixin` (`created_at`/`updated_at`) on every table; `turns.at` became `created_at`.
+  - `turns.question_id` is a REAL FK now — the client-driven flow means the model can't invent ids,
+    so `parent_question_id` in `api.py` is dead code that retires with the JSON store.
+- **Migrations applied:** `edc507e08778` (initial schema) and `3bf1a2d6fb29` (hand-written: the
+  `auth.users` → `profiles` trigger + the cross-schema FK Alembic can't autogenerate).
+- **Seeded** from `questions.json`: 2 roles, 5 questions, 3 levels, 4 question types, 9 tags,
+  8 rubric dimensions. `python -m db.seed` is idempotent (get-or-create by slug).
+- **`server/tools/questions.py`** — rewritten to Postgres, all bodies filled in and verified
+  (`next_question` / `get_question` / `list_questions` / `get_rubric` / `list_roles`).
+- **`server/tools/interview.py`** — NEW, replaces `tools/session.py` (deleted). Filled in + verified:
+  `create_interview`, `get_interview`, `load_interview_state`, `save_interview_state`,
+  `record_answer`, `save_interview_summary`. All bodies are `async def` now.
+- **`server/mcp_server.py`** — async wrappers, `interview://{interview_id}` resource,
+  `save_interview_summary`. Full MCP round-trip verified (all 3 tools + all 4 resources).
+  Deliberately NOT registered: `create_interview`, `load_interview_state`, `save_interview_state` —
+  backend bookkeeping the model has no business calling; `api.py` imports them directly.
+
+### Next action (Phase A, where we stopped): the `api.py` rewrite
+
+Scaffold-style (worked example + TODOs). Two jobs, one file:
+
+1. **Drop the `SESSIONS` dict** for load → run turn → write back:
+   `load_interview_state(iid)` → `turn_agent.run(...)` → `save_interview_state(iid, ...)`.
+   `message_history` round-trips with `ModelMessagesTypeAdapter.dump_python(msgs, mode="json")` out
+   and `.validate_python(...)` back in (both from `pydantic_ai.messages`; verified on 2.13.0).
+   `POST /api/session` becomes `create_interview(...)` + `save_interview_state(current_qid=...)`.
+2. **Rename `session_id` → `interview_id`** across the HTTP contract, and delete
+   `parent_question_id` + its grouping workaround (the FK makes it unnecessary).
+
+Then the remaining rename surface:
+- `client/src/api.ts` + `client/src/App.tsx` — ~10 sites (`session_id`, `sessionId`).
+- `grading.py:23` — a stale `session://` mention in a comment (cosmetic).
+- `mcp_client_demo.py` — **currently broken**: calls the renamed `save_session_summary` (line 84).
+  Update or delete; it's the Phase-1 learning demo, not part of the running app.
+
+**Verify Phase A when done:** `curl -X POST localhost:8000/api/interview` writes an `interviews` row;
+a full interview writes `turns` rows; restarting the backend mid-interview and continuing still works
+(the point of the whole phase).
