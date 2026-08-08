@@ -17,11 +17,13 @@ DESIGN — two agents, one job each:
     They share the SAME `model` object — grading is a different USE of the model, not a
     different model. The interviewer *conducts*; the grader *evaluates*.
 
-WHERE THIS RUNS — end-of-session, over the recorded store (build-plan Phase 5). The live loop
-never sees a question id cleanly (the interviewer picks questions inside a tool call), but the
-persona already logs every turn via record_answer -> data/sessions/{id}.json. So grading is a
-SEPARATE pass: read the recorded (question_id, answer) turns back out (session:// resource) and
-grade each one here. See api.py's /api/scorecard for the orchestration.
+WHERE THIS RUNS — end-of-interview, over what was recorded (build-plan Phase 5). The client
+owns the question spine and logs every turn via record_answer, so grading is a SEPARATE pass:
+read the recorded (question_id, answer) turns back out of the `turns` table and grade each one
+here. See api.py's /api/scorecard for the orchestration.
+
+Phase E gives grader_agent its OWN, stronger model (it runs once per interview, so a better
+model is cheap) and feeds `grade_one` the authored reference brief + the interview's level.
 
 Smoke test (from server/, 1 LLM call — needs .env GEMINI_API_KEY):
     .venv/Scripts/python.exe grading.py
@@ -34,8 +36,12 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import UsageLimits
 
 # Reuse the SAME model the interviewer uses — importing pydantic_agent runs its module-level
-# setup (model, toolset, agent) once; grading is just a second Agent over that model.
+# setup (model, toolset, agent) once; grading is just a second Agent over that model. It also
+# runs the load_dotenv there, which is how the API keys reach this process.
 from pydantic_agent import model
+# The grading TEMPLATE, imported directly (Phase A). It's a pure function in prompts.py, so
+# there's no transport between us and it — see that module's docstring for why.
+from prompts import evaluate_answer
 
 
 # --- THE TYPED OUTPUT SHAPE ------------------------------------------------------------
@@ -117,21 +123,20 @@ turn_agent = Agent(
 
 
 # --- WORKED EXAMPLE — grade ONE answer -------------------------------------------------
-# The server owns the GRADING TEMPLATE (`evaluate_answer`, Phase 2), so we FETCH it rather
-# than hardcode grading instructions here — the same "server owns the persona" lesson as the
-# interviewer, applied to the grader. get_prompt(name, args) interpolates {question}/{answer}/
-# {rubric} and hands back the filled text; we feed THAT to the grader as the run input, and
-# output_type coerces the model's judgement into an AnswerGrade.
+# The server owns the GRADING TEMPLATE (`evaluate_answer`, Phase 2), so we CALL it rather than
+# hardcode grading instructions here — the same "server owns the persona" lesson as the
+# interviewer, applied to the grader. It interpolates question/answer/rubric and hands back
+# the filled text; we feed THAT to the grader as the run input, and output_type coerces the
+# model's judgement into an AnswerGrade.
 #
-# `toolset` is the running MCPToolset (interview_toolset) passed in from the caller — it's the
-# MCP client, and it's only usable while started (`async with agent` in api.py's lifespan).
-async def grade_one(toolset, question_text: str, answer: str, rubric_text: str) -> AnswerGrade:
+# PHASE A — this used to take a running `toolset` and fetch the template over MCP
+# (`get_prompt` -> unwrap `pr.messages[0].content.content`). The template is a pure function
+# in this same repo, so that was a stdio round-trip and a JSON decode to reach an f-string.
+# The parameter is gone, which also means grade_one no longer needs a started MCP client to
+# run — its smoke test below is now a plain function call.
+async def grade_one(question_text: str, answer: str, rubric_text: str) -> AnswerGrade:
     """Grade a single (question, answer) against the rubric -> a typed AnswerGrade."""
-    pr = await toolset.get_prompt(
-        "evaluate_answer",
-        {"question": question_text, "answer": answer, "rubric": rubric_text},
-    )
-    filled = pr.messages[0].content.content   # PromptMessage -> TextContent -> .content
+    filled = evaluate_answer(question=question_text, answer=answer, rubric=rubric_text)
     result = await grader_agent.run(
         filled,
         usage_limits=UsageLimits(request_limit=3),
@@ -176,11 +181,9 @@ def aggregate(grades: list[AnswerGrade], dimensions: list[str]) -> dict:
 
 
 if __name__ == "__main__":
-    # 1-LLM-call smoke test. grade_one needs a RUNNING toolset to fetch evaluate_answer, so
-    # we borrow the interviewer's toolset and start it (`async with`) exactly like api.py does.
+    # 2-LLM-call smoke test. No MCP subprocess to start anymore — grade_one calls the template
+    # directly, so this is just asyncio + the model.
     import asyncio
-
-    from pydantic_agent import interview_toolset
 
     qa = [
     {
@@ -205,18 +208,17 @@ if __name__ == "__main__":
     ]
 
     async def _smoke():
-        async with interview_toolset:
-            grades = []
-            for q in qa:
-                grade = await grade_one(interview_toolset, q["question"], q["answer"], _RUBRIC)
-                print("AnswerGrade:")
-                for ds in grade.dimension_scores:
-                    print(f"  {ds.dimension}: {ds.score} — {ds.note}")
-                print("strength:   ", grade.strength)
-                print("gap:        ", grade.gap)
-                print("improvement:", grade.improvement)
-                grades.append(grade)
-            res = aggregate(grades, DIMENSIONS)
-            print("aggregated results: ", res)
+        grades = []
+        for q in qa:
+            grade = await grade_one(q["question"], q["answer"], _RUBRIC)
+            print("AnswerGrade:")
+            for ds in grade.dimension_scores:
+                print(f"  {ds.dimension}: {ds.score} — {ds.note}")
+            print("strength:   ", grade.strength)
+            print("gap:        ", grade.gap)
+            print("improvement:", grade.improvement)
+            grades.append(grade)
+        res = aggregate(grades, DIMENSIONS)
+        print("aggregated results: ", res)
 
     asyncio.run(_smoke())

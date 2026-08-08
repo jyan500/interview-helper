@@ -1,80 +1,112 @@
-"""Phase 3.5 — a FastAPI backend for the SAME agent. SCAFFOLD. Fill in the TODO.
+"""The FastAPI backend for the SAME agent. Phase A rewrite. SCAFFOLD — fill in the TODOs.
 
-Concept: a web UI is the SAME kind of edge adapter as audio (Phase 4). The agent, MCP
-server, tools, resources, and prompts are byte-for-byte the ones you already built — we
-just put an HTTP boundary on the two ends of the loop instead of a terminal (or a mic).
-That's why this file IMPORTS `agent`/`interview_toolset` from pydantic_agent.py rather
-than rebuilding them: proving nothing about the AI core changes.
+Concept (unchanged since Phase 3.5): a web UI is the SAME kind of edge adapter as audio.
+The agent, the tools, the templates are byte-for-byte the ones you already built — we just
+put an HTTP boundary on the two ends of the loop instead of a terminal (or a mic).
 
-THE ONE GENUINELY NEW THING (see build-plan Phase 3.5):
-    A browser can't call input()/print(). The terminal loop was ONE process that owned
-    the whole conversation in a local `history` variable. HTTP is discrete request/
-    response, so control INVERTS: the loop's state must live behind the boundary,
-    stateless-per-request, keyed by session_id.
+PHASE A CHANGED TWO THINGS HERE.
 
-        terminal loop:  history = []                         # one conversation, local var
-        web backend:    SESSIONS[session_id] = {history,...} # many conversations, stored
+1. THE STATE MOVED OUT OF THE PROCESS.
 
-    That relocation is the whole lesson of this phase.
+    Phase 3.5:   SESSIONS[session_id] = {history, persona, current_qid, ...}   # a dict
+    Phase A:     the `interviews` row in Postgres                              # a table
+
+   Phase 3.5 relocated the terminal loop's `history` local var into a module-level dict —
+   that was the lesson then (control inverts; state lives behind the HTTP boundary). But a
+   dict dies on restart and is invisible to a second process, so it survives neither a deploy
+   nor horizontal scale. Phase A finishes the move: every turn now does
+
+        load_interview_state(iid)  ->  turn_agent.run(...)  ->  save_interview_state(iid, ...)
+
+   with NO process-local state at all. Any instance can serve any request, a restart
+   mid-interview loses nothing, and "resume an interview later" (Phase C) falls out free.
+
+   Deliberately NOT added: an in-memory write-through cache. The DB round-trip is noise next
+   to the LLM call, so a cache would buy invalidation bugs and nothing else. If turn latency
+   ever matters, Redis goes IN FRONT of this same Postgres-as-truth design — nothing here is
+   thrown away.
+
+2. THIS BACKEND STOPPED BEING AN MCP CLIENT OF ITS OWN SERVER.
+
+   Every question and answer used to travel `direct_call_tool(...)` / `read_resource(...)` —
+   a stdio round-trip to a subprocess, plus a `json.loads` to undo the serialization, to
+   reach Python functions in this same repo. That indirection was EARNED in Phase 3, when the
+   MODEL called those tools: MCP is how a model reaches a capability. The client-driven
+   rewrite took that away — the model calls nothing now, so there was no model on the other
+   side of the transport. Direct imports below.
+
+   `mcp_server.py` is untouched and still runs: it's the surface for OTHER people's clients
+   (Claude Desktop, `mcp_client_demo.py`, `--list`), which is what an MCP server is actually
+   for. Same bodies, same templates, different door.
+
+VOCABULARY (Phase A rename): what the app conducts is an INTERVIEW. "Session" now means
+exactly one thing — a SQLAlchemy DB session, always the variable `db`, and it never appears
+in this file. So: `interview_id` on the wire, `POST /api/interview`.
 
 Run (from server/) — the FastAPI CLI auto-detects `app` and enables reload:
     .venv/Scripts/fastapi.exe dev api.py
-  (equivalent to: .venv/Scripts/python.exe -m uvicorn api:app --reload --port 8000)
-Smoke-test with curl (no browser needed yet — prove the backend before adding React):
-    curl -X POST localhost:8000/api/session
+Smoke-test with curl (no browser needed — prove the backend before the React side):
+    curl -X POST localhost:8000/api/interview
     curl -X POST localhost:8000/api/answer -H "Content-Type: application/json" \\
-         -d '{"session_id":"<id-from-above>","text":"my answer"}'
+         -d '{"interview_id":"<id-from-above>","text":"my answer"}'
+Then prove the point of the whole phase: Ctrl-C the server mid-interview, start it again,
+and POST another answer to the SAME interview_id. It keeps going.
 """
 from __future__ import annotations
 
-import json
 import os
-import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from openai import AsyncOpenAI
 from pydantic import BaseModel
+# pydantic-ai owns the shape of `message_history`, so it also owns the (de)serialization.
+# Never hand-roll it: dump_python(msgs, mode="json") out, validate_python(raw) back in.
+# (Verified against pydantic-ai 2.13.0 — the repo's "check live API shapes" rule.)
+from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_ai.usage import UsageLimits
 
-# REUSE the AI core untouched. Importing runs pydantic_agent's module-level setup
-# (model, toolset, agent) but NOT its main() (that's guarded by __main__). This import
-# IS the thesis of the phase: HTTP is just a new adapter on the loop you already have.
-from pydantic_agent import agent, interview_toolset
+# The GRADER (a second agent + typed output) and the TURN agent. Separate jobs: the
+# interviewer conducts, the grader scores. See grading.py for the output_type idea.
+# Importing this also imports pydantic_agent, whose module-level load_dotenv is what puts
+# GEMINI_API_KEY / OPENAI_API_KEY in the environment for this process.
+from grading import aggregate, grade_one, turn_agent
 
-# Phase 5 — the GRADER (a second agent + typed output). Separate from the interviewer:
-# the interviewer conducts, the grader scores. See grading.py for the output_type idea.
-from grading import grade_one, aggregate
-# Phase 5 — the TURN agent (client-driven loop). The model no longer drives the interview;
-# it just reacts to an answer and flags whether to probe (turn_agent -> TurnReply). The
-# CLIENT below owns the question spine (next_question) and recording (record_answer).
-from grading import turn_agent
+# --- THE DATA LAYER + THE TEMPLATES, imported directly (see point 2 above). ------------
+# Note the asymmetry, and that it's intentional: `record_answer` is a legitimate interview
+# ACTION and stays registered as an MCP tool for external clients, while `create_interview`
+# and the two state functions are backend bookkeeping that no model should ever reach. That
+# line lives in mcp_server.py. From in here, they're all just functions.
+from prompts import behavioral_interview
+from db.engine import engine
+from tools.interview import (
+    create_interview,
+    get_interview,
+    load_interview_state,
+    record_answer,
+    save_interview_state,
+)
+from tools.questions import get_question, get_rubric, next_question
 
 
-# --- SESSION STORE: the terminal loop's `history` local variable, relocated. In-memory
-#     dict keyed by session_id. Learning-scale ON PURPOSE: lost on restart, single
-#     process, not built for real multi-user scale (a real app: Redis / a DB). ----------
-SESSIONS: dict[str, dict] = {}
-
-
-# --- LIFESPAN: the new lifecycle piece. The terminal loop opened `async with agent:`
-#     ONCE and ran the whole conversation inside it. Here we do the same ONCE for the
-#     app's whole life, so the MCP server subprocess stays up across every request
-#     instead of being spawned per-call. FastAPI enters this on startup, exits on
-#     shutdown. --------------------------------------------------------------------------
+# --- LIFESPAN: the terminal loop opened `async with agent:` ONCE and ran the whole
+#     conversation inside it, and until Phase A this block did the same to keep the MCP
+#     subprocess alive across requests. There's no subprocess to hold open now — what has a
+#     lifetime worth managing is the DB CONNECTION POOL, so shutdown closes it cleanly
+#     instead of dropping sockets on Supabase's floor. (The pool itself is created lazily at
+#     import; see db/engine.py for what a pool actually is.) ------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    async with agent:        # starts the MCP toolset subprocess; keeps it alive
-        yield                # ...app serves requests here...
-    # toolset torn down on shutdown
+    yield                       # ...app serves requests here...
+    await engine.dispose()      # close every pooled connection on shutdown
 
 
 app = FastAPI(lifespan=lifespan)
 
 # --- CORS: the Vite dev server (:6173) and this API (:8000) are different origins, so the
 #     browser's preflight blocks fetch unless we opt in. Explicit origin, not "*", to stay
-#     honest about who's calling (the build-plan decision). ------------------------------
+#     honest about who's calling. (Phase G makes this env-driven for the Vercel origin.) ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:6173"],
@@ -86,137 +118,186 @@ app.add_middleware(
 # --- request bodies. FastAPI validates+parses these from the JSON payload automatically.
 class StartRequest(BaseModel):
     role: str = "backend-engineer"
+    # the client's word for it. It's the `levels.slug` in the DB and the `seniority` argument
+    # of the behavioral_interview template — one concept, two established names.
     seniority: str = "mid"
 
 
 class AnswerRequest(BaseModel):
-    session_id: str
+    interview_id: str
     text: str
 
 
 class ScorecardRequest(BaseModel):
-    session_id: str
+    interview_id: str
     role: str = "backend-engineer"   # which rubric to grade against (matches the interview)
 
 
 # ===========================================================================
-# WORKED EXAMPLE — POST /api/session : start an interview, get the first question.
-# CLIENT-DRIVEN KICKOFF: the client (not the model) picks the first bank question via the
-# next_question TOOL and presents its text verbatim — no model call needed to start. It also
-# fetches the server-owned persona ONCE and stashes it for every turn's turn_agent.run, and
-# initializes the question-spine state the client owns from here on.
+# WORKED EXAMPLE — POST /api/interview : start an interview, get the first question.
+#
+# CLIENT-DRIVEN KICKOFF (unchanged): the client (not the model) picks the first bank question
+# and presents its text verbatim — no model call needed to start. That's the move that makes
+# the model unable to invent questions: it never selects one.
+#
+# WHAT'S NEW: the `SESSIONS[session_id] = {...}` line became an INSERT plus an UPDATE. Two
+# steps, not one, because the persona and the first question come from different places —
+# and the row is deliberately valid in between (current_question_id is nullable exactly so
+# this gap is legal). Note there's no `history` key to initialize: `message_history` defaults
+# to [] on the model.
 # ===========================================================================
-@app.post("/api/session")
-async def start_session(req: StartRequest = StartRequest()) -> dict:
+@app.post("/api/interview")
+async def start_interview(req: StartRequest = StartRequest()) -> dict:
     # `= StartRequest()` makes the whole body OPTIONAL: a bodyless POST (or `{}`) starts
     # a default backend-engineer interview; passing {"role":..,"seniority":..} overrides.
-    session_id = uuid.uuid4().hex[:8]
 
-    # server owns the persona — fetched once here, replayed as `instructions` each turn
-    pr = await interview_toolset.get_prompt(
-        "behavioral_interview", {"role": req.role, "seniority": req.seniority}
-    )
-    persona = pr.messages[0].content.content   # PromptMessage -> TextContent -> .content
+    # the server still owns the persona — one definition, in prompts.py. Built once here and
+    # STORED on the row, then replayed as `instructions` every turn. Storing it (rather than
+    # rebuilding per turn) keeps the interviewer's character stable even if the template is
+    # edited mid-interview.
+    persona = behavioral_interview(role=req.role, seniority=req.seniority)
 
-    # CLIENT picks the first question. direct_call_tool(name, args) runs a TOOL from client
-    # code and returns its dict directly (unlike the agent-internal call_tool). This is the
-    # move that makes the model unable to invent questions — it never selects one.
-    nq = await interview_toolset.direct_call_tool(
-        "next_question", {"role": req.role, "asked_ids": []}
-    )
+    # INSERT the row. create_interview mints the slug (the id the client holds) and resolves
+    # the role/level slugs — an unknown one comes back as an envelope, not an exception.
+    created = await create_interview(req.role, req.seniority, persona)
+    if not created["ok"]:
+        raise HTTPException(status_code=400, detail=created["error"])
+    interview_id = created["interview_id"]
+
+    # the CLIENT picks the first question...
+    nq = await next_question(req.role, asked_ids=[])
     if nq.get("status") != "ok":
         raise HTTPException(status_code=400, detail=f"no questions for role: {req.role}")
     q = nq["question"]
 
-    # the question-spine state the CLIENT owns (relocated + extended from the old {persona,history})
-    SESSIONS[session_id] = {
-        "role": req.role,
-        "persona": persona,
-        "history": [],                 # accumulates from the first turn_agent.run onward
-        "asked_ids": [q["id"]],        # bank questions already asked (feeds next_question)
-        "current_qid": q["id"],        # the question the next answer belongs to
-        "current_qtext": q["text"],    # kept so each turn's prompt can name the question
-        "followups_used": 0,           # probes spent on the current question
-        "max_followups": 3,            # backstop cap (not the throttle — the model's ask_followup
-                                       # =false normally ends probing first). Clarifications don't
-                                       # count toward this; only interviewer-initiated probes do.
-    }
+    # ...and writes it onto the row. From here on, "which question is on the table" is a
+    # column, not a dict key — which is why a restart can't lose the candidate's place.
+    await save_interview_state(interview_id, current_qid=q["id"], followups_used=0)
+
     # present the first question verbatim (short canned lead-in; the bank text is authoritative)
-    return {"session_id": session_id, "message": f"Let's begin. {q['text']}", "done": False}
+    return {"interview_id": interview_id, "message": f"Let's begin. {q['text']}", "done": False}
 
 
 # ===========================================================================
-# POST /api/answer : one turn of the CLIENT-DRIVEN loop.
-# The control inversion of Phase 3.5 still holds (the browser is the loop, each fetch is one
-# iteration) — but now the CLIENT owns the question spine, not the model. Each turn:
-#   1. RECORD the answer under the id the client is tracking      (worked — the reliability win)
-#   2. ask the model to REACT + decide whether to probe           (worked — turn_agent/TurnReply)
-#   3. BRANCH on that decision: follow-up, advance, or end        (YOUR TODO)
+# POST /api/answer : one turn of the CLIENT-DRIVEN loop — now LOAD -> RUN -> WRITE BACK.
+#
+# The Phase 3.5 control inversion still holds (the browser is the loop, each fetch is one
+# iteration) and the client still owns the question spine, not the model. What changed is
+# where the spine LIVES between iterations: Postgres, re-read at the top of every request.
+#
+#   1. LOAD    the spine + the agent's replay buffer from the row     (worked)
+#   2. DECIDE  — the model reacts + flags whether to probe            (worked)
+#   3. RECORD  the answer under the id the CLIENT is tracking         (worked)
+#   4. BRANCH  — follow-up / advance / end, each WRITING BACK         (one worked, three TODO)
+#
+# THE RULE THAT MAKES IT CORRECT: *every* exit path must write `message_history` back. The
+# dict version never had to think about this — mutating `sess["history"]` WAS the save. Now a
+# `return` that skips save_interview_state silently discards the turn the model just spent
+# tokens on, and the next request replays a conversation missing its last exchange. That's
+# the one new failure mode of this design, and the clarification branch is where it's easiest
+# to miss — which is why that's the worked one.
 # ===========================================================================
 @app.post("/api/answer")
 async def submit_answer(req: AnswerRequest) -> dict:
-    sess = SESSIONS.get(req.session_id)
-    if sess is None:
-        raise HTTPException(status_code=404, detail="unknown session")
+    # 1. LOAD — replaces `SESSIONS.get(req.session_id)`. Same guard, realer 404: a row either
+    #    exists or it doesn't (the JSON store used to invent an empty one for a bad id).
+    state = await load_interview_state(req.interview_id)
+    if not state["ok"]:
+        raise HTTPException(status_code=404, detail="unknown interview")
+    if state["done"]:
+        # a finished interview is not a place to put another answer. Cheap to enforce now
+        # that `done` is a column somebody else can read — it wasn't, when it was a dict key
+        # that vanished with the process.
+        raise HTTPException(status_code=409, detail="this interview is already finished")
 
-    # 1. DECIDE FIRST — the model classifies the message (clarification vs answer) and reacts.
+    #    message_history comes back RAW (plain JSON out of JSONB) — tools/interview.py has no
+    #    business importing pydantic-ai. Rehydrating it into real message objects is THIS
+    #    layer's job, and it's the exact inverse of the dump on the way out.
+    history = ModelMessagesTypeAdapter.validate_python(state["message_history"] or [])
+
+    # 2. DECIDE FIRST — the model classifies the message (clarification vs answer) and reacts.
     #    We must know the INTENT before recording, so a clarifying question never lands in the
     #    store as an answer. We say "message" (not "answer") so we don't pre-bias the model.
     #    output_type=TurnReply is set on turn_agent.
-    prompt = (f"The current interview question is: {sess['current_qtext']}\n\n"
+    prompt = (f"The current interview question is: {state['current_qtext']}\n\n"
               f"The candidate's message: {req.text}")
     result = await turn_agent.run(
         prompt,
-        instructions=sess["persona"],
-        message_history=sess["history"],
+        instructions=state["persona"],
+        message_history=history,
         usage_limits=UsageLimits(request_limit=3),
     )
-    sess["history"] = result.all_messages()
-    decision = result.output          # TurnReply(is_clarification, reaction, followup, ask_followup)
+    decision = result.output      # TurnReply(is_clarification, reaction, followup, ask_followup)
+    #    Dump ONCE, here; every branch below writes this same value. mode="json" is what makes
+    #    it asyncpg/JSONB-safe (plain dicts, ISO strings) — without it you'd hand the driver
+    #    datetimes and pydantic objects it can't encode.
+    new_history = ModelMessagesTypeAdapter.dump_python(result.all_messages(), mode="json")
 
-    # 2. CLARIFICATION — the candidate asked ABOUT the question, didn't answer it. Clarify and
+    # 3. CLARIFICATION — the candidate asked ABOUT the question, didn't answer it. Clarify and
     #    STAY on the same question: do NOT record, do NOT advance, do NOT spend a follow-up.
     #    Clarifications are unbounded — the candidate can go back and forth as much as needed.
+    #
+    #    WORKED EXAMPLE of the write-back rule: nothing about the SPINE changed here, and it's
+    #    still not a free `return` — the conversation grew, so the history must be persisted
+    #    or the model forgets it ever clarified. "No state change" and "no write" stopped
+    #    being the same thing the moment the state became a row.
     if decision.is_clarification:
+        await save_interview_state(req.interview_id, message_history=new_history)
         return {"message": decision.reaction, "done": False}
 
-    # 3. RECORD — it's a real answer, so log it under the id the CLIENT is tracking (current_qid).
-    #    Correct BY CONSTRUCTION: the model never picked or labelled it, so it can't be mislabelled.
-    await interview_toolset.direct_call_tool(
-        "record_answer",
-        {"session_id": req.session_id, "question_id": sess["current_qid"], "answer": req.text},
-    )
+    # 4. RECORD — it's a real answer, so log it under the id the CLIENT is tracking
+    #    (current_qid). Correct BY CONSTRUCTION: the model never picked or labelled it, so it
+    #    can't be mislabelled. And `turns.question_id` is a real FOREIGN KEY now, so an id
+    #    that isn't a question can't reach the table at all — which is what retired the
+    #    `parent_question_id` normalizer this file used to carry (see /api/scorecard).
+    await record_answer(req.interview_id, state["current_qid"], req.text)
 
-    # 4. BRANCH. The reaction is ALWAYS shown; what follows it is the client's call — the probe
+    # 5. BRANCH. The reaction is ALWAYS shown; what follows it is the client's call — the probe
     #    (if following up), the next bank question (if advancing), or a closing (if exhausted).
     #    Crucially the ADVANCE/END paths use `reaction` ONLY, never `followup` — so a probe the
     #    model wanted but we can't grant (cap reached) is dropped instead of being shown next to
     #    the next question (the two-questions-in-one-turn bug).
     #
     #    (a) FOLLOW-UP — probe once more on the SAME question, if wanted AND under the cap.
-    #        current_qid stays, so the next answer records under the SAME id and the scorecard's
-    #        group-by-id logic combines the original + follow-up answers.
-    if decision.ask_followup and sess["followups_used"] < sess["max_followups"]:
-        sess["followups_used"] += 1
+    #        current_qid stays put, so the next answer records under the SAME id and the
+    #        scorecard's group-by-id logic combines the original + follow-up answers.
+    #
+    #    the write-back. Two fields move: the incremented `followups_used` and
+    #      `new_history`. `current_qid` is deliberately NOT passed — save_interview_state reads
+    #      None as "don't touch this column", so OMITTING a field is how you say "unchanged".
+    #      One call, one UPDATE, one transaction: the spine can't end up out of step with the
+    #      history sitting beside it in the same row.
+    if decision.ask_followup and state["followups_used"] < state["max_followups"]:
+        followups_used = state["followups_used"] + 1
+        await save_interview_state(req.interview_id, followups_used=followups_used, message_history=new_history)
         return {"message": f"{decision.reaction}\n\n{decision.followup}", "done": False}
 
     #    (b) ADVANCE — the CLIENT pulls the next bank question (never the model).
-    next_question = await interview_toolset.direct_call_tool(
-        "next_question", {"role": sess["role"], "asked_ids": sess["asked_ids"]}
-    )
-    if next_question["status"] == "ok":
-        q = next_question["question"]
-        sess["current_qid"] = q["id"]
-        sess["current_qtext"] = q["text"]
-        sess["asked_ids"].append(q["id"])
-        sess["followups_used"] = 0
+    #        `asked_ids` is no longer a list we append to and hope stays right: load_interview_state
+    #        DERIVES it from the turns + the current question every time, so it can't drift.
+    nq = await next_question(state["role"], asked_ids=state["asked_ids"])
+    if nq["status"] == "ok":
+        q = nq["question"]
+        # write back: `current_qid=q["id"]`, `followups_used=0` (the probe budget is
+        #   per question, so a new question resets it), and `message_history=new_history`.
+        #   Note what you DON'T write: `current_qtext` and `asked_ids` were dict keys with no
+        #   column behind them — the text is read through `current_question.text` and the
+        #   asked set is derived. Copies you have to keep in sync are exactly the bug class
+        #   the normalized schema deleted.
+        #
         # explicit transition so a NEW bank question can't be misread as a follow-up. The
         # CLIENT owns this marker (the model never announces "moving on" — it can't, it doesn't
         # know a new question is coming), so it's consistent regardless of the reaction's wording.
+        await save_interview_state(req.interview_id, current_qid=q["id"], followups_used=0, message_history=new_history)
         return {"message": f"{decision.reaction}\n\nLet's move on to the next question. {q['text']}",
                 "done": False}
 
     #    (c) END — status "exhausted": the bank is done, so conclude.
+    #    write back `done=True` and `message_history=new_history`. Leave `current_qid`
+    #      alone: it keeps pointing at the last question asked, which is fine precisely because
+    #      every reader checks `done` first (the contract save_interview_state documents). This
+    #      is also the flag that makes the 409 guard at the top of this function work.
+    await save_interview_state(req.interview_id, message_history=new_history, done=True)
     return {"message": f"{decision.reaction}\n\nThat's the end of the interview. "
                        f"Thank you for your time!", "done": True}
 
@@ -224,11 +305,10 @@ async def submit_answer(req: AnswerRequest) -> dict:
 # ===========================================================================
 # WORKED EXAMPLE — POST /api/transcribe : the robust-STT INPUT edge adapter, server side.
 #
-# THE THESIS, ONE MORE TIME (build-plan Phase 5 "robust STT"): the browser's built-in Web
-# Speech API (useSpeechRecognition in speech.ts) is being swapped for a pipeline we own —
-# capture in the browser, transcribe HERE. The interview loop above never learns which STT
-# produced the text; `record_answer`, the agent, the transcript are all untouched. This
-# route is the entire server-side cost of that swap: audio bytes in, text out.
+# THE THESIS, ONE MORE TIME: the browser's built-in Web Speech API was swapped for a pipeline
+# we own — capture in the browser, transcribe HERE. The interview loop above never learns
+# which STT produced the text; `record_answer`, the agent, the transcript are all untouched.
+# This route is the entire server-side cost of that swap: audio bytes in, text out.
 #
 # Why CLOUD Whisper (OpenAI) and not self-hosted faster-whisper? Deployability. Self-hosting
 # means a GPU (or slow CPU), a multi-GB model in RAM, and a concurrency queue. Proxying one
@@ -237,9 +317,10 @@ async def submit_answer(req: AnswerRequest) -> dict:
 # body of this function is the ONLY thing that would change to go self-hosted.
 
 # Lazy singleton: AsyncOpenAI() reads OPENAI_API_KEY from the env (loaded by pydantic_agent's
-# load_dotenv at import). Built on first use, not at module load, so the app still boots for
-# the text-only flow if the key isn't set yet — you only hit the error when you actually
-# transcribe. AsyncOpenAI so the call `await`s without blocking the event loop.
+# load_dotenv, which grading.py's import chain triggers). Built on first use, not at module
+# load, so the app still boots for the text-only flow if the key isn't set yet — you only hit
+# the error when you actually transcribe. AsyncOpenAI so the call `await`s without blocking
+# the event loop.
 _openai_client: AsyncOpenAI | None = None
 
 
@@ -276,129 +357,84 @@ async def transcribe(audio: UploadFile = File(...)) -> dict:
     # Same shape the client's onResult(text) expects — mirrors the Web Speech path's output.
     return {"text": result.text}
 
-    # TODO (hardening, optional) — before the API call, guard the two cheap failure modes a real
-    # deploy hits: (a) an EMPTY recording (len(data) == 0, e.g. the user clicked stop instantly)
-    # -> return {"text": ""} without spending an API call; (b) an oversized upload -> reject with
-    # HTTP 413 so a runaway mic can't ship tens of MB. A `language="en"` hint on create() also
-    # nudges accuracy for this English-only coach. Left as a fill-in so the happy path stays clear.
-
-
-# --- TODO — normalize a follow-up's question_id back to its PARENT bank id. -----------
-# WHY: the interviewer USUALLY logs a follow-up ANSWER under the parent's id (be-1), but it's
-# not consistent — sometimes it invents a distinct id like "be-1-followup" (or "be-1-probe",
-# "be-1-2", ...). Such an id (a) never resolves in the bank (question:// -> not_found, so the
-# grade runs against "(unknown question)") and (b) escapes grouping, so the follow-up gets
-# scored as its own stray entry instead of folding into its parent. Normalizing it back to the
-# parent id before grouping fixes both.
-#
-# APPROACH (chosen over a literal "-followup" strip): anchor on the KNOWN-GOOD id set rather
-# than guessing the suffix, so ANY invented suffix is caught. `valid_ids` is the set of real
-# bank ids for this role (the endpoint builds it from questions://{role}).
-#
-# TODO — longest-prefix match against valid_ids:
-#   - if question_id is itself a valid id, return it unchanged (the common case)
-#   - otherwise find every valid id `vid` that question_id sits UNDER, at a boundary:
-#         question_id == vid  or  question_id.startswith(vid + "-")
-#     the `+ "-"` boundary is what stops "be-10-x" from matching "be-1" (its next char is "0",
-#     not "-") — a plain substring/startswith without it would mis-collapse be-10 into be-1
-#   - return the LONGEST match (max(matches, key=len)) so "be-10" wins over "be-1" when both fit
-#   - if NOTHING matches (a truly unrecognizable id), return question_id unchanged — no worse
-#     than today (it'll fall back to "(unknown question)"), never a crash
-# Kept a PURE function (ids in, id out) so you can unit-test it with a hand-made set, no MCP.
-def parent_question_id(question_id: str, valid_ids: set[str]) -> str:
-    if question_id in valid_ids:
-        return question_id
-    matches = []
-    for valid_id in valid_ids: 
-        if question_id.startswith(valid_id + "-"):
-            matches.append(valid_id)
-    if matches:
-        match = max(matches, key=len)
-        return match
-    return question_id
-
-
 
 # ===========================================================================
-# WORKED EXAMPLE — POST /api/scorecard : grade the whole session, return a scorecard.
-# This is the Phase 5 END-OF-SESSION PASS. It does NOT touch the conversational loop
-# above — it reads what that loop already RECORDED (record_answer -> the store) and
-# grades it separately. That decoupling is the design: the interviewer conducts, this
-# grades. Everything it needs it pulls THROUGH MCP (server owns the data):
-#   session://{id}     -> the recorded turns (question_id + answer)
-#   rubric://{role}    -> the dimensions to score against
-#   question://{id}    -> the question text for each turn
-# Note the unwrap: MCPToolset.read_resource returns the JSON STRING directly, so it's
-# just json.loads(...) — no content-block list to dig through.
+# WORKED EXAMPLE — POST /api/scorecard : grade the whole interview, return a scorecard.
+#
+# The END-OF-INTERVIEW PASS. It does NOT touch the conversational loop above — it reads what
+# that loop already RECORDED (record_answer -> the `turns` table) and grades it separately.
+# That decoupling is the design: the interviewer conducts, this grades.
+#
+# PHASE A DELETION: the `parent_question_id` normalizer that used to sit above this route is
+# gone, along with the `questions://{role}` fetch that fed it. It existed because the MODEL
+# logged follow-up answers under invented ids like "be-1-followup", which resolved to nothing
+# and escaped grouping. Two changes killed that bug at the source — the CLIENT owns
+# `current_qid`, and `turns.question_id` is a real FK — so there are no invalid ids left to
+# normalize. Deleting a workaround because the thing it worked around became impossible is
+# the good kind of cleanup.
+#
+# GROUPING STAYS, for a different reason: a question plus its follow-ups is still several
+# turns under ONE id, and still deserves one grade.
 # ===========================================================================
 @app.post("/api/scorecard")
 async def scorecard(req: ScorecardRequest) -> dict:
     # 1. the recorded transcript (written by record_answer during the interview)
-    sess = json.loads(await interview_toolset.read_resource(f"session://{req.session_id}"))
-    turns = sess.get("turns", [])
+    interview = await get_interview(req.interview_id)
+    if interview.get("status") != "ok":
+        raise HTTPException(status_code=404, detail="unknown interview")
+    turns = interview.get("turns", [])
     if not turns:
-        # nothing was recorded — the interviewer may not have called record_answer, or
-        # the session id is wrong. A thin store is a real dependency of grade-at-end.
-        raise HTTPException(status_code=404, detail="no recorded answers for this session")
+        # the interview exists but nothing was recorded — a thin store is a real dependency of
+        # grade-at-end. Note this is a distinction the JSON store COULDN'T make: a missing file
+        # and an empty one looked identical.
+        raise HTTPException(status_code=404, detail="no recorded answers for this interview")
 
     # 2. the rubric for this role (dimensions + a human-readable text to hand the grader)
-    rubric_env = json.loads(await interview_toolset.read_resource(f"rubric://{req.role}"))
+    rubric_env = await get_rubric(req.role)
     if rubric_env.get("status") != "ok":
         raise HTTPException(status_code=404, detail=f"unknown role: {req.role}")
     dimensions = rubric_env["rubric"]["dimensions"]
     rubric_text = f"Dimensions: {'; '.join(dimensions)}. {rubric_env['rubric']['scale']}"
 
-    # 3. TODO — GROUP turns by question_id, then grade ONCE per question (the follow-up fix).
-    #
-    #    THE BUG you're fixing: a follow-up question isn't a bank question — it has no id — so
-    #    the interviewer logs the follow-up ANSWER under the ORIGINAL question_id. One
-    #    question_id can therefore own SEVERAL turns (the original answer + each follow-up
-    #    answer). The old per-turn loop graded each turn independently, which (a) graded a
-    #    follow-up answer against the ORIGINAL question text — the wrong question — and (b)
-    #    double-counted a question-with-follow-ups in the averages. The fix: treat a question
-    #    plus its follow-ups as ONE exchange and grade it ONCE — how a real interviewer forms a
-    #    single assessment per topic after probing it. Pure scorecard-side change (record_answer
-    #    is untouched), and it corrects existing session files retroactively.
-
+    # 3. GROUP turns by question_id, then grade ONCE per question.
+    #    A follow-up isn't a bank question — it has no id of its own — so its answer is recorded
+    #    under the ORIGINAL question_id (the client never moves `current_qid` while probing).
+    #    One question_id therefore owns SEVERAL turns. Grading per TURN would score a follow-up
+    #    answer against the original question text AND double-count that question in the
+    #    averages. Treating a question plus its probes as one exchange is also just how a real
+    #    interviewer works: probe, then form a single assessment of the topic.
     answers: list[dict] = []
     grades = []
-    #    The KNOWN-GOOD id set for this role — parent_question_id normalizes each turn's
-    #    (possibly invented) id against it. Read the whole question list through MCP, same
-    #    unwrap as the other resources; build a set of just the ids.
-    qlist = json.loads(await interview_toolset.read_resource(f"questions://{req.role}"))
-    valid_ids = {q["id"] for q in qlist["questions"]} if qlist.get("status") == "ok" else set()
-
-    #    NOTE: group by the PARENT id (parent_question_id) so an invented "be-1-followup"
-    #    folds into "be-1" instead of becoming its own unknown-question entry.
     grouped: dict[str, list[str]] = {}
     for turn in turns:
-        parent_id = parent_question_id(turn["question_id"], valid_ids)
-        grouped.setdefault(parent_id, []).append(turn["answer"])
+        grouped.setdefault(turn["question_id"], []).append(turn["answer"])
+
     for question_id, answer_list in grouped.items():
-        question = json.loads(await interview_toolset.read_resource(f"question://{question_id}"))
-        question_text = question["question"]["text"] if question.get("status") == "ok" else "(unknown question)"
+        question = await get_question(question_id)
+        question_text = (question["question"]["text"] if question.get("status") == "ok"
+                         else "(unknown question)")
         first, followups = answer_list[0], answer_list[1:]
         combined = first
         if followups:
             combined += " (the following text is follow-up) " + "\n\n".join(followups)
-        grade = await grade_one(interview_toolset, question_text, combined, rubric_text)
+        grade = await grade_one(question_text, combined, rubric_text)
         grades.append(grade)
-        answers.append({"question_id": question_id, "question_text": question_text, **grade.model_dump()})
+        answers.append({"question_id": question_id, "question_text": question_text,
+                        **grade.model_dump()})
 
-
-    # 4. aggregate the per-answer grades into headline numbers (deterministic Python — the
-    #    LLM already judged; this just averages). 
+    # 4. aggregate the per-answer grades into headline numbers (deterministic Python — the LLM
+    #    already judged; this just averages).
     agg = aggregate(grades, dimensions)
 
-    # (optional, later) persist a one-line wrap-up via the save_session_summary TOOL:
-    #   await interview_toolset.call_tool("save_session_summary",
-    #       {"session_id": req.session_id, "feedback": f"Overall {agg['overall']}/5 ..."})
+    # (Phase C) persist this as a `scorecards` row instead of only returning it — that's what
+    # makes the History view possible. A one-line wrap-up can also go through
+    # save_interview_summary:
+    #   await save_interview_summary(req.interview_id, f"Overall {agg['overall']}/5 ...")
 
     return {
-        "session_id": req.session_id,
+        "interview_id": req.interview_id,
         "role": req.role,
         "answers": answers,
         "dimension_averages": agg["dimension_averages"],
         "overall": agg["overall"],
     }
-
