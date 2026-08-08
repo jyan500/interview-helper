@@ -9,7 +9,7 @@ them:
 
     list_tools()          -> already done by mcp_server.py --list
     read_resource(uri)    -> GET a resource (rubric://{role}, question://{id})
-    call_tool(name, args) -> run a tool  (record_answer, save_session_summary)
+    call_tool(name, args) -> run a tool  (record_answer, save_interview_summary)
 
 Every call goes through the full MCP protocol — arg-schema validation in, JSON
 serialization out — so it proves the registration in mcp_server.py is wired correctly,
@@ -63,32 +63,39 @@ async def main() -> None:
         print(" question:", question["question"]["text"])
 
         # === TOOLS (side effects — write a turn, then the summary) ===========
-        # TODO: call record_answer. Unlike a resource, a tool takes an ARGUMENTS dict
-        # whose keys match the tool's parameters, and returns a CallToolResult (.data).
-        #   - rec = await c.call_tool("record_answer", {
-        #         "session_id": "demo",
-        #         "question_id": "be-2",
-        #         "answer": "I'd start with a token bucket per client key in Redis...",
-        #     })
-        #   - print("record_answer ->", rec.data)   # expect {"ok": True, ... "turn_count": N}
+        # Unlike a resource, a tool takes an ARGUMENTS dict whose keys match the tool's
+        # parameters, and returns a CallToolResult (.data).
+        #
+        # PHASE A — both calls below changed, and the reasons are worth separating:
+        #   - the ARG is `interview_id`, not `session_id` (the rename: "session" is a DB
+        #     session now), and the tool is `save_interview_summary`.
+        #   - the VALUE can no longer be a made-up string like "demo". `turns.interview_id`
+        #     and `turns.question_id` are real FOREIGN KEYS, so a write against an interview
+        #     that doesn't exist comes back {"ok": False, "error": ...} instead of quietly
+        #     creating data/sessions/demo.json. That refusal IS the integrity win — the JSON
+        #     store would happily file a turn under a fictional interview and a fictional
+        #     question. Run it once as-is to see the envelope, then point INTERVIEW_ID at a
+        #     real slug (start one: curl -X POST localhost:8000/api/interview) to see it land.
+        INTERVIEW_ID = "demo"   # <- replace with a real interviews.slug
+
         rec = await c.call_tool("record_answer", {
-            "session_id": "demo",
+            "interview_id": INTERVIEW_ID,
             "question_id": "be-2",
             "answer": "I'd start with a token bucket per client key in Redis...",
         })
         print("record_answer ->", rec.data)
 
-        # TODO: call save_session_summary to write the wrap-up, then print .data.
-        #   - args: {"session_id": "demo", "feedback": "<some overall feedback>"}
-        #   - expect {"ok": True, "session_id": "demo", "status": "summarized"}
-        session_rec = await c.call_tool("save_session_summary", {
-            "session_id": "demo",     
+        summary_rec = await c.call_tool("save_interview_summary", {
+            "interview_id": INTERVIEW_ID,
             "feedback": "Strong technically, needs to work on conciseness of the answer."
         })
-        print("save_session_summary ->", session_rec.data)
+        print("save_interview_summary ->", summary_rec.data)
 
-        # Checkpoint once both TODOs are in: open data/sessions/demo.json — the turn and
-        # summary you wrote through MCP should be on disk, proving the side effect landed.
+        # Checkpoint with a real slug: read it back through the resource —
+        #   await c.read_resource(f"interview://{INTERVIEW_ID}")
+        # — and the turn + summary you wrote through MCP are there, proving the side effect
+        # landed in Postgres. (This file is also now the ONLY thing exercising the MCP
+        # surface end-to-end, since the backend stopped being a client of it in Phase A.)
 
 
 if __name__ == "__main__":

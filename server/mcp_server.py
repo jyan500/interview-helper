@@ -8,9 +8,27 @@ the pattern transfers).
 
 Primitive picks (the core judgment, same as helpdesk Phase 2):
   tools     = ACTIONS      -> next_question (read helper exposed as a call),
-                              record_answer, save_session_summary
-  resources = read CONTEXT -> rubric://{role}, question://{id}
+                              record_answer, save_interview_summary
+  resources = read CONTEXT -> rubric://{role}, question://{id}, interview://{id}
   prompts   = TEMPLATES    -> behavioral_interview, evaluate_answer
+
+Phase A note — WHO THIS SERVER IS FOR, now that the backend isn't a client of it. In the
+client-driven design the MODEL calls nothing: api.py picks every question and records every
+answer itself, so it imports `tools/*` and `prompts.py` directly rather than speaking MCP to
+a subprocess of its own repo. This file is therefore the EXTERNAL surface — what a
+third-party MCP client (Claude Desktop, `mcp_client_demo.py`, `--list`) connects to. Same
+bodies, same text, different door. Keeping it thin is what makes that free.
+
+NOT EVERYTHING IN tools/ IS REGISTERED HERE. `tools/interview.py` also has
+`create_interview`, `load_interview_state`, and `save_interview_state`. They're the backend's
+own bookkeeping, and no model — ours or someone else's — has business creating an interview
+or setting which question is current, the same reasoning that took question SELECTION away
+from it. This file is where that line gets drawn.
+
+Phase A also made every tool body `async` (they hit Postgres now), so every wrapper below
+awaits. FastMCP registers async tools and resources exactly like sync ones — the generated
+schemas are unchanged, which is the point: swapping JSON files for a database is invisible
+from here up.
 
 Run locally:
     .venv/Scripts/python.exe mcp_server.py            # serves over stdio
@@ -19,9 +37,13 @@ Run locally:
 
 from fastmcp import FastMCP
 
-# The bodies, reused verbatim — we delegate, never reimplement.
-from tools import questions, session
-import textwrap
+# The bodies, reused verbatim — we delegate, never reimplement. `interview` replaces the
+# old `session` module: the tools write Postgres now, and "session" is reserved for a
+# SQLAlchemy DB session in this codebase.
+from tools import interview, questions
+# Same delegation for the PROMPTS, new in Phase A: the template text lives in prompts.py so
+# the backend can import it without launching this server. See that module's docstring.
+import prompts
 
 mcp = FastMCP("interview-helper")
 
@@ -33,12 +55,12 @@ mcp = FastMCP("interview-helper")
 # no session/state object), docstring = the model-facing description. FastMCP builds
 # the input schema from the hints, exactly like the helpdesk's get_customer.
 @mcp.tool
-def next_question(role: str, asked_ids: list[str] | None = None) -> dict:
+async def next_question(role: str, asked_ids: list[str] | None = None) -> dict:
     """Get the next interview question for a role the candidate hasn't been asked yet.
     Pass the ids you've already asked in `asked_ids` so questions don't repeat. Returns
     {status:"ok", question} with the next question, {status:"exhausted", role} once the
     bank is used up, or {status:"not_found", role} for an unknown role."""
-    return questions.next_question(role, asked_ids)
+    return await questions.next_question(role, asked_ids)
 
 
 # record_answer — a side-effecting tool (persists a turn).
@@ -46,24 +68,21 @@ def next_question(role: str, asked_ids: list[str] | None = None) -> dict:
 #   docstring: tell the model to call this AFTER the candidate answers, to log the turn.
 #   body:      return session.record_answer(session_id, question_id, answer)
 @mcp.tool
-def record_answer(session_id: str, question_id: str, answer: str) -> dict:
-    """ 
-        This tool records the answer that the candidate gives after the answer a given question
-        as a turn within session.json
+async def record_answer(interview_id: str, question_id: str, answer: str) -> dict:
     """
-    return session.record_answer(session_id, question_id, answer)
+        This tool records the answer that the candidate gives to a given question, as a turn
+        of the interview. `interview_id` and `question_id` are both slugs (e.g. "be-1").
+    """
+    return await interview.record_answer(interview_id, question_id, answer)
 
 
-# save_session_summary — persists the final wrap-up feedback.
-#   signature: def save_session_summary(session_id: str, feedback: str) -> dict
-#   body:      return session.save_session_summary(session_id, feedback)
-
+# save_interview_summary — persists the final wrap-up feedback.
 @mcp.tool
-def save_session_summary(session_id: str, feedback: str) -> dict:
-    """ 
-        This tool saves the final wrap-up feedback for this session
+async def save_interview_summary(interview_id: str, feedback: str) -> dict:
     """
-    return session.save_session_summary(session_id, feedback)
+        This tool saves the final wrap-up feedback for this interview.
+    """
+    return await interview.save_interview_summary(interview_id, feedback)
 
 # ===========================================================================
 # RESOURCES (read-only context — GET, no side effect)
@@ -72,10 +91,10 @@ def save_session_summary(session_id: str, feedback: str) -> dict:
 # FastMCP serializes the returned dict as the resource contents. Same as the
 # helpdesk's ticket://{ticket_id}.
 @mcp.resource("rubric://{role}")
-def rubric_resource(role: str) -> dict:
+async def rubric_resource(role: str) -> dict:
     """The scoring rubric for a role — read-only context the client can attach so the
     interviewer/grader stays consistent. No side effect, just loads the rubric in."""
-    return questions.get_rubric(role)
+    return await questions.get_rubric(role)
 
 
 # question://{question_id} resource — a single question by id.
@@ -84,104 +103,68 @@ def rubric_resource(role: str) -> dict:
 #       """One interview question, addressable by id. Read-only context."""
 #       return questions.get_question(question_id)
 @mcp.resource("question://{question_id}")
-def question_resource(question_id: str) -> dict:
+async def question_resource(question_id: str) -> dict:
     """ One interview question, addressable by id. Read-only context. """
-    return questions.get_question(question_id)
+    return await questions.get_question(question_id)
 
 
 # questions://{role} — ALL questions for a role (the whole list, not one by id). Added in
 # Phase 5 so the scorecard can build the set of VALID question ids for a role and normalize
 # invented follow-up ids against it. Read-only context = resource, like rubric_resource.
 @mcp.resource("questions://{role}")
-def questions_resource(role: str) -> dict:
-    """Every question for a role — read-only context. The scorecard reads this to get the
-    known-good id set it normalizes follow-up ids against."""
-    return questions.list_questions(role)
+async def questions_resource(role: str) -> dict:
+    """Every question for a role — read-only context.
+
+    Phase A footnote: this was added so the scorecard could normalize INVENTED follow-up
+    ids against a known-good set. That need is gone — `turns.question_id` is a real foreign
+    key now, so an id that isn't a question can't be recorded in the first place. Kept
+    because listing a role's questions is independently useful (the Phase D level picker
+    will want it), but the normalization it was built for retires with the JSON store."""
+    return await questions.list_questions(role)
 
 
-# session://{session_id} — the recorded transcript of a session, read-only. Added in
-# Phase 5 so the end-of-session grader can pull the turns record_answer wrote back out
-# and score them. It's the READ side of the record_answer/save_session_summary TOOLS:
-# writing a turn is a side effect (tool); reading the turns back is context (resource) —
-# the same tools-vs-resources split as everywhere else. Mirrors rubric_resource exactly.
-@mcp.resource("session://{session_id}")
-def session_resource(session_id: str) -> dict:
-    """The recorded turns + summary for a session — read-only context the grader pulls
+# interview://{interview_id} — the recorded transcript, read-only. Added in Phase 5 so the
+# end-of-interview grader can pull the turns record_answer wrote back out and score them.
+# It's the READ side of the record_answer/save_interview_summary TOOLS: writing a turn is a
+# side effect (tool); reading the turns back is context (resource) — the same
+# tools-vs-resources split as everywhere else. Mirrors rubric_resource exactly.
+#
+# Renamed from session:// in Phase A. Note what it deliberately does NOT expose: the
+# interview's `message_history`. That's the agent's own replay buffer, read through
+# tools.interview.load_interview_state by api.py — handing the model a resource containing
+# its own conversation would be both wasteful and confusing.
+@mcp.resource("interview://{interview_id}")
+async def interview_resource(interview_id: str) -> dict:
+    """The recorded turns + summary for an interview — read-only context the grader pulls
     in to score each answer. No side effect, just loads the transcript."""
-    return session.get_session(session_id)
+    return await interview.get_interview(interview_id)
 
 
 # ===========================================================================
 # PROMPTS (reusable interaction templates)
 # ===========================================================================
-# behavioral_interview is the interviewer PERSONA — the reusable template the client
-# invokes to seed a consistent interviewer. Its parameters become the prompt's arguments;
-# returning a str becomes a single 'user' message (same as helpdesk's triage_ticket).
+# Phase A: these are wrappers now, exactly like the tools above — the template TEXT moved to
+# `prompts.py` so it's importable without a transport. `api.py` and `grading.py` call those
+# functions directly (they're in-process; speaking MCP to ourselves bought nothing), while
+# these registrations keep the identical text available to an EXTERNAL MCP client. One
+# definition, two doors.
 #
-# REDUCED ROLE (client-driven loop): the CLIENT (api.py) now owns the question spine —
-# it picks each bank question (next_question), records every answer (record_answer), caps
-# follow-ups, and ends the interview. So this persona no longer drives any of that; it
-# describes only what the model still does each turn: REACT to the candidate's last answer
-# and DECIDE whether to probe (the ask_followup field of the TurnReply output_type). All
-# the old "use next_question / log with record_answer / run until exhausted" rules are gone
-# BY DESIGN — the model can't invent a question or mislabel an id if it never touches either.
+# behavioral_interview is the interviewer PERSONA. Its parameters become the prompt's
+# arguments; returning a str becomes a single 'user' message (same as helpdesk's
+# triage_ticket).
 @mcp.prompt
 def behavioral_interview(role: str, seniority: str = "mid") -> str:
     """Seed a consistent behavioral interviewer for a given role and seniority."""
-    return textwrap.dedent(f"""
-        You are an experienced interviewer conducting a {seniority}-level {role} interview.
-
-        Each turn you get the candidate's latest MESSAGE. First decide what it is:
-
-        - CLARIFYING QUESTION about the current question ("what do you mean by X?", "is this
-          asking about Y?", "what are your thoughts?") — NOT an attempt to answer. Then set
-          is_clarification = true and put a brief, helpful clarification in `reaction` that does
-          NOT reveal the answer. Leave `followup` empty and ask_followup = false. (The candidate
-          may go back and forth clarifying as much as they need — that's fine.)
-        - Otherwise it's an ANSWER. Respond in two parts:
-            - reaction: a short, substantive comment on what they actually said — an assessment,
-              never phrased as a question, never with a question tacked on.
-            - followup + ask_followup: if the answer is weak, vague, or shallow enough to warrant
-              one more probe on the SAME topic, put that single question in `followup` and set
-              ask_followup = true; otherwise leave `followup` empty and ask_followup = false.
-
-        Never ask a NEW main question and never announce "moving on" — the system chooses and
-        presents the next question. You never pick the topic. Keep it short; stay in character.
-
-        Tone — supportive and professional, but not a pushover:
-        - Engage with the SUBSTANCE of what they said. If it's vague, thin, or off-topic, probe
-          for specifics with a follow-up (ask_followup = true) — curious, not accusatory.
-        - Do NOT judge the candidate's overall ability, call out "gaps in their knowledge," or
-          comment on whether their answer is (un)expected for the level. That assessment belongs
-          in the end-of-interview scorecard, NOT the live conversation.
-        - If they're unsure or can't answer, acknowledge it graciously and move on — no scolding.
-        - No hollow praise for answers that didn't earn it, but a warm, encouraging tone is good.
-          Never give away the answer; hints are fine.
-    """).strip()
+    return prompts.behavioral_interview(role, seniority)
 
 
-# evaluate_answer PROMPT — the GRADING template (a pure data-in / instructions-out
-# template; don't read the DB here). Pointers:
-#   @mcp.prompt
-#   def evaluate_answer(question: str, answer: str, rubric: str) -> str:
-#       """Grade one answer against a rubric: score, one strength, one gap, one fix."""
-#       return f"...template interpolating {question}, {answer}, {rubric}..."
-#   Have it score each rubric dimension (1-5), then name ONE concrete strength, ONE
-#   gap, and ONE specific improvement. Keeping it a pure template (data in, text out)
-#   is the clean mental model — pair it with the rubric:// resource for the data.
+# evaluate_answer — the GRADING template. A pure data-in / instructions-out template: it
+# scores each rubric dimension (1-5), then names ONE concrete strength, ONE gap, and ONE
+# specific improvement. It never reads the DB — pair it with the rubric:// resource for data.
 @mcp.prompt
 def evaluate_answer(question: str, answer: str, rubric: str) -> str:
-    """ Grade one answer against a rubric: score, one strength, one gap, one fix. """
-    return textwrap.dedent(f"""
-        You are grading a candidate's answer.
-
-        Given the question, answer, and rubric, score the answer on each rubric dimension (1 to 5),
-        name one concrete strength, one gap, and one specific improvement. 
-
-        question: {question}
-        answer: {answer}
-        rubric: {rubric}
-    """).strip()
+    """Grade one answer against a rubric: score, one strength, one gap, one fix."""
+    return prompts.evaluate_answer(question, answer, rubric)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import {
-    useStartSessionMutation,
+    useStartInterviewMutation,
     useSubmitAnswerMutation,
     useGetScorecardMutation,
     type Scorecard,
@@ -17,9 +17,10 @@ type Line = { who: "interviewer" | "you"; text: string };
 
 export default function App() {
     // The BROWSER is the loop now (build-plan Phase 3.5). React holds ONLY what it renders:
-    // the session id and the visible transcript. The agent's message_history stays on the
-    // BACKEND, keyed by session_id — do NOT mirror it here.
-    const [sessionId, setSessionId] = useState<string | null>(null);
+    // the interview id and the visible transcript. The agent's message_history stays on the
+    // BACKEND — as of Phase A, in the `interviews` row keyed by interview_id, not a dict in
+    // the server's memory. Either way: do NOT mirror it here.
+    const [interviewId, setInterviewId] = useState<string | null>(null);
     const [transcript, setTranscript] = useState<Line[]>([]);
     const [draft, setDraft] = useState("");
     // Phase 5 — the graded scorecard, once the interview is ended. null until requested.
@@ -28,7 +29,7 @@ export default function App() {
     const [done, setDone] = useState(false);
 
     // RTK Query mutation hooks return [trigger, { isLoading, error, ... }].
-    const [startSession, { isLoading: starting }] = useStartSessionMutation();
+    const [startInterview, { isLoading: starting }] = useStartInterviewMutation();
     const [submitAnswer, { isLoading: answering }] = useSubmitAnswerMutation();
     const [getScorecard, { isLoading: scoring }] = useGetScorecardMutation();
 
@@ -56,31 +57,26 @@ export default function App() {
         }
     }, [voices, selectedVoiceURI]);
 
-    // WORKED EXAMPLE — start the interview (drives POST /api/session).
+    // WORKED EXAMPLE — start the interview (drives POST /api/interview).
     async function handleStart() {
         // .unwrap() returns the payload on success or THROWS on error (unlike the hook's
         // result object, which you'd have to inspect). Convenient with async/await.
-        const res = await startSession().unwrap();
-        setSessionId(res.session_id);
+        const res = await startInterview().unwrap();
+        setInterviewId(res.interview_id);
         setTranscript([{ who: "interviewer", text: res.message }]);
         speak(res.message)
     }
 
     // send the candidate's answer (drives POST /api/answer). This is one iteration
-    // of the interview loop, frontend side. Pointers:
-    //   - guard:   if (!sessionId || !draft.trim()) return;
-    //   - show it: setTranscript(t => [...t, { who: "you", text: draft }]);
-    //   - call:    const res = await submitAnswer({ session_id: sessionId, text: draft }).unwrap();
-    //   - append:  setTranscript(t => [...t, { who: "interviewer", text: res.message }]);
-    //   - clear:   setDraft("");
+    // of the interview loop, frontend side.
     async function handleSend() {
-        if (!sessionId || !draft.trim()){
+        if (!interviewId || !draft.trim()){
             return
         }
         // include your answer to the interview question
         setTranscript(t => [...t, { who: "you", text: draft }])
         // send the answer to the backend
-        const res = await submitAnswer({ session_id: sessionId, text: draft }).unwrap()
+        const res = await submitAnswer({ interview_id: interviewId, text: draft }).unwrap()
         // include the feedback/next question from the interviewer
         setTranscript(t => [...t, { who: "interviewer", text: res.message }])
         speak(res.message)
@@ -93,13 +89,13 @@ export default function App() {
     }
 
     // WORKED EXAMPLE — end the interview and grade it (drives POST /api/scorecard). This is
-    // the Phase 5 END-OF-SESSION PASS from the frontend: it doesn't add a transcript line, it
-    // asks the backend to grade every answer it already recorded and hands back a Scorecard.
+    // the END-OF-INTERVIEW PASS from the frontend: it doesn't add a transcript line, it asks
+    // the backend to grade every answer it already recorded and hands back a Scorecard.
     async function handleEndInterview() {
-        if (!sessionId) {
+        if (!interviewId) {
             return
         }
-        const card = await getScorecard({ session_id: sessionId }).unwrap()
+        const card = await getScorecard({ interview_id: interviewId }).unwrap()
         setScorecard(card)
     }
 
@@ -107,7 +103,7 @@ export default function App() {
         <main className="mx-auto max-w-2xl p-6 font-sans">
             <h1 className="mb-4 text-2xl font-bold text-slate-800">Interview Helper</h1>
 
-            {sessionId === null ? (
+            {interviewId === null ? (
                 <button
                     onClick={handleStart}
                     disabled={starting}

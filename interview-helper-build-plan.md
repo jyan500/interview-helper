@@ -411,16 +411,98 @@ get different questions and level-calibrated feedback).
 
 ## CURRENT STATUS (resume point)
 
-**Done this session:**
-- Approved this plan; recorded decisions in memory (`production-pivot-decisions.md`).
-- Supabase project created; `client/.env` + `server/.env` configured and validated (connection smoke
-  test passed: Postgres 17.6, pgvector 0.8.2).
-- Added `sqlalchemy[asyncio]`, `asyncpg`, `alembic`, `pyjwt` to `server/requirements.txt` and installed
-  them into `server/.venv`.
+*Last updated 2026-08-07 (second pass). Branch: `migrating-away-from-json-to-db`.*
 
-**Next action (Phase A, where we stopped):** create the `server/db/` package — `db/__init__.py`,
-`db/engine.py` (async engine + `AsyncSessionLocal`), `db/models.py` (the schema above; remember
-`reference_briefs`, not `references`). Then Alembic init + initial migration, seed from
-`questions.json`, then the scaffold-style tool-body rewrites and the `api.py` session relocation.
-Nothing in `server/db/` has been written yet (the first `db/__init__.py` write was interrupted by the
-model-switch restart).
+### Phase A — ✅ COMPLETE (all verified against the live Supabase DB)
+
+- **`server/db/` package.** `engine.py` (async engine, `AsyncSessionLocal`, `get_session`),
+  `models.py` (**15 tables**), `seed.py`, `migrations/` (Alembic, async template).
+- **Schema decisions** (the long design pass — reasoning is in `models.py`'s module docstring, and
+  summarized in the `db-schema-conventions` memory):
+  - Every table: autoincrement int `id` + a `slug` natural key. Sole exception: `profiles.id` IS the
+    Supabase auth UUID, so RLS policies are `auth.uid() = id` / `= profile_id` with no subquery.
+  - **"Interview", never "session"** — table `interviews`, HTTP field `interview_id`,
+    `interview://{id}` resource. "Session" = a SQLAlchemy DB session only, always the variable `db`.
+  - Normalized hard: `levels`, `question_types`, `tags` (+`question_tags`), `rubric_dimensions`,
+    `scorecard_entries`, `scorecard_entry_scores` are all tables. Scorecards don't copy role/level.
+  - `interviews.message_history` is the ONLY JSONB column left (pydantic-ai owns that shape).
+  - `Interview.asked_question_ids` is derived from turns + current question, not stored.
+  - `TimestampMixin` (`created_at`/`updated_at`) on every table; `turns.at` became `created_at`.
+  - `turns.question_id` is a REAL FK now — the client-driven flow means the model can't invent ids,
+    so `parent_question_id` in `api.py` is dead code that retires with the JSON store.
+- **Migrations applied:** `edc507e08778` (initial schema) and `3bf1a2d6fb29` (hand-written: the
+  `auth.users` → `profiles` trigger + the cross-schema FK Alembic can't autogenerate).
+- **Seeded** from `questions.json`: 2 roles, 5 questions, 3 levels, 4 question types, 9 tags,
+  8 rubric dimensions. `python -m db.seed` is idempotent (get-or-create by slug).
+- **`server/tools/questions.py`** — rewritten to Postgres, all bodies filled in and verified
+  (`next_question` / `get_question` / `list_questions` / `get_rubric` / `list_roles`).
+- **`server/tools/interview.py`** — NEW, replaces `tools/session.py` (deleted). Filled in + verified:
+  `create_interview`, `get_interview`, `load_interview_state`, `save_interview_state`,
+  `record_answer`, `save_interview_summary`. All bodies are `async def` now.
+- **`server/mcp_server.py`** — async wrappers, `interview://{interview_id}` resource,
+  `save_interview_summary`. Full MCP round-trip verified (all 3 tools + all 4 resources).
+  Deliberately NOT registered: `create_interview`, `load_interview_state`, `save_interview_state` —
+  backend bookkeeping the model has no business calling; `api.py` imports them directly.
+
+- **THE BACKEND STOPPED BEING AN MCP CLIENT OF ITS OWN SERVER** (design change made mid-rewrite,
+  not in the original plan). `api.py`/`grading.py` were calling `direct_call_tool` / `read_resource`
+  / `get_prompt` — a stdio round-trip to a subprocess of this same repo, plus a `json.loads`, to
+  reach local Python functions. That indirection was earned in Phase 3, when the MODEL called those
+  tools (MCP is how a model reaches a capability); the client-driven rewrite removed the model from
+  that path, leaving transport with nobody on the other end. Now direct imports.
+  - **New `server/prompts.py`** — `behavioral_interview` / `evaluate_answer` as plain functions, so
+    the templates are importable without a transport. This is the same "bodies in a module,
+    registration is thin" split `tools/*` always had; prompts were the one thing that never got it.
+  - `mcp_server.py` prompts are now thin wrappers delegating to it. **The MCP surface is unchanged**
+    (`--list` verified: 3 tools, 4 resource templates, 2 prompts) — it's now for EXTERNAL clients
+    (Claude Desktop, `mcp_client_demo.py`), which is what an MCP server is actually for.
+  - `grade_one` lost its `toolset` parameter; it no longer needs a running MCP client, so
+    `python grading.py` is a plain smoke test.
+  - `api.py`'s lifespan no longer starts the MCP subprocess. It now disposes the DB pool on shutdown.
+- **`server/api.py`** — rewritten. `SESSIONS` dict gone; `POST /api/interview` (renamed) does
+  `create_interview` + `save_interview_state(current_qid=...)`; `/api/answer` does load → run →
+  write back with `ModelMessagesTypeAdapter` round-tripping `message_history`; `session_id` →
+  `interview_id` across the contract; `parent_question_id` + the `questions://` fetch that fed it
+  **deleted** (the FK makes invented ids impossible, so the workaround has nothing to work around).
+  Added a 409 guard on an already-`done` interview — newly possible now that `done` outlives the process.
+- **`client/src/api.ts` + `App.tsx`** — renamed (`startInterview`, `interview_id`, `interviewId`,
+  `InterviewResponse`, `POST /api/interview`). `npx tsc --noEmit` clean.
+- **`mcp_client_demo.py`** — un-broken (`save_interview_summary`, `interview_id`), with a note that
+  a made-up id now returns an error envelope instead of silently creating a JSON file.
+
+- **All three `/api/answer` write-backs filled in** (follow-up / advance / end), completing the
+  load → run → write-back cycle. The rule they follow: **every exit path writes `message_history`
+  back**, because a `return` that skips `save_interview_state` silently discards the turn the model
+  was just paid for — the one new failure mode this design introduces.
+
+**Verified live, end to end:**
+- `POST /api/interview` writes a correct `interviews` row; bad role → 400; unknown interview → 404.
+- **A full interview to exhaustion**: 8 turns grouped `{be-1: 3, be-2: 2, be-3: 3}` — follow-ups kept
+  `current_qid` pinned, advancing reset the probe budget, the end branch set `done=True` and left
+  `current_qid` on the last question. A further answer → 409. The scorecard folded 8 turns into
+  exactly 3 grades. `asked_ids` derived correctly with no list to keep in sync.
+- **Killing the backend mid-interview, restarting it, and posting again continues the same
+  conversation** (history grew 3 → 6 entries, the reply was context-aware) — the point of the phase.
+- A full run through the **SPA** works against the renamed API.
+
+**Known-and-deferred, not gaps:** `/api/scorecard` grades and returns but does not persist a
+`scorecards` row, and `save_interview_summary` is implemented + registered but never called by the
+app. Both are **Phase C** — they only become observable once there's a History view to read them
+back, which needs Phase B's `user_id` to scope. Marked `(Phase C)` in `api.py`.
+
+**Optional hardening (Phase G, inherited from the scaffold):** none of the `save_interview_state`
+calls check the returned `{"ok": ...}` envelope. If the `current_qid` lookup in the advance branch
+ever missed, the candidate would see the next question while the row still pointed at the old one,
+and the following answer would file under the wrong question. Can't realistically happen today
+(`q["id"]` comes from `next_question`, reading the same DB).
+
+### Next action: Phase B — Supabase auth end to end
+
+Nothing is blocking. See the Phase B section above for the full scope; the shape of it:
+frontend `@supabase/supabase-js` + `react-router` + `react-hook-form` + `<ProtectedRoute>` and JWT
+injection via RTK Query `prepareHeaders`; backend a JWKS-verifying FastAPI dependency that extracts
+`user_id` (`sub`) and threads it into `create_interview` (the `interviews.profile_id` column is
+already there, nullable, waiting); then RLS policies.
+
+**Then finish verifying Phase A:** run a full interview through the SPA and confirm `turns` rows land,
+follow-ups keep `current_qid` fixed, and the scorecard groups a question + its probes into one grade.

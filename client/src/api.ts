@@ -7,16 +7,20 @@
  * per endpoint (use<Name>Mutation / use<Name>Query).
  *
  * Endpoints map 1:1 to your FastAPI routes:
- *   POST /api/session  -> startSession   (worked example below)
- *   POST /api/answer   -> submitAnswer   (your TODO)
+ *   POST /api/interview -> startInterview  (worked example below)
+ *   POST /api/answer    -> submitAnswer
+ *
+ * PHASE A RENAME: `session_id` is now `interview_id` everywhere, and POST /api/session is
+ * POST /api/interview. The backend reserved the word "session" for a database session, and
+ * a wire contract that disagrees with the server's vocabulary is a bug waiting to happen.
  */
 import { createApi, fetchBaseQuery } from "@reduxjs/toolkit/query/react";
 import { API_BASE_URL } from "./constants";
 
 // These types mirror the FastAPI response/request bodies in server/api.py. There's no
 // codegen wiring them together, so keep them in sync by hand (small enough for now).
-export interface SessionResponse {
-    session_id: string;
+export interface InterviewResponse {
+    interview_id: string;
     message: string; // the first interview question
 }
 export interface AnswerResponse {
@@ -24,7 +28,7 @@ export interface AnswerResponse {
     done?: boolean; // true once the client-driven loop exhausts the question bank
 }
 export interface AnswerRequest {
-    session_id: string;
+    interview_id: string;
     text: string;
 }
 
@@ -44,14 +48,14 @@ export interface AnswerGrade {
     improvement: string;
 }
 export interface Scorecard {
-    session_id: string;
+    interview_id: string;
     role: string;
     answers: AnswerGrade[];
     dimension_averages: Record<string, number>; // dimension name -> average score
     overall: number;
 }
 export interface ScorecardRequest {
-    session_id: string;
+    interview_id: string;
     role?: string;
 }
 
@@ -69,19 +73,19 @@ export const interviewApi = createApi({
     // via constants.ts (sourced from client/.env) so the backend origin is written down once.
     baseQuery: fetchBaseQuery({ baseUrl: API_BASE_URL }),
     endpoints: (builder) => ({
-        // WORKED EXAMPLE — start a session.
+        // WORKED EXAMPLE — start an interview.
         // It's a MUTATION, not a query. Even though it "gets" the first question, the POST
-        // CREATES server-side session state (a side effect). Rule of thumb: queries = cacheable
-        // reads (GET), mutations = writes/actions (POST/PUT/DELETE). Same tools-vs-resources
-        // instinct as the MCP server, one layer up.
-        startSession: builder.mutation<SessionResponse, void>({
-            query: () => ({ url: "/session", method: "POST" }),
+        // CREATES server-side state — a row in `interviews` (a side effect). Rule of thumb:
+        // queries = cacheable reads (GET), mutations = writes/actions (POST/PUT/DELETE). Same
+        // tools-vs-resources instinct as the MCP server, one layer up.
+        startInterview: builder.mutation<InterviewResponse, void>({
+            query: () => ({ url: "/interview", method: "POST" }),
         }),
         submitAnswer: builder.mutation<AnswerResponse, AnswerRequest>({
             query: (body) => ({ url: "/answer", method: "POST", body }),
         }),
-        // Phase 5 — grade the whole session. A mutation (not a query): it's a POST that
-        // kicks off server-side grading work, same instinct as startSession/submitAnswer.
+        // Phase 5 — grade the whole interview. A mutation (not a query): it's a POST that
+        // kicks off server-side grading work, same instinct as startInterview/submitAnswer.
         getScorecard: builder.mutation<Scorecard, ScorecardRequest>({
             query: (body) => ({ url: "/scorecard", method: "POST", body }),
         }),
@@ -96,7 +100,7 @@ export const interviewApi = createApi({
 
 // RTK Query generates one hook per endpoint. Export the ones the UI consumes.
 export const {
-    useStartSessionMutation,
+    useStartInterviewMutation,
     useSubmitAnswerMutation,
     useGetScorecardMutation,
     useTranscribeMutation,
