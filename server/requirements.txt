@@ -14,8 +14,12 @@ asyncpg>=0.30
 alembic>=1.13
 
 # Auth — verify Supabase-issued JWTs on the backend (Phase B) via the project's JWKS endpoint.
-# PyJWT is already in the venv; pinned here so a fresh install has it.
-pyjwt>=2.8
+# THE [crypto] EXTRA IS NOT OPTIONAL: bare PyJWT is pure-python and can only do HMAC (HS256).
+# Supabase signs ours with ES256 (elliptic curve), which needs the `cryptography` package, and
+# without it every verification dies on MissingCryptographyError. It happens to be in the venv
+# already as a transitive dep of Authlib/google-auth — i.e. by luck, not by declaration, which
+# is exactly the kind of thing that works locally and breaks on a clean Phase G deploy.
+pyjwt[crypto]>=2.8
 
 # Phase 4 (audio) — add when you get there; keep them OUT of the text-only skeleton:
 # faster-whisper      # STT (offline)

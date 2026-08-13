@@ -51,7 +51,9 @@ from db.engine import get_session
 from db.models import Interview, Level, Question, Role, Turn
 
 
-async def create_interview(role: str, level: str, persona: str) -> dict:
+async def create_interview(
+    role: str, level: str, persona: str, profile_id: str | None = None
+) -> dict:
     """Start an interview: mint its id and INSERT the row. Called by POST /api/interview.
 
     WORKED EXAMPLE — the write counterpart to get_interview, and the one function that
@@ -65,6 +67,12 @@ async def create_interview(role: str, level: str, persona: str) -> dict:
     Note what is NOT set here: `current_question_id` stays NULL until api.py picks the first
     question and calls save_interview_state. Creating the interview and choosing its first
     question are two separate steps, and the row is valid in between.
+
+    PHASE B: `profile_id` is the verified auth uid (the JWT's `sub`), passed down from
+    /api/interview. It stays OPTIONAL, defaulting to None, so the `python -m tools.interview`
+    smoke test below still runs without a token — an owner-less interview is a legal row (the
+    column is nullable), it's just one no signed-in user can reach, because require_ownership
+    refuses a None owner. The string goes straight into a Uuid column; SQLAlchemy parses it.
     """
     async with get_session() as db:
         # both arrive as slugs from the HTTP request ("backend-engineer", "mid")
@@ -88,7 +96,7 @@ async def create_interview(role: str, level: str, persona: str) -> dict:
                 level_id=level_row.id,
                 persona=persona,
                 message_history=[],   # the agent hasn't said anything yet
-                # profile_id stays NULL until Phase B has a signed-in user to attach
+                profile_id=profile_id,   # Phase B: whose interview this is (None = nobody's)
             )
         )
         await db.commit()
@@ -119,6 +127,11 @@ async def get_interview(interview_id: str) -> dict:
         return {
             "status": "ok",
             "interview_id": interview.slug,
+            # Phase B — who owns it, so /api/scorecard can authorize before it hands back a
+            # whole transcript. STRINGIFIED here, unlike load_interview_state below, because
+            # this dict is also the `interview://` MCP resource payload and gets JSON-encoded
+            # on the way out; a uuid.UUID isn't JSON-serializable.
+            "profile_id": str(interview.profile_id) if interview.profile_id else None,
             "turns": [
                 {
                     # the wire shape keeps the SLUG under the key "question_id", exactly as
@@ -181,6 +194,11 @@ async def load_interview_state(interview_id: str) -> dict:
             asked_ids.add(turn.question.slug)
         return {
             "ok": True,
+            # Phase B — the owner, for require_ownership in /api/answer. RAW (a uuid.UUID or
+            # None), not stringified: this dict is the backend's private working state and is
+            # never serialized to anyone, so there's no JSON boundary to be safe for. The
+            # comparison in auth.py stringifies both sides anyway.
+            "profile_id": interview.profile_id,
             "persona": interview.persona,
             "current_qid": interview.current_question.slug if interview.current_question is not None else None,
             "current_qtext": interview.current_question.text if interview.current_question is not None else None,
