@@ -43,6 +43,29 @@ VOCABULARY (Phase A rename): what the app conducts is an INTERVIEW. "Session" no
 exactly one thing — a SQLAlchemy DB session, always the variable `db`, and it never appears
 in this file. So: `interview_id` on the wire, `POST /api/interview`.
 
+PHASE B ADDS ONE WORD TO EVERY ROUTE: `Depends(require_user)`.
+
+   Phase A:  POST /api/answer  ->  load the row, run the turn, write it back
+   Phase B:  POST /api/answer  ->  verify the JWT -> load the row -> IS IT THIS USER'S? ->
+                                   run the turn, write it back
+
+   Two separate questions, and it's worth keeping them separate in your head because they
+   fail with different status codes:
+
+       AUTHENTICATION (401) — who is calling? Answered by the signature on the token,
+           in auth.py, before the route body runs at all.
+       AUTHORIZATION (403) — may they touch THIS row? Answered by comparing the
+           interview's `profile_id` to that user id, INSIDE the route, after the load.
+
+   A route that does the first and forgets the second is the classic broken-access-control
+   bug: everyone is a real user, and every real user can read everyone else's interviews by
+   changing an id. `interview_id` being an unguessable uuid slug is not a defence — it's an
+   obscurity that Phase C's History list will hand out on a plate.
+
+   RLS on the Supabase tables is a SECOND line of defence, not this one: our backend
+   connects as the `postgres` role, which bypasses RLS, so the check that actually protects
+   your users today is the one in this file.
+
 Run (from server/) — the FastAPI CLI auto-detects `app` and enables reload:
     .venv/Scripts/fastapi.exe dev api.py
 Smoke-test with curl (no browser needed — prove the backend before the React side):
@@ -57,7 +80,7 @@ from __future__ import annotations
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from openai import AsyncOpenAI
 from pydantic import BaseModel
@@ -79,6 +102,9 @@ from grading import aggregate, grade_one, turn_agent
 # and the two state functions are backend bookkeeping that no model should ever reach. That
 # line lives in mcp_server.py. From in here, they're all just functions.
 from prompts import behavioral_interview
+# Phase B — identity. `require_user` turns the Authorization header into a user id (or 401);
+# `require_ownership` is the second, separate question (403). See auth.py.
+from auth import require_ownership, require_user
 from db.engine import engine
 from tools.interview import (
     create_interview,
@@ -145,11 +171,24 @@ class ScorecardRequest(BaseModel):
 # and the row is deliberately valid in between (current_question_id is nullable exactly so
 # this gap is legal). Note there's no `history` key to initialize: `message_history` defaults
 # to [] on the model.
+#
+# PHASE B — this is also the WORKED EXAMPLE for auth, and the only route where authentication
+# is the WHOLE story: there's no existing row to own yet, so there is nothing to authorize.
+# The user id it captures here is what makes every OTHER route's ownership check possible.
 # ===========================================================================
 @app.post("/api/interview")
-async def start_interview(req: StartRequest = StartRequest()) -> dict:
+async def start_interview(
+    req: StartRequest = StartRequest(),
+    user_id: str = Depends(require_user),
+) -> dict:
     # `= StartRequest()` makes the whole body OPTIONAL: a bodyless POST (or `{}`) starts
     # a default backend-engineer interview; passing {"role":..,"seniority":..} overrides.
+    #
+    # `Depends(require_user)` is not a parameter the CLIENT can send — FastAPI sees the
+    # dependency and resolves it from the Authorization header instead of the body, before
+    # this function is entered. So by line one, `user_id` is a verified auth uid or the
+    # caller already got a 401 and this code never ran. (It doesn't appear in the OpenAPI
+    # request body either; it shows up as a security scheme in /docs.)
 
     # the server still owns the persona — one definition, in prompts.py. Built once here and
     # STORED on the row, then replayed as `instructions` every turn. Storing it (rather than
@@ -159,7 +198,12 @@ async def start_interview(req: StartRequest = StartRequest()) -> dict:
 
     # INSERT the row. create_interview mints the slug (the id the client holds) and resolves
     # the role/level slugs — an unknown one comes back as an envelope, not an exception.
-    created = await create_interview(req.role, req.seniority, persona)
+    #
+    # `profile_id=user_id` is the join that makes the whole phase real: this row now belongs
+    # to somebody. The column has been sitting there nullable since Phase A waiting for it,
+    # and `profiles.id` IS the auth uid, so the value goes straight in with no lookup — the
+    # payoff for breaking the surrogate-key convention on that one table.
+    created = await create_interview(req.role, req.seniority, persona, profile_id=user_id)
     if not created["ok"]:
         raise HTTPException(status_code=400, detail=created["error"])
     interview_id = created["interview_id"]
@@ -196,14 +240,30 @@ async def start_interview(req: StartRequest = StartRequest()) -> dict:
 # tokens on, and the next request replays a conversation missing its last exchange. That's
 # the one new failure mode of this design, and the clarification branch is where it's easiest
 # to miss — which is why that's the worked one.
+#
+# PHASE B TODO — the route where BOTH questions get asked:
+#   - add `user_id: str = Depends(require_user)` to the signature (copy /api/interview's)
+#   - right after the load, before anything else:
+#         require_ownership(state["profile_id"], user_id)
+#     which needs load_interview_state to start returning `profile_id` — do that first, in
+#     tools/interview.py.
+#   ORDER MATTERS: authorize BEFORE the turn_agent.run call, not after. The LLM call is the
+#   expensive part of this route, so checking first means a stranger's request costs you one
+#   indexed SELECT instead of tokens.
 # ===========================================================================
 @app.post("/api/answer")
-async def submit_answer(req: AnswerRequest) -> dict:
+async def submit_answer(
+    req: AnswerRequest,
+    user_id: str = Depends(require_user)
+) -> dict:
     # 1. LOAD — replaces `SESSIONS.get(req.session_id)`. Same guard, realer 404: a row either
     #    exists or it doesn't (the JSON store used to invent an empty one for a bad id).
     state = await load_interview_state(req.interview_id)
     if not state["ok"]:
         raise HTTPException(status_code=404, detail="unknown interview")
+
+    require_ownership(state["profile_id"], user_id)
+
     if state["done"]:
         # a finished interview is not a place to put another answer. Cheap to enforce now
         # that `done` is a column somebody else can read — it wasn't, when it was a dict key
@@ -333,8 +393,18 @@ def get_openai_client() -> AsyncOpenAI:
     return _openai_client
 
 
+# PHASE B TODO — add `user_id: str = Depends(require_user)` here too, and note this one is
+# NOT about protecting data: there's no row and no owner, so there's nothing to authorize.
+# It's about protecting your WALLET. An open transcribe endpoint is a stranger's free
+# Whisper account billed to your OPENAI_API_KEY, found by anyone who scans your deployed
+# origin. Any route that spends money on someone's behalf needs to know whose behalf.
+# (`user_id` will be unused in the body — that's fine and normal for a gate. Once Phase F
+# adds /api/tts, it gets the same treatment for the same reason.)
 @app.post("/api/transcribe")
-async def transcribe(audio: UploadFile = File(...)) -> dict:
+async def transcribe(
+    audio: UploadFile = File(...),
+    user_id: str = Depends(require_user)
+) -> dict:
     # The browser records ONE utterance (MediaRecorder -> a webm/opus Blob) and POSTs it as
     # multipart form-data under the field name "audio". FastAPI hands it to us as an UploadFile.
     data = await audio.read()
@@ -376,12 +446,22 @@ async def transcribe(audio: UploadFile = File(...)) -> dict:
 # GROUPING STAYS, for a different reason: a question plus its follow-ups is still several
 # turns under ONE id, and still deserves one grade.
 # ===========================================================================
+# PHASE B TODO — the same pair as /api/answer, and the one where forgetting the ownership
+# check leaks the most: this route returns somebody's entire transcript, question by question.
+#   - `user_id: str = Depends(require_user)` on the signature
+#   - after the get_interview load: require_ownership(interview["profile_id"], user_id)
+#     (so get_interview must return `profile_id` too — see tools/interview.py)
+# ===========================================================================
 @app.post("/api/scorecard")
-async def scorecard(req: ScorecardRequest) -> dict:
+async def scorecard(
+    req: ScorecardRequest,
+    user_id: str = Depends(require_user)
+) -> dict:
     # 1. the recorded transcript (written by record_answer during the interview)
     interview = await get_interview(req.interview_id)
     if interview.get("status") != "ok":
         raise HTTPException(status_code=404, detail="unknown interview")
+    require_ownership(interview["profile_id"], user_id)
     turns = interview.get("turns", [])
     if not turns:
         # the interview exists but nothing was recorded — a thin store is a real dependency of
