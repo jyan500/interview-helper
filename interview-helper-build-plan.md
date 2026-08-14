@@ -411,7 +411,8 @@ get different questions and level-calibrated feedback).
 
 ## CURRENT STATUS (resume point)
 
-*Last updated 2026-08-07 (second pass). Branch: `migrating-away-from-json-to-db`.*
+*Last updated 2026-08-13. Branch: `sign-out` (Phase B landed across `supabase-auth` +
+`supabase-auth-frontend`).*
 
 ### Phase A — ✅ COMPLETE (all verified against the live Supabase DB)
 
@@ -496,13 +497,103 @@ ever missed, the candidate would see the next question while the row still point
 and the following answer would file under the wrong question. Can't realistically happen today
 (`q["id"]` comes from `next_question`, reading the same DB).
 
-### Next action: Phase B — Supabase auth end to end
+### Phase B — ✅ COMPLETE (verified end to end against live Supabase)
 
-Nothing is blocking. See the Phase B section above for the full scope; the shape of it:
-frontend `@supabase/supabase-js` + `react-router` + `react-hook-form` + `<ProtectedRoute>` and JWT
-injection via RTK Query `prepareHeaders`; backend a JWKS-verifying FastAPI dependency that extracts
-`user_id` (`sub`) and threads it into `create_interview` (the `interviews.profile_id` column is
-already there, nullable, waiting); then RLS policies.
+**Backend — identity.**
 
-**Then finish verifying Phase A:** run a full interview through the SPA and confirm `turns` rows land,
-follow-ups keep `current_qid` fixed, and the scorecard groups a question + its probes into one grade.
+- **`server/auth.py` (new).** This project signs tokens **asymmetrically (ES256)**, with public keys
+  at `<SUPABASE_URL>/auth/v1/.well-known/jwks.json` — so the backend holds **no auth secret at all**;
+  `SUPABASE_URL` is the only env var it needs. (Legacy Supabase projects use a shared HS256 secret,
+  which every verifier could also *sign* with. Ours can't.)
+  - `decode_supabase_jwt` — `PyJWKClient` (cached, `lifespan=300`) + `jwt.decode` checking signature,
+    `exp`, `aud="authenticated"`, `iss=<SUPABASE_URL>/auth/v1`. `algorithms=["ES256"]` is a security
+    control, not a hint.
+  - `require_user` — FastAPI dependency, `HTTPBearer(auto_error=False)` so BOTH "no header" and "bad
+    token" give **401** (not FastAPI's default 403). `PyJWKClientConnectionError` → **503**, and it
+    must be caught **before** the `PyJWTError` catch-all — it's a subclass, so the reverse order makes
+    it dead code and reports a Supabase outage as "invalid token".
+  - `require_ownership(row_profile_id, user_id)` → **403**. Compares as strings (the row gives a
+    `uuid.UUID`, the JWT a `str`); a `None` owner (pre-Phase-B row) is also 403.
+- **`requirements.txt`: `pyjwt[crypto]`.** Bare PyJWT is HMAC-only and dies on ES256 with
+  `MissingCryptographyError`; `cryptography` was in the venv only as a transitive dep of
+  Authlib/google-auth — i.e. by luck, which would have broken a clean Phase G deploy.
+- **`server/api.py`** — `Depends(require_user)` on all four routes. `/api/interview` threads
+  `profile_id=user_id` into `create_interview`. `/api/transcribe` is gated to protect the **wallet**,
+  not data (an open Whisper proxy is a stranger billing your `OPENAI_API_KEY`).
+  - **Guard order, and it matters: exists (404) → owns (403) → state (409).** Ownership before the
+    existence check reads `state["profile_id"]` off a not-found envelope → `KeyError` → 500 instead of
+    404. And ownership is checked **before `turn_agent.run`**, so a stranger's request costs one
+    indexed SELECT rather than tokens.
+- **`server/tools/interview.py`** — `create_interview(..., profile_id=None)` (optional, so the
+  `python -m tools.interview` smoke test still runs). `load_interview_state` returns `profile_id`
+  **raw**; `get_interview` returns it **stringified**, because that dict is also the `interview://`
+  MCP resource payload and crosses a JSON boundary.
+
+**Backend — RLS** (migrations `a98eeeef7b99` + `ebbeeba4648a`, both applied).
+
+- **It is defence in depth, NOT what protects users today.** FastAPI connects as `postgres`
+  (`BYPASSRLS`), and even without that a pooled connection carries no per-user identity — `auth.uid()`
+  reads a claim **PostgREST** sets per request, so on our connections it would be NULL and every
+  owner-scoped policy would deny *everything*. The real control is `require_ownership`. The policies
+  guard the **other door**: PostgREST + the anon key, which ships in the JS bundle.
+- Tables are grouped by **access rule, not content** — the rename from `BANK_TABLES` to
+  `PUBLIC_READ_TABLES` was prompted by a real near-miss:
+  - `OWNED_TABLES` — `EXISTS (...)` subquery walking the FK chain back to `interviews.profile_id`
+    (1 hop for `turns`/`scorecards`, 2 for `scorecard_entries`, 3 for `scorecard_entry_scores`).
+  - `PUBLIC_READ_TABLES` — `FOR SELECT TO authenticated USING (true)`, no write policies.
+  - `GRADER_ONLY_TABLES = ["reference_briefs"]` — **RLS on, no policy = deny-all.** Briefs are the
+    Phase E *answer key*; a read policy would let any signed-in user fetch the model answer before
+    answering. It's structurally bank data, which is exactly why a content-shaped constant name
+    quietly answered a security question.
+- `(SELECT auth.uid())`, not bare `auth.uid()` — an InitPlan evaluated once per query instead of once
+  per row (Supabase's `auth_rls_initplan` lint).
+- `ebbeeba4648a` covers `alembic_version`, which no model describes but PostgREST still serves.
+  Alembic keeps working because a table's **owner** is exempt from its own policies unless
+  `FORCE ROW LEVEL SECURITY` is set.
+
+**Frontend** — added `@supabase/supabase-js`, `react-hook-form`, and **`react-router` v7** (v8 requires
+React ≥19.2; this app is React 18, and npm 6 doesn't enforce peer deps, so it installed silently).
+
+- `src/supabase.ts` — one client for the process, **auth only**; throws at startup if the `VITE_` vars
+  are missing. It owns the session (localStorage + background refresh).
+- `src/auth/AuthProvider.tsx` — the session **mirror**: `getSession()` once (the page-refresh case) +
+  `onAuthStateChange` (the everything-else case, including other tabs), with a `loading` flag. React
+  mirrors what it renders; **the access token is never copied anywhere.**
+- `src/auth/LoginPage.tsx` / `SignupPage.tsx` / `ProtectedRoute.tsx` — signup passes
+  `options.data.display_name`, which is precisely what the `3bf1a2d6fb29` trigger reads out of
+  `raw_user_meta_data`, so a name typed in the form reaches `profiles` with no API involvement.
+  `ProtectedRoute` checks `loading` **before** `session`, or every refresh flashes the login page.
+- `src/main.tsx` — `<Provider>` → `<BrowserRouter>` → `<AuthProvider>` → `<Routes>`; public
+  `/login` + `/signup`, protected `/` behind the layout route.
+- `src/api.ts` — `prepareHeaders` calls `supabase.auth.getSession()` **per request** (it refreshes an
+  expired token on the way, which a cached copy could not), and `baseQueryWithReauth` reacts to a 401
+  by forcing `refreshSession()`, retrying **once**, and otherwise `signOut()` — letting the mirror and
+  `<ProtectedRoute>` do the redirect, so this module never learns that routes exist.
+
+**Verified live:** signup creates the `profiles` row via the trigger; a full SPA interview runs and
+`interviews.profile_id` is populated; no header → 401; garbage token → 401; unknown id → 404; and the
+one that only runs under attack — **a second account against the first account's interview → 403 on
+both `/api/answer` and `/api/scorecard`**, with no LLM call and no `turns` row written. Anon-key GETs
+against PostgREST return `[]` for `reference_briefs`, `alembic_version` *and* `questions` (the bank is
+`TO authenticated`; a public "sample question" page would mean adding `anon` to that one loop).
+This also closes Phase A's last open check.
+
+**Open (small, not blocking):** no sign-out control in the UI yet (`App.tsx` TODO — `useAuth()` gives
+`session.user.email` + `signOut`; no navigate needed, the mirror handles it); optional localStorage
+mirror of `draft`/`interviewId` so a dropped session doesn't eat a half-typed answer; cosmetics in
+`SignupPage.tsx` (green box with red text, unused `React` import).
+
+### Next action: Phase C — save & list interview sessions per user
+
+Nothing is blocking. `/api/scorecard` still computes-and-forgets and `save_interview_summary` is still
+never called — both were deferred here deliberately, because a saved grade needs a `user_id` to scope
+it and a History view to read it back. Both are marked `(Phase C)` in `api.py`. The shape: persist a
+`scorecards` row (+ entries + per-dimension scores, mapping each grader dimension NAME back to its
+`rubric_dimensions.id`), add `GET /api/sessions` and `GET /api/sessions/{id}`, and a History route in
+the SPA — which drops into the existing `<Route element={<ProtectedRoute />}>` block as one line.
+
+One design fork worth deciding rather than defaulting: "list my past interviews" is a pure
+owner-scoped read, and `interviews_own` already permits exactly the right rows — so PostgREST could
+serve it with no backend code. Reasons to keep it in FastAPI anyway: one auth story instead of two,
+the scorecard needs shaping the client shouldn't do, and a History view that speaks table names
+re-couples the frontend to the schema Phase A just normalized.

@@ -12,6 +12,7 @@ import {
     pickPreferredVoice,
     setVoicePrefs,
 } from "./voice/speech"
+import { useAuth } from "./auth/AuthProvider"
 
 type Line = { who: "interviewer" | "you"; text: string };
 
@@ -23,7 +24,6 @@ export default function App() {
     const [interviewId, setInterviewId] = useState<string | null>(null);
     const [transcript, setTranscript] = useState<Line[]>([]);
     const [draft, setDraft] = useState("");
-    // PHASE B TODO — two small additions this component wants now that auth exists:
     //
     // 1. A SIGN-OUT AFFORDANCE. `const { session, signOut } = useAuth()` (from
     //    ./auth/AuthProvider) gives you `session.user.email` to show and `signOut` to call.
@@ -39,6 +39,7 @@ export default function App() {
     //    (Restoring the visible TRANSCRIPT needs Phase C's GET /api/sessions/{id} — the data
     //    is all in `turns`, there's just no route serving it yet.)
     // Phase 5 — the graded scorecard, once the interview is ended. null until requested.
+    const { session, signOut } = useAuth()
     const [scorecard, setScorecard] = useState<Scorecard | null>(null);
     // Phase 5 — the backend flips done=true once the client-driven loop exhausts the bank.
     const [done, setDone] = useState(false);
@@ -117,6 +118,10 @@ export default function App() {
     return (
         <main className="mx-auto max-w-2xl p-6 font-sans">
             <h1 className="mb-4 text-2xl font-bold text-slate-800">Interview Helper</h1>
+            <p>{session.user.email}</p>
+            <button onClick={() => {
+                signOut()
+            }} className="rounded-md bg-slate-800 px-4 py-2 font-medium text-white transition hover:bg-slate-700 disabled:opacity-50">Signout</button>
 
             {interviewId === null ? (
                 <button
