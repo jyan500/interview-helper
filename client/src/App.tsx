@@ -23,6 +23,21 @@ export default function App() {
     const [interviewId, setInterviewId] = useState<string | null>(null);
     const [transcript, setTranscript] = useState<Line[]>([]);
     const [draft, setDraft] = useState("");
+    // PHASE B TODO — two small additions this component wants now that auth exists:
+    //
+    // 1. A SIGN-OUT AFFORDANCE. `const { session, signOut } = useAuth()` (from
+    //    ./auth/AuthProvider) gives you `session.user.email` to show and `signOut` to call.
+    //    A line next to the <h1> is enough. Note you don't navigate afterwards: signing out
+    //    empties the mirror and <ProtectedRoute> does the redirect.
+    //
+    // 2. DON'T EAT A HALF-TYPED ANSWER. Everything this component holds is React state, so a
+    //    sign-out (or a crashed tab) takes `draft` and `interviewId` with it. The interview
+    //    itself is safe — it's a Postgres row, that was the point of Phase A — but the
+    //    sentence someone was midway through typing is not. Mirroring just those two values
+    //    into localStorage on change, and reading them back on mount, costs a `useEffect`
+    //    each and removes the only genuinely unrecoverable loss in the app.
+    //    (Restoring the visible TRANSCRIPT needs Phase C's GET /api/sessions/{id} — the data
+    //    is all in `turns`, there's just no route serving it yet.)
     // Phase 5 — the graded scorecard, once the interview is ended. null until requested.
     const [scorecard, setScorecard] = useState<Scorecard | null>(null);
     // Phase 5 — the backend flips done=true once the client-driven loop exhausts the bank.
