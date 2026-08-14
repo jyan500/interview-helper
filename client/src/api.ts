@@ -15,7 +15,9 @@
  * a wire contract that disagrees with the server's vocabulary is a bug waiting to happen.
  */
 import { createApi, fetchBaseQuery } from "@reduxjs/toolkit/query/react";
+import type { BaseQueryFn, FetchArgs, FetchBaseQueryError } from "@reduxjs/toolkit/query/react";
 import { API_BASE_URL } from "./constants";
+import { supabase } from "./supabase";
 
 // These types mirror the FastAPI response/request bodies in server/api.py. There's no
 // codegen wiring them together, so keep them in sync by hand (small enough for now).
@@ -66,12 +68,109 @@ export interface TranscribeResponse {
     text: string;
 }
 
-export const interviewApi = createApi({
-    reducerPath: "interviewApi",
+// ===========================================================================
+// PHASE B — THE JWT, ATTACHED IN ONE PLACE.
+//
+// `prepareHeaders` runs before EVERY request this slice makes, so authentication is wired
+// once here instead of being remembered at four call sites. It's the frontend mirror of
+// `Depends(require_user)` on the backend: one declaration, applied to everything. Nothing in
+// App.tsx changes — components keep calling the same hooks and never learn that requests are
+// now signed.
+//
+// WHY ASK supabase-js EVERY TIME rather than caching the token in Redux (or in a variable up
+// here): access tokens expire in about an hour, and supabase-js rotates them in the
+// background. `getSession()` hands back the CURRENT one, refreshing first if it has expired.
+// A cached copy is a 401 waiting to happen an hour into a long interview — the "never copy
+// the token" rule from auth/AuthProvider.tsx, in the one place it would actually bite. This
+// is a local read (memory / localStorage), not a network call, so awaiting it per request
+// costs nothing.
+//
+// NO `Content-Type` HERE, deliberately: fetchBaseQuery sets `application/json` for plain
+// object bodies on its own, AND leaves it off for the FormData that /api/transcribe sends —
+// only the browser knows the multipart boundary string. Setting it globally would break
+// audio uploads with a baffling 422 from FastAPI.
+// ===========================================================================
+const rawBaseQuery = fetchBaseQuery({
     // FULL origin, not a relative path, because we use CORS (not a Vite proxy). This is the
     // one concrete consequence of that decision — see vite.config.ts. Shared with voice/speech.ts
     // via constants.ts (sourced from client/.env) so the backend origin is written down once.
-    baseQuery: fetchBaseQuery({ baseUrl: API_BASE_URL }),
+    baseUrl: API_BASE_URL,
+    prepareHeaders: async (headers) => {
+        const { data } = await supabase.auth.getSession()
+        const token = data.session?.access_token
+        if (token) headers.set("Authorization", `Bearer ${token}`)
+        return headers;
+    },
+});
+
+// ===========================================================================
+// SCAFFOLD — SURVIVING A DEAD TOKEN MID-INTERVIEW.
+//
+// FIRST, WHAT THIS IS *NOT* FOR. Ordinary expiry is already handled twice over and never
+// reaches this code: supabase-js refreshes on a background timer while the tab is open, and
+// `getSession()` above refreshes on demand if the token is stale. A three-hour interview
+// sails through both. This wrapper exists for the case where the REFRESH ITSELF FAILS —
+// laptop asleep past the session's inactivity window, refresh token revoked by a password
+// change or a sign-out in another tab, offline at the wrong moment. The credential is
+// genuinely gone, and no retry conjures it back.
+//
+// SO WHY WRAP AT ALL? Because the alternative is silent breakage: every button 401s, the UI
+// shows nothing in particular, and the candidate keeps typing into a form that will never
+// submit. A wrapper turns "quietly broken forever" into "one honest retry, then a login
+// screen" — which is the whole difference in how this feels to use.
+//
+// WHY IT CAN'T LIVE IN prepareHeaders: headers go out hopeful. The only way to learn a token
+// is no longer accepted is to send it and read the answer. Requests can only be fixed on the
+// way back, which is exactly what a baseQuery wrapper gets to see.
+//
+// WHAT SURVIVES REGARDLESS — the payoff for Phase A: the interview itself is a Postgres row.
+// Signing out loses the SCREEN, not the interview; `message_history`, `current_question_id`
+// and the probe budget are all still sitting in `interviews`. Reattaching a returning user to
+// it needs Phase C's GET /api/sessions/{id}, which is why "resume" isn't in scope here — but
+// nothing is destroyed in the meantime, and that was a deliberate design choice, not luck.
+//
+//   1. let result = await rawBaseQuery(args, api, extraOptions);
+//   2. if (result.error?.status !== 401) return result;      // the overwhelmingly common path
+//   3. otherwise force the issue:
+//          const { data, error } = await supabase.auth.refreshSession();
+//      - SUCCESS (no error and data.session) -> retry ONCE:
+//            result = await rawBaseQuery(args, api, extraOptions);
+//        Once, not in a loop. If a freshly minted token is also refused, the problem isn't
+//        the token, and a retry loop against your own API is a self-inflicted outage.
+//      - FAILURE -> `await supabase.auth.signOut();` and fall through, returning the 401.
+//        Note you do NOT navigate here: signOut fires onAuthStateChange, AuthProvider's
+//        mirror goes null, <ProtectedRoute> re-renders and redirects. This module has no
+//        business knowing routes exist — the same one-owner rule as the mirror itself.
+//   4. return result;
+//
+// ONE SUBTLETY WORTH KNOWING (not worth building today): if three requests are in flight and
+// all three 401, all three call refreshSession. supabase-js serializes refreshes internally,
+// so this is safe here — but the canonical RTK Query version of this pattern guards it with a
+// mutex, and that's why. If you ever swap in an auth library without that lock, the three
+// refreshes race to rotate one refresh token and two of them lose.
+// ===========================================================================
+const baseQueryWithReauth: BaseQueryFn<
+    string | FetchArgs,          // what an endpoint's `query()` returns
+    unknown,                     // the success payload (per-endpoint, so unknown here)
+    FetchBaseQueryError          // the error shape RTK Query hands your components
+> = async (args, api, extraOptions) => {
+    let result = await rawBaseQuery(args, api, extraOptions);
+    if (result.error?.status !== 401){
+        return result
+    }
+    const { data, error } = await supabase.auth.refreshSession()
+    if (!error && data.session){
+        result = await rawBaseQuery(args, api, extraOptions)
+    }
+    else {
+        await supabase.auth.signOut()
+    }
+    return result
+};
+
+export const interviewApi = createApi({
+    reducerPath: "interviewApi",
+    baseQuery: baseQueryWithReauth,
     endpoints: (builder) => ({
         // WORKED EXAMPLE — start an interview.
         // It's a MUTATION, not a query. Even though it "gets" the first question, the POST
