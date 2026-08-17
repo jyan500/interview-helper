@@ -48,7 +48,21 @@ import uuid
 from sqlalchemy import select
 
 from db.engine import get_session
-from db.models import Interview, Level, Question, Role, Turn
+from db.models import (
+    Interview,
+    Level,
+    Question,
+    Role,
+    Scorecard,
+    ScorecardEntry,
+    ScorecardEntryScore,
+    Turn,
+)
+
+# The shared score arithmetic (Phase C) — a pure leaf module, NOT grading.py. Importing from
+# grading here would pull the LLM stack (pydantic_agent, the model) into the data layer just to
+# reuse an average; the math moved to tools/scoring.py precisely so this import stays cheap.
+from tools.scoring import aggregate_scores
 
 
 async def create_interview(
@@ -159,28 +173,6 @@ async def load_interview_state(interview_id: str) -> dict:
     own history through a resource would be both wasteful and confusing, so the two shapes
     stay apart.
 
-    TODO — the same read pattern as get_interview, returning different fields:
-      - resolve the slug -> row; None -> {"ok": False, "error": "unknown interview"}
-      - return a dict with:
-            "persona":          interview.persona
-            "current_qid":      the SLUG (interview.current_question.slug) or None —
-                                current_question is selectin-loaded, but it's NULLABLE, so
-                                guard before touching .slug
-            "current_qtext":    interview.current_question.text or None
-            "followups_used":   interview.followups_used
-            "max_followups":    interview.max_followups
-            "done":             interview.done
-            "role":             interview.role.slug          # next_question needs this
-            "asked_ids":        the SLUGS already asked. The ids live on
-                                interview.asked_question_ids (the derived property in
-                                models.py), but that returns integer ids and next_question
-                                wants slugs — so build them from the loaded rows instead:
-                                    {turn.question.slug for turn in interview.turns}
-                                plus the current question's slug if there is one.
-            "message_history":  interview.message_history — RAW, exactly as stored.
-                                Do NOT deserialize it here: this module has no business
-                                importing pydantic-ai. api.py turns it back into messages
-                                with ModelMessagesTypeAdapter.validate_python(...).
     """
     async with get_session() as db:
         stmt = await db.execute(select(Interview).where(Interview.slug == interview_id)) 
@@ -239,21 +231,6 @@ async def save_interview_state(
     this ever became a general-purpose setter with many callers, "set to NULL" would need
     its own encoding, e.g. a sentinel default.)
 
-    TODO:
-      - resolve the interview slug -> row; None -> the {"ok": False} envelope
-      - for each field, `if <field> is not None:` assign it to the row. No db.add() —
-        the row is already tracked, so an attribute assignment IS the UPDATE (same as
-        save_interview_summary).
-      - `current_qid` arrives as a SLUG and the column holds an integer id, so resolve it:
-        look up the Question by slug, and on an unknown slug return the error envelope
-        rather than silently leaving the old question in place.
-      - `message_history` arrives already JSON-ready (api.py dumped it with
-        ModelMessagesTypeAdapter.dump_python(msgs, mode="json")) — assign it as-is. If you
-        pass raw pydantic-ai objects here, asyncpg will reject them at the JSONB boundary.
-        (Careful with the None check on this one: an EMPTY list is falsy but meaningful, so
-        test `is not None`, never `if message_history:`.)
-      - await db.commit()  (`updated_at` bumps itself)
-
     A NOTE ON WHY THIS IS ONE FUNCTION AND NOT FOUR SETTERS: everything it writes belongs to
     the same turn, so one call means one UPDATE in one transaction. Four setters would be
     four round-trips that could half-fail and leave the spine inconsistent with the history.
@@ -289,18 +266,6 @@ async def record_answer(interview_id: str, question_id: str, answer: str) -> dic
     the whole difference from the JSON version — and it's also the integrity win: a turn
     can no longer be filed under a question that doesn't exist.
 
-    TODO:
-      - open a session; resolve BOTH slugs to rows:
-            interview -> select(Interview).where(Interview.slug == interview_id)
-            question   -> select(Question).where(Question.slug == question_id)
-        if either is None, return the {"ok": False, "error": ...} envelope — don't raise;
-        the MCP tool layer above wants a dict either way
-      - db.add(Turn(interview_id=interview.id, question_id=question.id, answer=answer))
-        (`created_at` fills itself — server_default on the mixin)
-      - await db.commit()          # <- the step the JSON version didn't have
-      - the turn count: `len(interview.turns) + 1` is the cheap answer, because turns were
-        selectin-loaded with the interview and do NOT include the row you just added.
-        (Re-querying with a COUNT is the pedantic alternative; either is fine here.)
     """
     async with get_session() as db:
         interview_stmt = await db.execute(select(Interview).where(Interview.slug == interview_id))
@@ -320,13 +285,6 @@ async def save_interview_summary(interview_id: str, feedback: str) -> dict:
     Returns {"ok": True, "interview_id": ..., "status": "summarized"} or
     {"ok": False, "error": "..."}.
 
-    TODO — an UPDATE rather than an INSERT, which in the ORM means: load it, assign, commit.
-      - resolve the interview slug -> row; not found -> the {"ok": False} envelope
-      - interview.summary = feedback
-      - await db.commit()
-      Note there's no db.add() here: the row is already tracked by the session, so changing
-      an attribute is enough for the ORM to emit an UPDATE at commit. (`updated_at` bumps
-      itself — that's the mixin's onupdate.)
     """
     async with get_session() as db:
         stmt = await db.execute(select(Interview).where(Interview.slug == interview_id))
@@ -336,6 +294,248 @@ async def save_interview_summary(interview_id: str, feedback: str) -> dict:
         interview.summary = feedback
         await db.commit()
         return {"ok": True, "interview_id": interview_id, "status": "summarized"}
+
+
+# ===========================================================================
+# PHASE C — SAVE & LIST INTERVIEWS PER USER.
+#
+# Phase B gave every interview an OWNER (`profile_id`). Phase C is what that ownership was
+# FOR: a signed-in person can now (1) see the list of their own past interviews, and
+# (2) reopen one — its transcript and its GRADE — without re-running (and re-paying for) the
+# grader. Two of these three functions are the reads that back those two screens; the third
+# is the write that finally makes a scorecard OUTLIVE the request that computed it.
+#
+# WHY THE GRADE HAS TO BE PERSISTED FOR ANY OF THIS TO WORK: today /api/scorecard computes a
+# scorecard and returns it, and the moment the response is sent it's gone — re-opening the
+# interview later would mean grading all over again (more LLM cost, and a DIFFERENT result,
+# since the model isn't deterministic). save_scorecard below is the fix: the grade becomes
+# rows, so "show me how I did on that interview last week" is a read, not a re-grade.
+# ===========================================================================
+
+
+async def list_interviews(profile_id: str) -> dict:
+    """Every interview belonging to one user, newest first — backs GET /api/interviews.
+
+    WORKED EXAMPLE — the owner-scoped LIST. The single new idea vs get_interview is the WHERE
+    clause: `Interview.profile_id == profile_id`. That one predicate is the entire difference
+    between "my history" and "everyone's interviews", so it is the line to get right. The
+    caller (api.py) passes the *verified* uid from the JWT, never an id from the request body
+    — otherwise "list interviews" becomes "list ANYONE's interviews by guessing a uuid".
+
+    Returns {"ok": True, "interviews": [ {card}, ... ]}. Each card is the SUMMARY the History
+    list renders — deliberately NOT the transcript (that's the detail view's job, one row at a
+    time). `overall` is the interview's grade if it's been scored, else None: the 1:1
+    `interview.scorecard` relationship is selectin-loaded, so reading it here costs no extra
+    query per row.
+
+    NOTE the sort: `updated_at` descending. `updated_at` doubles as "last active" (every
+    /api/answer write bumps it), so most-recently-touched floats to the top — which is what a
+    "resume / review" list wants, over creation order.
+    """
+    async with get_session() as db:
+        result = await db.execute(
+            select(Interview)
+            .where(Interview.profile_id == profile_id)
+            .order_by(Interview.updated_at.desc())
+        )
+        interviews = result.scalars().all()
+        return {
+            "ok": True,
+            "interviews": [
+                {
+                    "interview_id": iv.slug,
+                    # role/level as the human-readable NAME (the list shows it to a person);
+                    # both relationships are selectin-loaded on the interview.
+                    "role": iv.role.name,
+                    "level": iv.level.name,
+                    "created_at": iv.created_at.isoformat(),
+                    "done": iv.done,
+                    # the grade if graded, else None — the History list shows "—" for ungraded.
+                    "overall": iv.scorecard.overall if iv.scorecard is not None else None,
+                }
+                for iv in interviews
+            ],
+        }
+
+
+async def save_scorecard(interview_id: str, overall: float, answers: list[dict]) -> dict:
+    """Persist a computed scorecard as rows — the WRITE that makes a grade durable.
+
+    WORKED EXAMPLE — and the one genuinely new shape in this phase: a THREE-LEVEL nested
+    write (scorecard -> entries -> per-dimension scores) plus a NAME -> ID resolution the
+    schema forces on us. Everything else in this module has been a single-table insert or a
+    field assignment; this is the first time we build an object GRAPH.
+
+    `answers` is exactly what api.py's /api/scorecard already assembles — one dict per graded
+    question:
+        {"question_id": <slug>, "question_text": ...,
+         "dimension_scores": [{"dimension": <name>, "score": 1-5, "note": ...}, ...],
+         "strength": ..., "gap": ..., "improvement": ...}
+    (`question_text` and each `note` are IGNORED here on purpose — see the two notes below.)
+
+    Returns {"ok": True, "interview_id": ...} or the {"ok": False, "error": ...} envelope.
+
+    TWO THINGS THE NORMALIZED SCHEMA MAKES US DO, and both are the point of Phase A paying off:
+
+      1. DIMENSION NAME -> rubric_dimensions.id. The grader hands back a dimension by its NAME
+         ("Tradeoff reasoning"), because that's what we put in the rubric text it graded
+         against. But ScorecardEntryScore points at a rubric_dimensions ROW, not a string —
+         that's the whole reason a reworded dimension can't orphan old scores. So we resolve
+         each name to its id via the role's rubric, and DROP any score whose name doesn't
+         resolve rather than writing it under a guess (the same "don't invent an id" rule the
+         turn loop follows). The map is built from `interview.role.rubric.dimensions`, all
+         selectin-loaded.
+
+      2. THE per-dimension `note` IS NOT STORED. ScorecardEntryScore has `dimension_id` +
+         `score` and nothing else — the schema chose to keep only the number, since the notes
+         are long and were never queried. Consequence to know (it surfaces in get_scorecard):
+         a scorecard re-read from the DB has the scores but not the sentence-per-dimension the
+         LIVE grader produced. If History ever needs those notes, the fix is one `note` column
+         here + a migration; today it's a deliberate omission, not a bug.
+
+    IDEMPOTENCY: /api/scorecard can be hit more than once (the user clicks "End interview"
+    again, or re-opens and re-grades). One interview should have ONE scorecard, so we delete
+    any existing one first — the `all, delete-orphan` cascades on Scorecard.entries and
+    ScorecardEntry.scores tear down its children with it — then insert the fresh grade.
+    """
+    async with get_session() as db:
+        interview = (
+            await db.execute(select(Interview).where(Interview.slug == interview_id))
+        ).scalar_one_or_none()
+        if interview is None:
+            return {"ok": False, "error": "unknown interview"}
+        if interview.role.rubric is None:
+            return {"ok": False, "error": f"role {interview.role.slug} has no rubric"}
+
+        # (1) the NAME -> ID map, built once from this role's rubric dimensions.
+        name_to_id = {dim.name: dim.id for dim in interview.role.rubric.dimensions}
+
+        # idempotency: drop a prior scorecard for this interview (cascades to its rows).
+        existing = (
+            await db.execute(select(Scorecard).where(Scorecard.interview_id == interview.id))
+        ).scalar_one_or_none()
+        if existing is not None:
+            await db.delete(existing)
+            await db.flush()   # make the delete happen before the re-insert in this txn
+
+        # (2) build the object graph top-down. Appending to a cascaded relationship is all it
+        #     takes — SQLAlchemy assigns the foreign keys (scorecard_id, entry_id) itself when
+        #     it flushes, so we never touch them by hand.
+        scorecard = Scorecard(interview_id=interview.id, overall=overall)
+        for ans in answers:
+            question = (
+                await db.execute(select(Question).where(Question.slug == ans["question_id"]))
+            ).scalar_one_or_none()
+            if question is None:
+                continue   # a slug that isn't a real question can't be graded onto a row
+            entry = ScorecardEntry(
+                question_id=question.id,
+                strength=ans["strength"],
+                gap=ans["gap"],
+                improvement=ans["improvement"],
+            )
+            for ds in ans.get("dimension_scores", []):
+                dim_id = name_to_id.get(ds["dimension"])
+                if dim_id is None:
+                    continue   # unresolved dimension name -> drop, don't guess (see note 1)
+                entry.scores.append(
+                    ScorecardEntryScore(dimension_id=dim_id, score=ds["score"])
+                )
+            scorecard.entries.append(entry)
+
+        db.add(scorecard)
+        await db.commit()
+        return {"ok": True, "interview_id": interview_id}
+
+
+async def get_scorecard(interview_id: str) -> dict:
+    """Read a PERSISTED scorecard back into the same shape /api/scorecard returns live.
+
+    TODO — the read-back half of save_scorecard, and the reason History can show a past grade
+    without re-running the grader. It walks the same three levels in reverse
+    (scorecard -> entries -> scores) and rebuilds the wire shape the frontend already knows
+    (see api.ts `Scorecard`), so the SAME <ScorecardView> component renders a live grade and a
+    remembered one with no changes.
+
+    Return contract:
+      - no scorecard for this interview yet  -> {"status": "not_found"}
+      - found -> {
+            "status": "ok",
+            "interview_id": interview_id,
+            "overall": scorecard.overall,
+            "answers": [ {                                   # one per ScorecardEntry
+                "question_id":   entry.question.slug,
+                "question_text": entry.question.text,        # join to questions for the text
+                "strength": ..., "gap": ..., "improvement": ...,
+                "dimension_scores": [ {                      # one per ScorecardEntryScore
+                    "dimension": score.dimension.name,       # id -> name, back for display
+                    "score": score.score,
+                    "note": "",   # NOT STORED — see save_scorecard note (2). Empty on read-back.
+                }, ... ],
+            }, ... ],
+            "dimension_averages": { <dimension name>: <avg>, ... },
+        }
+
+    POINTERS:
+      - resolve the slug: select(Interview).where(Interview.slug == interview_id); if it or
+        `interview.scorecard` is None, return {"status": "not_found"}. (The 1:1 relationship is
+        selectin-loaded, so `interview.scorecard` is right there.)
+      - the nested rows are all selectin-loaded too: `scorecard.entries`, each `entry.scores`,
+        and `score.dimension` — no extra queries, just walk them.
+      - `dimension_averages` is NOT a stored column (only `overall` is cached). Recompute it
+        here the same way grading.aggregate does: bucket every ScorecardEntryScore by its
+        dimension NAME, average each bucket, round(…, 2). This is a read, so a plain Python
+        loop over the loaded rows is fine — no GROUP BY SQL needed.
+      - `note` is gone (save_scorecard didn't store it): emit "" so <ScorecardView> still
+        renders. If that emptiness ever matters, that's the signal to add the column.
+
+    Once this returns real data, GET /api/interviews/{id} lights up and the History detail view
+    shows the remembered grade.
+    """
+    async with get_session() as db:
+        interview = (await db.execute(
+            select(Interview).where(Interview.slug == interview_id)
+        )).scalar_one_or_none()
+        if interview is None or interview.scorecard is None:
+            return {"status": "not_found"}
+
+        answers = []
+        # flat (dimension_name, score) pairs across EVERY entry — the shape aggregate_scores
+        # takes. No `dimensions` whitelist needed here: save_scorecard already dropped anything
+        # that didn't resolve to a real rubric dimension, so the persisted rows are clean.
+        all_pairs: list[tuple[str, int]] = []
+        for entry in interview.scorecard.entries:
+            dimension_scores = []
+            for score in entry.scores:
+                dimension_scores.append({
+                    "dimension": score.dimension.name,
+                    "score": score.score,
+                    "note": "",   # NOT STORED — see save_scorecard note (2); empty on read-back
+                })
+                all_pairs.append((score.dimension.name, score.score))
+            answers.append({
+                "question_id": entry.question.slug,
+                "question_text": entry.question.text,
+                "strength": entry.strength,
+                "gap": entry.gap,
+                "improvement": entry.improvement,
+                "dimension_scores": dimension_scores,
+            })
+
+        agg = aggregate_scores(all_pairs)
+        return {
+            "status": "ok",
+            "interview_id": interview_id,
+            "answers": answers,
+            "dimension_averages": agg["dimension_averages"],
+            # the PERSISTED overall is authoritative (it's what the History list sorts on and
+            # what was cached at grade time) — use it rather than the recomputed agg["overall"],
+            # which could differ if any score was dropped at write time.
+            "overall": interview.scorecard.overall,
+        }
+
+
+    return {"status": "not_found"}
 
 
 if __name__ == "__main__":

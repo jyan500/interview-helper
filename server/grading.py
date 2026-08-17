@@ -42,6 +42,10 @@ from pydantic_agent import model
 # The grading TEMPLATE, imported directly (Phase A). It's a pure function in prompts.py, so
 # there's no transport between us and it — see that module's docstring for why.
 from prompts import evaluate_answer
+# The shared score arithmetic (Phase C). Pure — no LLM, no DB — which is exactly why it moved
+# OUT of here: the data layer (get_scorecard) needed the same averaging without importing this
+# module's model stack. See tools/scoring.py.
+from tools.scoring import aggregate_scores
 
 
 # --- THE TYPED OUTPUT SHAPE ------------------------------------------------------------
@@ -146,38 +150,22 @@ async def grade_one(question_text: str, answer: str, rubric_text: str) -> Answer
 
 # aggregate many grades into scorecard numbers -------------------------------
 # The scorecard's headline: an average score PER DIMENSION across every answered question,
-# plus one overall number. This is deterministic arithmetic — the LLM already did the judging
-# in grade_one; Python just averages. Keep it a pure function (grades in, numbers out) so it's
-# trivially testable without any LLM.
+# plus one overall number. Deterministic arithmetic — the LLM already judged in grade_one;
+# Python just averages.
 #
-# Pointers:
-#   def aggregate(grades: list[AnswerGrade], dimensions: list[str]) -> dict:
-#       # group scores by dimension name, average each:
-#       #   sums/counts keyed by dimension -> dimension_averages[dim] = round(mean, 2)
-#       #   (a DimensionScore.dimension should match a rubric dimension; if the model drifts
-#       #    on wording, decide: match loosely, or just bucket by whatever it returned)
-#       # overall = mean of all dimension_averages (or mean of every individual score)
-#       # return {"dimension_averages": {...}, "overall": round(overall, 2)}
-#       ...
+# THE MATH ITSELF now lives in tools/scoring.py, shared with the data layer's get_scorecard so
+# a persisted scorecard averages EXACTLY the way a live one does — one implementation, not two
+# that can drift. This function is the thin ADAPTER for the grader's side: flatten AnswerGrade
+# objects into the (name, score) pairs the shared core takes, passing `dimensions` as the
+# whitelist so a model that drifts on wording is filtered (the old `if ds.dimension in sums`
+# guard, now expressed once in aggregate_scores).
 def aggregate(grades: list[AnswerGrade], dimensions: list[str]) -> dict:
-    sums = {dim: 0 for dim in dimensions}
-    counts = {dim: 0 for dim in dimensions}
-    for grade in grades:
-        for ds in grade.dimension_scores:
-            # ensure that any dimensions that don't match the string exactly are not included
-            if (ds.dimension in sums):
-                sums[ds.dimension] += ds.score
-                counts[ds.dimension] += 1
-    averages = {}
-    for dim in dimensions:
-        if counts[dim] > 0:
-            averages[dim] = round(sums[dim]/counts[dim], 2)
-    # also make sure that dimensions that should be included but aren't included
-    # are removed so a stray "0" does not drag down the total score
-    overall = 0
-    if averages:
-        overall = round(sum(averages.values())/len(averages), 2)
-    return {"dimension_averages": averages, "overall": overall}
+    pairs = (
+        (ds.dimension, ds.score)
+        for grade in grades
+        for ds in grade.dimension_scores
+    )
+    return aggregate_scores(pairs, dimensions)
 
 
 if __name__ == "__main__":

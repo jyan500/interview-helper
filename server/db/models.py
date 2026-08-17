@@ -425,6 +425,16 @@ class Interview(Base, TimestampMixin):
     role: Mapped[Role] = relationship(lazy="selectin")
     level: Mapped[Level] = relationship(lazy="selectin")
     current_question: Mapped[Question | None] = relationship(lazy="selectin")
+    # Phase C — an interview has AT MOST ONE scorecard (graded once at the end), so this is a
+    # 1:1: `uselist=False` makes `interview.scorecard` a single row or None, not a list. It's
+    # what lets the History list read each interview's `overall` in the same selectin load
+    # instead of a second query per row. `viewonly=True` because the scorecard's lifecycle is
+    # owned by grading (save_scorecard writes it) — this side only ever reads it, and marking
+    # it view-only keeps SQLAlchemy from trying to null out `scorecard.interview_id` if this
+    # attribute is ever reassigned. No new column and no migration: a relationship is pure ORM.
+    scorecard: Mapped[Scorecard | None] = relationship(
+        lazy="selectin", uselist=False, viewonly=True
+    )
     # the relationship to watch: a History list of many interviews drags every turn of each.
     # See the lazy="selectin" note at the top for the lazy="raise" + selectinload() fix.
     turns: Mapped[list[Turn]] = relationship(

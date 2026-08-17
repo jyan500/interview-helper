@@ -109,9 +109,12 @@ from db.engine import engine
 from tools.interview import (
     create_interview,
     get_interview,
+    get_scorecard,
+    list_interviews,
     load_interview_state,
     record_answer,
     save_interview_state,
+    save_scorecard,
 )
 from tools.questions import get_question, get_rubric, next_question
 
@@ -506,10 +509,17 @@ async def scorecard(
     #    already judged; this just averages).
     agg = aggregate(grades, dimensions)
 
-    # (Phase C) persist this as a `scorecards` row instead of only returning it — that's what
-    # makes the History view possible. A one-line wrap-up can also go through
-    # save_interview_summary:
-    #   await save_interview_summary(req.interview_id, f"Overall {agg['overall']}/5 ...")
+    # 5. (Phase C) PERSIST the grade as rows so it OUTLIVES this request — the whole reason the
+    #    History view can show a past interview's score without re-grading (re-paying, and
+    #    getting a different number, since the model isn't deterministic). `answers` already
+    #    carries exactly what save_scorecard reads. Persist AFTER computing, but the ownership
+    #    check that guards this write ran back at the top (require_ownership above), so a
+    #    stranger never reaches here. Idempotent: a second /api/scorecard replaces the row.
+    saved = await save_scorecard(req.interview_id, agg["overall"], answers)
+    if not saved["ok"]:
+        # the grade was computed but couldn't be stored — surface it rather than pretend it
+        # was remembered. (A role with no rubric is the realistic cause; see save_scorecard.)
+        raise HTTPException(status_code=500, detail=f"could not save scorecard: {saved['error']}")
 
     return {
         "interview_id": req.interview_id,
@@ -517,4 +527,64 @@ async def scorecard(
         "answers": answers,
         "dimension_averages": agg["dimension_averages"],
         "overall": agg["overall"],
+    }
+
+
+# ===========================================================================
+# WORKED EXAMPLE — GET /api/interviews : the signed-in user's own interview history.
+#
+# NAMING (a deliberate choice, not the build plan's literal wording): Phase C's section was
+# drafted before Phase A renamed *session -> interview* across the whole wire contract
+# (`POST /api/interview`, `interview_id`). "One word for one thing" wins, so these are
+# /api/interviews, not the plan's older /api/sessions. Same rows, consistent vocabulary.
+#
+# WHY THIS IS A GET (and a plain function, no request body): it's a cacheable READ of existing
+# rows, the HTTP mirror of an MCP *resource* vs a tool — same instinct as queries-vs-mutations
+# on the frontend. Nothing is created.
+#
+# THE ONE SECURITY LINE THAT MATTERS: the list is scoped by the VERIFIED uid from the token
+# (`user_id`), passed straight into the WHERE clause in list_interviews. There is no id in the
+# request for an attacker to tamper with — "my history" can't be widened to "someone else's"
+# because the only identity in play is the one auth.py proved. That's why this route needs no
+# separate require_ownership call: the ownership IS the query.
+# ===========================================================================
+@app.get("/api/interviews")
+async def my_interviews(user_id: str = Depends(require_user)) -> dict:
+    result = await list_interviews(user_id)
+    return {"interviews": result["interviews"]}
+
+
+# ===========================================================================
+# GET /api/interviews/{interview_id} : one past interview — its transcript AND its grade.
+#
+# This is the History DETAIL view's data: the recorded turns (get_interview, which already
+# backs the interview:// resource) plus the persisted scorecard (get_scorecard). Reusing
+# get_interview here is the payoff of it returning `profile_id` since Phase B — the SAME load
+# both reads the transcript and answers "may this caller see it?".
+#
+# GUARD ORDER, same as everywhere: exists (404) -> owns (403). The scorecard read comes AFTER
+# ownership, so a stranger never learns whether an interview was even graded.
+#
+# TODO (small — the structure is here): the scorecard half only lights up once get_scorecard
+# in tools/interview.py is implemented. Until then it returns {"status": "not_found"} and this
+# route serves the transcript with `scorecard: null`, which is a legitimate state anyway (an
+# interview that was never graded). Nothing to change here when you implement it.
+# ===========================================================================
+@app.get("/api/interviews/{interview_id}")
+async def interview_detail(
+    interview_id: str,
+    user_id: str = Depends(require_user),
+) -> dict:
+    interview = await get_interview(interview_id)
+    if interview.get("status") != "ok":
+        raise HTTPException(status_code=404, detail="unknown interview")
+    require_ownership(interview["profile_id"], user_id)
+
+    card = await get_scorecard(interview_id)
+    return {
+        "interview_id": interview["interview_id"],
+        "turns": interview["turns"],
+        "summary": interview["summary"],
+        # null until this interview has been graded (or until get_scorecard is implemented).
+        "scorecard": card if card.get("status") == "ok" else None,
     }
