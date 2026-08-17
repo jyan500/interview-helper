@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router";
 import {
     useStartInterviewMutation,
     useSubmitAnswerMutation,
     useGetScorecardMutation,
     type Scorecard,
 } from "./api";
+import ScorecardView from "./ScorecardView";
 import {
     speak,
     useWhisperRecognition,
@@ -118,10 +120,13 @@ export default function App() {
     return (
         <main className="mx-auto max-w-2xl p-6 font-sans">
             <h1 className="mb-4 text-2xl font-bold text-slate-800">Interview Helper</h1>
-            <p>{session.user.email}</p>
+            <p>{session?.user.email}</p>
+            {/* Phase C — the History view is just another route (main.tsx), so getting there is
+                a plain <Link>, no new plumbing. It reads GET /api/interviews for this user. */}
+            <Link to="/history" className="text-blue-700 underline">View past interviews</Link>
             <button onClick={() => {
                 signOut()
-            }} className="rounded-md bg-slate-800 px-4 py-2 font-medium text-white transition hover:bg-slate-700 disabled:opacity-50">Signout</button>
+            }} className="ml-2 rounded-md bg-slate-800 px-4 py-2 font-medium text-white transition hover:bg-slate-700 disabled:opacity-50">Signout</button>
 
             {interviewId === null ? (
                 <button
@@ -200,55 +205,5 @@ export default function App() {
                 </>
             )}
         </main>
-    );
-}
-
-// render the graded scorecard. The DATA is done (the backend grades every recorded
-// answer and aggregates it); this is purely the DISPLAY. The overall score + per-dimension
-// averages are wired below as the worked example — fill in the per-answer breakdown where
-// marked. Fields available on `card` (see api.ts Scorecard): overall, dimension_averages
-// (name -> number), answers[] each with { question_text, dimension_scores[], strength, gap,
-// improvement }.
-function ScorecardView({ card }: { card: Scorecard }) {
-    return (
-        <section className="mt-6 rounded-lg border border-slate-300 p-4">
-            <h2 className="text-xl font-bold text-slate-800">
-                Scorecard — {card.overall}/5 overall
-            </h2>
-
-            {/* WORKED EXAMPLE — per-dimension averages. Object.entries turns the
-                {dimension: average} map into rows. */}
-            <ul className="mt-3 space-y-1">
-                {Object.entries(card.dimension_averages).map(([dim, avg]) => (
-                    <li key={dim} className="flex justify-between text-sm">
-                        <span className="text-slate-600">{dim}</span>
-                        <span className="font-semibold text-slate-800">{avg}/5</span>
-                    </li>
-                ))}
-            </ul>
-            {
-                card.answers.map((a, i) => (
-                    <div key={i} className = "mt-4">
-                        <p className="font-semibold">{a.question_text}</p> 
-                        {
-                            a?.dimension_scores?.map((score) => {
-                                return (
-                                    <div key={score.dimension} className = "flex flex-col gap-y-2">
-                                        <div className = "flex flex-row gap-x-2">
-                                            <p>{score.dimension}</p>
-                                            <p>{score.score}</p>
-                                        </div>
-                                        <p>{score.note}</p>
-                                    </div>
-                                )
-                            })
-                        }
-                       <p>💪 {a.strength}</p> 
-                       <p>🕳️ {a.gap}</p> 
-                       <p>🔧 {a.improvement}</p> 
-                    </div>
-                ))
-            }
-        </section>
     );
 }

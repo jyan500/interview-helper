@@ -4,6 +4,7 @@ import { Provider } from "react-redux";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { store } from "./store";
 import App from "./App";
+import HistoryPage from "./HistoryPage";
 import { AuthProvider } from "./auth/AuthProvider";
 import LoginPage from "./auth/LoginPage";
 import ProtectedRoute from "./auth/ProtectedRoute";
@@ -47,6 +48,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                             Phase C's /history goes in this block: one line, no new plumbing. */}
                         <Route element={<ProtectedRoute />}>
                             <Route path="/" element={<App />} />
+                            {/* Phase C — the History view. One line, no new plumbing: it's
+                                gated by the same <ProtectedRoute> and speaks to the same API. */}
+                            <Route path="/history" element={<HistoryPage />} />
                         </Route>
 
                         {/* anything else -> home, which is itself gated. `replace` so a

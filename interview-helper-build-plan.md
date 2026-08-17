@@ -583,17 +583,60 @@ This also closes Phase A's last open check.
 mirror of `draft`/`interviewId` so a dropped session doesn't eat a half-typed answer; cosmetics in
 `SignupPage.tsx` (green box with red text, unused `React` import).
 
-### Next action: Phase C — save & list interview sessions per user
+### Phase C — 🚧 IN PROGRESS (scaffolded end to end; one frontend TODO left)
 
-Nothing is blocking. `/api/scorecard` still computes-and-forgets and `save_interview_summary` is still
-never called — both were deferred here deliberately, because a saved grade needs a `user_id` to scope
-it and a History view to read it back. Both are marked `(Phase C)` in `api.py`. The shape: persist a
-`scorecards` row (+ entries + per-dimension scores, mapping each grader dimension NAME back to its
-`rubric_dimensions.id`), add `GET /api/sessions` and `GET /api/sessions/{id}`, and a History route in
-the SPA — which drops into the existing `<Route element={<ProtectedRoute />}>` block as one line.
+*Branch `list-interviews`. Backend landed in commit `queries to list interviews and scorecards`;
+frontend scaffold on top. Client `tsc --noEmit` clean; all server modules import clean. NOT yet
+run live against Supabase — that's the next verification.*
 
-One design fork worth deciding rather than defaulting: "list my past interviews" is a pure
-owner-scoped read, and `interviews_own` already permits exactly the right rows — so PostgREST could
-serve it with no backend code. Reasons to keep it in FastAPI anyway: one auth story instead of two,
-the scorecard needs shaping the client shouldn't do, and a History view that speaks table names
-re-couples the frontend to the schema Phase A just normalized.
+**Naming decision (resolved, not defaulted):** the routes are **`GET /api/interviews`** and
+**`GET /api/interviews/{id}`**, NOT the `/api/sessions` this section originally named. That wording
+predates Phase A's *session → interview* rename; "one word for one thing" wins, so the whole wire
+contract stays `interview`. Recorded here so it isn't re-litigated.
+
+**Design fork (resolved): the list stays in FastAPI, not PostgREST.** Reasons as noted below —
+one auth story, the scorecard needs shaping, and a History view speaking table names would
+re-couple the SPA to the schema Phase A normalized. `list_interviews` scopes by the verified uid
+in the WHERE clause (the ownership IS the query), so that route needs no separate `require_ownership`.
+
+**Backend (done, committed):**
+- **`server/tools/interview.py`** — `list_interviews(profile_id)` (owner-scoped, newest-first,
+  reads each interview's `overall` via the new 1:1 relationship), `save_scorecard(interview_id,
+  overall, answers)` (the three-level nested write — scorecard → entries → per-dimension scores —
+  resolving each grader dimension NAME to `rubric_dimensions.id`, dropping unresolved names,
+  idempotent via delete-then-insert), and `get_scorecard(interview_id)` (reads the persisted grade
+  back into the live `Scorecard` shape; recomputes `dimension_averages`, keeps the cached `overall`).
+- **`server/db/models.py`** — added `Interview.scorecard` (1:1, `uselist=False`, `viewonly=True`,
+  selectin) so the list reads the grade in one load. **No column, no migration** — pure ORM.
+- **`server/api.py`** — `GET /api/interviews` (list) and `GET /api/interviews/{id}` (transcript via
+  `get_interview` + grade via `get_scorecard`, guard order exists→owns). `POST /api/scorecard` now
+  **persists** via `save_scorecard` (500s if the store fails rather than pretending it saved).
+- **THE AGGREGATE REFACTOR (`server/tools/scoring.py`, NEW).** `grading.aggregate` lived in the LLM
+  module; reusing it from the data layer would drag `pydantic_agent` + the model into `tools/` just
+  to average numbers. Moved the arithmetic DOWN into a pure leaf module both call: `aggregate_scores(
+  pairs, dimensions=None)` takes a flat `(name, score)` stream, so `grading.aggregate` is now a thin
+  adapter (flatten `AnswerGrade`s, pass the dimension whitelist) and `get_scorecard` calls it with no
+  whitelist (persisted rows are already clean). One implementation, no LLM stack in the data layer —
+  the same `no-indirection` instinct as dropping the MCP round-trip in Phase A.
+
+**Frontend (scaffolded):**
+- **`client/src/ScorecardView.tsx` (NEW)** — extracted verbatim from `App.tsx` so the History detail
+  view reuses the SAME component; live and persisted grades share the `Scorecard` shape (the
+  persisted one just leaves per-dimension `note` empty — the schema stores only the score).
+- **`client/src/api.ts`** — `getMyInterviews` (query) + `getInterviewDetail` (query) + the
+  `InterviewSummary` / `InterviewDetail` types. Queries, not mutations: cacheable GETs.
+- **`client/src/HistoryPage.tsx` (NEW)** — the LIST is the worked example (role/level/date/overall,
+  em-dash for ungraded, click → detail via local `selectedId` state). **The `InterviewDetailView`
+  drill-in is the remaining TODO:** data is wired (`useGetInterviewDetailQuery`), render the
+  transcript + `{data.scorecard && <ScorecardView card={data.scorecard} />}`.
+- **`client/src/main.tsx`** — `/history` route inside the `<ProtectedRoute>` block; a "View past
+  interviews" `<Link>` in `App.tsx`.
+- Drive-by: fixed the committed sign-out code's `session.user.email` (nullable per `useAuth`) to
+  `session?.user.email` so `tsc` passes.
+
+**Remaining before Phase C closes:**
+1. Fill in `InterviewDetailView` in `HistoryPage.tsx` (transcript + scorecard render).
+2. **Verify live:** finish an interview → `scorecards` row written; reload → it's in History with its
+   grade; open it → transcript + remembered scorecard, and a second account 403s on `/api/interviews/{id}`.
+3. Still deferred (own follow-up): `save_interview_summary` is implemented + registered but nothing
+   calls it — a one-line wrap-up on `/api/scorecard` if History wants a summary blurb.
