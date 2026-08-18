@@ -100,29 +100,30 @@ function InterviewDetailView({
 }) {
     const { data, isLoading, error } = useGetInterviewDetailQuery(interviewId);
 
-    // TODO: replace this placeholder with the transcript + <ScorecardView> per the notes above.
-    // Kept minimal (and referencing the fetched values) so the file compiles as you build it out.
     return (
         <main className="mx-auto max-w-2xl p-6 font-sans">
             <button onClick={onBack} className="mb-4 text-blue-700 underline">← Back</button>
             {isLoading && <p className="text-slate-600">Loading…</p>}
             {error && <p className="text-red-700">Couldn't load that interview.</p>}
-            {data && <p className="text-slate-500">Interview {data.interview_id} — {data.turns.length} turns.</p>}
-            {/* TODO: transcript list + {data?.scorecard && <ScorecardView card={data.scorecard} />} */}
-            <div className = "flex flex-col gap-y-2 p-4">
-                <p>Transcript: </p>
-                {data.turns.map((turn) => {
-                    const question = data.scorecard.answers.find((answer) => answer.question_id === turn.question_id)?.question_text
-                    const date = new Date(turn.at)
-                    return (
-                        <div className = "flex flex-col gap-y-2">
-                            <div>Question: {question ?? ""}</div>
-                            <div>Answer: {turn.answer}</div>
-                            <div>At: {date.toLocaleString()}</div>
-                        </div>
-                    )
-                })} 
-            </div>
+            {
+                data && (
+                <div className = "flex flex-col gap-y-2 p-4">
+                    <p>Transcript: </p>
+                    {data.turns?.map((turn) => {
+                        // the question text now rides on the turn itself (get_interview), so it
+                        // shows whether or not this interview was ever graded — no scorecard lookup.
+                        const date = new Date(turn.at)
+                        return (
+                            <div key={`${turn.question_id}-${turn.at}`} className = "flex flex-col gap-y-2">
+                                <div>Question: {turn.question_text}</div>
+                                <div>Answer: {turn.answer ?? ""}</div>
+                                <div>At: {date.toLocaleString()}</div>
+                            </div>
+                        )
+                    })}
+                </div>
+                )
+            }
             {
                 data?.scorecard && <ScorecardView card={data.scorecard}/> 
             }

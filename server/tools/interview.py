@@ -151,6 +151,14 @@ async def get_interview(interview_id: str) -> dict:
                     # the wire shape keeps the SLUG under the key "question_id", exactly as
                     # the JSON store did — the grader groups on this
                     "question_id": turn.question.slug,
+                    # the EXACT text presented — `prompt_text` (the probe, or the bank
+                    # question's text) is what the candidate answered, so it reads correctly for
+                    # a follow-up. Falls back to the parent question's text for pre-Phase-C rows
+                    # that predate the column. Either way it's a readable transcript WITHOUT a
+                    # scorecard — an ungraded interview still shows its questions.
+                    "question_text": turn.prompt_text or turn.question.text,
+                    # may be None for the OPEN turn (an in-progress interview's unanswered
+                    # question). The scorecard skips those; the History transcript shows blank.
                     "answer": turn.answer,
                     "at": turn.created_at.isoformat(),
                 }
@@ -256,27 +264,89 @@ async def save_interview_state(
         return {"ok": True, "interview_id": interview_id}
 
 
-async def record_answer(interview_id: str, question_id: str, answer: str) -> dict:
-    """Persist one interview turn (the question asked + the candidate's answer).
+async def open_turn(interview_id: str, question_id: str, prompt_text: str) -> dict:
+    """OPEN a turn: record that a prompt was PRESENTED, before any answer exists.
 
-    Returns {"ok": True, "interview_id": ..., "turn_count": N}, or
-    {"ok": False, "error": "..."} if the interview or question slug doesn't resolve.
+    Called whenever the interviewer puts a question or a follow-up probe to the candidate
+    (POST /api/interview for the first question; the follow-up and advance branches of
+    /api/answer for everything after). It writes a turn with `prompt_text` set and `answer`
+    NULL — the "open" turn that record_answer will later complete.
 
-    Both arguments arrive as SLUGS; `turns` stores integer foreign keys. Resolving them is
-    the whole difference from the JSON version — and it's also the integrity win: a turn
-    can no longer be filed under a question that doesn't exist.
+    `question_id` is the PARENT bank question's slug (a probe has no id of its own, so its
+    turn still files under the question it's probing — that's the grouping the scorecard
+    relies on). `prompt_text` is the exact text shown: the bank question's text, or the probe.
 
+    Returns {"ok": True, "interview_id": ...} or {"ok": False, "error": ...} if a slug doesn't
+    resolve. The partial unique index means a SECOND open turn for the same interview raises
+    instead of silently creating an ambiguous state — so always complete the current open turn
+    (record_answer) before opening the next.
     """
     async with get_session() as db:
-        interview_stmt = await db.execute(select(Interview).where(Interview.slug == interview_id))
-        question_stmt = await db.execute(select(Question).where(Question.slug == question_id))
-        interview = interview_stmt.scalar_one_or_none()
-        question = question_stmt.scalar_one_or_none()
-        if (not interview or not question):
+        interview = (
+            await db.execute(select(Interview).where(Interview.slug == interview_id))
+        ).scalar_one_or_none()
+        question = (
+            await db.execute(select(Question).where(Question.slug == question_id))
+        ).scalar_one_or_none()
+        if interview is None or question is None:
             return {"ok": False, "error": "interview or question does not exist"}
-        interview.turns.append(Turn(interview_id=interview.id, question_id=question.id, answer=answer))
+        db.add(Turn(
+            interview_id=interview.id,
+            question_id=question.id,
+            prompt_text=prompt_text,
+            answer=None,          # the defining mark of an OPEN turn
+        ))
         await db.commit()
-        return {"ok": True, "interview_id": interview_id, "turn_count": len(interview.turns)}
+        return {"ok": True, "interview_id": interview_id}
+
+
+async def record_answer(interview_id: str, question_id: str, answer: str) -> dict:
+    """COMPLETE the open turn with the candidate's answer — the write counterpart to open_turn.
+
+    Finds the one open turn (`answer IS NULL`) for this interview and fills its answer. The
+    partial unique index guarantees at most one open turn, so the lookup is unambiguous and the
+    client never has to hand back a turn id (it only holds interview_id).
+
+    `question_id` (the parent bank question slug) is NOT needed to find the turn — the open turn
+    already knows its question — but it's kept as a GUARD: we verify the open turn is actually
+    for the question the caller believes it's answering, and refuse on a mismatch rather than
+    silently closing the wrong turn. Cheap insurance in a flow where the client and the server
+    each track "the current question" independently.
+
+    Returns {"ok": True, "interview_id": ..., "turn_count": N} (N = completed turns), or
+    {"ok": False, "error": ...} if the interview/question is unknown, there's no open turn, or
+    the open turn is for a different question.
+
+    Note `answer` may be the empty string — a real (if blank) answer that still CLOSES the turn;
+    NULL is reserved for "not yet answered". /api/answer guards truly empty input before here.
+    """
+    async with get_session() as db:
+        interview = (
+            await db.execute(select(Interview).where(Interview.slug == interview_id))
+        ).scalar_one_or_none()
+        question = (
+            await db.execute(select(Question).where(Question.slug == question_id))
+        ).scalar_one_or_none()
+        if interview is None or question is None:
+            return {"ok": False, "error": "interview or question does not exist"}
+        open_turn_row = (
+            await db.execute(
+                select(Turn).where(Turn.interview_id == interview.id, Turn.answer.is_(None))
+            )
+        ).scalar_one_or_none()
+        if open_turn_row is None:
+            # nothing was presented, or it was already answered — a real state error, not a
+            # place to invent a turn (the client-driven flow always opens before it asks).
+            return {"ok": False, "error": "no open turn to answer"}
+        if open_turn_row.question_id != question.id:
+            # the open turn is for a different question than the caller thinks — refuse rather
+            # than close the wrong one. This is the guard the question_id argument buys.
+            return {"ok": False, "error": "open turn does not match the given question"}
+        open_turn_row.answer = answer
+        await db.commit()
+        # completed turns = every turn now that this one is closed and no other is open.
+        completed = sum(1 for t in interview.turns if t.answer is not None)
+        return {"ok": True, "interview_id": interview_id, "turn_count": completed}
 
 
 async def save_interview_summary(interview_id: str, feedback: str) -> dict:
@@ -553,7 +623,10 @@ if __name__ == "__main__":
         # TODO: uncomment each as you implement it, using the slug just created
         slug = created["interview_id"]
         print(await save_interview_state(slug, current_qid="be-1", followups_used=0))
+        # OPEN the turn (present the question) BEFORE recording an answer to it — the new flow.
+        print(await open_turn(slug, "be-1", "Tell me about a tough bug you debugged."))
         print(await load_interview_state(slug))
+        # record_answer now COMPLETES that open turn (no INSERT); question_id is the guard.
         print(await record_answer(slug, "be-1", "I once traced a memory leak to..."))
         print(await save_interview_summary(slug, "Strong on debugging; work on brevity."))
         print(await get_interview(slug))

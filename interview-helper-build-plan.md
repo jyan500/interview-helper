@@ -583,11 +583,12 @@ This also closes Phase A's last open check.
 mirror of `draft`/`interviewId` so a dropped session doesn't eat a half-typed answer; cosmetics in
 `SignupPage.tsx` (green box with red text, unused `React` import).
 
-### Phase C — 🚧 IN PROGRESS (scaffolded end to end; one frontend TODO left)
+### Phase C — 🚧 IN PROGRESS (built end to end; migration + live verify remain)
 
-*Branch `list-interviews`. Backend landed in commit `queries to list interviews and scorecards`;
-frontend scaffold on top. Client `tsc --noEmit` clean; all server modules import clean. NOT yet
-run live against Supabase — that's the next verification.*
+*Branch `list-interviews`. History list + detail done; the follow-up-transcript open-turn model
+added on top (new migration `f3b9c1d5a7e2`, NOT yet applied). Client `tsc --noEmit` clean; all
+server modules import clean; alembic chain valid. Remaining: apply the migration and verify live
+against Supabase (see "Remaining before Phase C closes" below).*
 
 **Naming decision (resolved, not defaulted):** the routes are **`GET /api/interviews`** and
 **`GET /api/interviews/{id}`**, NOT the `/api/sessions` this section originally named. That wording
@@ -625,18 +626,49 @@ in the WHERE clause (the ownership IS the query), so that route needs no separat
   persisted one just leaves per-dimension `note` empty — the schema stores only the score).
 - **`client/src/api.ts`** — `getMyInterviews` (query) + `getInterviewDetail` (query) + the
   `InterviewSummary` / `InterviewDetail` types. Queries, not mutations: cacheable GETs.
-- **`client/src/HistoryPage.tsx` (NEW)** — the LIST is the worked example (role/level/date/overall,
-  em-dash for ungraded, click → detail via local `selectedId` state). **The `InterviewDetailView`
-  drill-in is the remaining TODO:** data is wired (`useGetInterviewDetailQuery`), render the
-  transcript + `{data.scorecard && <ScorecardView card={data.scorecard} />}`.
+- **`client/src/HistoryPage.tsx` (NEW)** — LIST (role/level/date/overall, em-dash for ungraded,
+  click → detail via local `selectedId`) AND the `InterviewDetailView` drill-in (transcript +
+  `{data.scorecard && <ScorecardView card={data.scorecard} />}`) are both implemented.
 - **`client/src/main.tsx`** — `/history` route inside the `<ProtectedRoute>` block; a "View past
   interviews" `<Link>` in `App.tsx`.
 - Drive-by: fixed the committed sign-out code's `session.user.email` (nullable per `useAuth`) to
   `session?.user.email` so `tsc` passes.
 
+**Follow-up transcript — the OPEN-TURN model (new schema work, needs a migration applied).**
+The transcript first pulled each turn's question text from the scorecard, so an UNGRADED interview
+showed no questions. Fixed in two steps:
+1. **Question text on the turn** (no scorecard dependency): `get_interview` now returns
+   `question_text = turn.prompt_text or turn.question.text`, and `InterviewTurn` gained the field.
+2. **The real fix — a turn is now an EXCHANGE, born at ask-time.** A follow-up answer records under
+   its parent `question_id` (grouping unchanged), but the transcript showed the *parent bank
+   question* for a probe, which read confusingly. Rather than parse the probe out of
+   `message_history` (pydantic-ai JSON), a turn now stores the exact prompt and is created when the
+   question/probe is PRESENTED, completed when the answer arrives:
+   - **`turns.prompt_text`** (the exact question/probe shown) + **`turns.answer` is now NULLABLE**
+     (`NULL` = presented-but-unanswered = the "open" turn; `""` is a real blank answer and closes it).
+   - **Partial unique index `uq_one_open_turn_per_interview`** (`WHERE answer IS NULL`) makes "at
+     most one open turn per interview" a DB guarantee — so `record_answer` finds the turn to
+     complete with `WHERE interview_id=? AND answer IS NULL`, **no turn id threaded through the
+     client** (it still holds only `interview_id`).
+   - **`open_turn(interview_id, question_id, prompt_text)`** (NEW, backend-only, NOT an MCP tool):
+     called at `POST /api/interview` (first question) and in the follow-up/advance branches of
+     `/api/answer`. The advance `open_turn` is **inside** the `next_question == ok` block, so an
+     exhausted bank falls to the END branch and opens nothing — a finished interview has ZERO open
+     turns. **Complete-then-open** ordering everywhere keeps the index happy.
+   - **`record_answer(interview_id, question_id, answer)`** now COMPLETES the open turn (UPDATE, not
+     INSERT). `question_id` was kept (not strictly needed to find the turn) as a GUARD: the open
+     turn must be for that question, else refuse. MCP tool signature therefore unchanged.
+   - `/api/answer` gained an **empty-answer 400 guard** (before the LLM call); `/api/scorecard`
+     **skips `answer IS NULL`** turns; migration **`f3b9c1d5a7e2`** adds the column, makes `answer`
+     nullable, backfills `prompt_text` from `question.text`, seeds one open turn per in-progress
+     interview, and creates the index. `message_history` stays — `turns` is the human transcript,
+     `message_history` is the model's replay buffer (reactions + clarifications + library shape).
+
 **Remaining before Phase C closes:**
-1. Fill in `InterviewDetailView` in `HistoryPage.tsx` (transcript + scorecard render).
+1. **Apply the migration** (live-DB step, not yet run): from `server/`,
+   `.venv/Scripts/python.exe -m alembic upgrade head` (brings the DB to `f3b9c1d5a7e2`).
 2. **Verify live:** finish an interview → `scorecards` row written; reload → it's in History with its
-   grade; open it → transcript + remembered scorecard, and a second account 403s on `/api/interviews/{id}`.
+   grade; open it → transcript shows the ACTUAL follow-up probes (not the repeated bank question) +
+   remembered scorecard; a second account 403s on `/api/interviews/{id}`.
 3. Still deferred (own follow-up): `save_interview_summary` is implemented + registered but nothing
    calls it — a one-line wrap-up on `/api/scorecard` if History wants a summary blurb.

@@ -97,6 +97,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Table,
@@ -104,6 +105,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -464,29 +466,62 @@ class Interview(Base, TimestampMixin):
 
 
 class Turn(Base, TimestampMixin):
-    """One recorded answer — the rows `record_answer` writes and the scorecard reads back.
-    (The old `at` field is just the mixin's `created_at`; turns order by it.)
+    """One exchange — the interviewer's prompt AND the candidate's answer to it.
 
-    A REAL FOREIGN KEY, because the flow changed. Back when the MODEL chose questions it
-    could hand back an id it invented ("be-1-followup"), which is why `api.py` still has
-    `parent_question_id` to repair such ids at grade time. Since the client-driven rewrite
-    the BACKEND picks every question and records the answer under the `current_question_id`
-    it chose itself — so an id that isn't a real question can no longer reach this table,
-    and the FK is free integrity rather than a crash waiting to happen. (Consequence: the
-    scorecard groups by `question_id` directly, and the normalization retires with the JSON
-    store.)
+    THE ROW IS BORN AT ASK-TIME, COMPLETED AT ANSWER-TIME (Phase C). A turn used to be
+    written only when an answer arrived. Now it's INSERTED the moment a question or follow-up
+    is presented — with `prompt_text` filled and `answer` still NULL — and the answer UPDATEs
+    that same row when it comes back. This is what lets the transcript show the EXACT question
+    each answer responded to (a follow-up probe reads differently from its parent bank
+    question) without parsing `message_history`. `question_id` still points at the PARENT bank
+    question for both, so grouping/scoring is unchanged; `prompt_text` is what actually got
+    asked (the bank question's text, or the probe's).
 
-    Note a follow-up answer still records under its PARENT question — that's the grouping
-    behavior the scorecard depends on, and it's now enforced by the FK.
+    THIS IS THE HUMAN TRANSCRIPT, NOT THE MODEL'S MEMORY. It deliberately does NOT hold the
+    interviewer's reactions/feedback or the clarification back-and-forth — those live in
+    `interviews.message_history`, pydantic-ai's own replay buffer, which the model is fed every
+    turn. `turns` narrows the text overlap with that buffer but never replaces it: the buffer
+    carries strictly more (reactions, clarifications, the library's message shape).
+
+    `answer` IS NULLABLE, and NULL means exactly one thing: "presented, not yet answered" —
+    the OPEN turn. An empty answer is the empty STRING, not NULL, so it still closes the turn.
+    There is AT MOST ONE open turn per interview (you present one prompt and wait), enforced by
+    the partial unique index below — so `/api/answer` finds the turn to complete with a plain
+    `WHERE interview_id = ? AND answer IS NULL`, no turn id threaded through the client.
+
+    A REAL FOREIGN KEY on `question_id`, because the flow changed. Back when the MODEL chose
+    questions it could hand back an id it invented ("be-1-followup"); since the client-driven
+    rewrite the BACKEND picks every question, so an id that isn't a real question can no longer
+    reach this table — the FK is free integrity. (The scorecard groups by `question_id`
+    directly; the old normalization retired with the JSON store.)
     """
     __tablename__ = "turns"
+    __table_args__ = (
+        # AT MOST ONE open turn per interview. A partial unique index: uniqueness applies only
+        # to rows where `answer IS NULL`, so an interview may have many completed turns but only
+        # one awaiting an answer. This turns the "one prompt outstanding at a time" invariant
+        # into something the DATABASE guarantees — a second open turn (a double-submit, a logic
+        # slip) is a constraint error, not a silently ambiguous `WHERE answer IS NULL` lookup.
+        Index(
+            "uq_one_open_turn_per_interview",
+            "interview_id",
+            unique=True,
+            postgresql_where=text("answer IS NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     interview_id: Mapped[int] = mapped_column(
         ForeignKey("interviews.id", ondelete="CASCADE"), index=True
     )
     question_id: Mapped[int] = mapped_column(ForeignKey("questions.id"), index=True)
-    answer: Mapped[str] = mapped_column(Text)
+    # the EXACT text presented — the bank question's text, or the LLM's follow-up probe. This
+    # is what the transcript shows; `question.text` (via the FK) is always the PARENT bank
+    # question, which for a follow-up turn would read wrong. Nullable only so pre-Phase-C rows
+    # (written before this column existed) tolerate a NULL; the migration backfills them.
+    prompt_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # NULL = open (presented, unanswered). Set to the candidate's text (possibly "") to close.
+    answer: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     interview: Mapped[Interview] = relationship(back_populates="turns", lazy="selectin")
     question: Mapped[Question] = relationship(lazy="selectin")

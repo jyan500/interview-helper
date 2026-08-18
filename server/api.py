@@ -112,6 +112,7 @@ from tools.interview import (
     get_scorecard,
     list_interviews,
     load_interview_state,
+    open_turn,
     record_answer,
     save_interview_state,
     save_scorecard,
@@ -221,6 +222,11 @@ async def start_interview(
     # column, not a dict key — which is why a restart can't lose the candidate's place.
     await save_interview_state(interview_id, current_qid=q["id"], followups_used=0)
 
+    # OPEN the first turn: the question has been PRESENTED, no answer yet. This is the turn the
+    # candidate's first /api/answer will complete. Opening it here (rather than at answer time)
+    # is what lets the transcript record the exact prompt shown — see the Turn docstring.
+    await open_turn(interview_id, q["id"], q["text"])
+
     # present the first question verbatim (short canned lead-in; the bank text is authoritative)
     return {"interview_id": interview_id, "message": f"Let's begin. {q['text']}", "done": False}
 
@@ -273,6 +279,13 @@ async def submit_answer(
         # that vanished with the process.
         raise HTTPException(status_code=409, detail="this interview is already finished")
 
+    if not req.text.strip():
+        # Reject a blank BEFORE the LLM call: it would otherwise close the open turn with "" and
+        # spend tokens on nothing. The open turn stays open, so the candidate just answers again.
+        # (PRODUCT choice, not a null-safety one — "" is a valid non-NULL answer as far as the
+        # schema cares; drop this guard if a blank should count as an "I don't know".)
+        raise HTTPException(status_code=400, detail="answer must not be empty")
+
     #    message_history comes back RAW (plain JSON out of JSONB) — tools/interview.py has no
     #    business importing pydantic-ai. Rehydrating it into real message objects is THIS
     #    layer's job, and it's the exact inverse of the dump on the way out.
@@ -308,11 +321,12 @@ async def submit_answer(
         await save_interview_state(req.interview_id, message_history=new_history)
         return {"message": decision.reaction, "done": False}
 
-    # 4. RECORD — it's a real answer, so log it under the id the CLIENT is tracking
-    #    (current_qid). Correct BY CONSTRUCTION: the model never picked or labelled it, so it
-    #    can't be mislabelled. And `turns.question_id` is a real FOREIGN KEY now, so an id
-    #    that isn't a question can't reach the table at all — which is what retired the
-    #    `parent_question_id` normalizer this file used to carry (see /api/scorecard).
+    # 4. RECORD — it's a real answer, so COMPLETE the open turn (the one presented last, either
+    #    the bank question at start/advance or the probe we opened in the follow-up branch).
+    #    record_answer finds it by `answer IS NULL`; `current_qid` is passed as the guard that
+    #    the open turn is for the question the client thinks it's answering. Correct BY
+    #    CONSTRUCTION: the model never picked or labelled the question, so it can't be
+    #    mislabelled, and the FK means an id that isn't a question can't reach the table.
     await record_answer(req.interview_id, state["current_qid"], req.text)
 
     # 5. BRANCH. The reaction is ALWAYS shown; what follows it is the client's call — the probe
@@ -333,6 +347,11 @@ async def submit_answer(
     if decision.ask_followup and state["followups_used"] < state["max_followups"]:
         followups_used = state["followups_used"] + 1
         await save_interview_state(req.interview_id, followups_used=followups_used, message_history=new_history)
+        # OPEN the next turn — the probe, filed under the SAME parent question (current_qid), so
+        # the transcript stores the probe's text while the scorecard still groups it with the
+        # original. Opened AFTER the answer above closed the prior turn (complete-then-open),
+        # so the one-open-turn index is never violated.
+        await open_turn(req.interview_id, state["current_qid"], decision.followup)
         return {"message": f"{decision.reaction}\n\n{decision.followup}", "done": False}
 
     #    (b) ADVANCE — the CLIENT pulls the next bank question (never the model).
@@ -352,6 +371,11 @@ async def submit_answer(
         # CLIENT owns this marker (the model never announces "moving on" — it can't, it doesn't
         # know a new question is coming), so it's consistent regardless of the reaction's wording.
         await save_interview_state(req.interview_id, current_qid=q["id"], followups_used=0, message_history=new_history)
+        # OPEN the next turn for the new bank question. This is INSIDE the `status == "ok"`
+        # block on purpose: if the bank were exhausted we'd never get here, we'd fall to the END
+        # branch below — so the interview ends with its last turn COMPLETED and no dangling open
+        # turn. (That's what keeps a finished interview at zero open turns.)
+        await open_turn(req.interview_id, q["id"], q["text"])
         return {"message": f"{decision.reaction}\n\nLet's move on to the next question. {q['text']}",
                 "done": False}
 
@@ -490,6 +514,11 @@ async def scorecard(
     grades = []
     grouped: dict[str, list[str]] = {}
     for turn in turns:
+        # skip the OPEN turn (answer is None): a question that was presented but not answered
+        # yet. A finished interview has none, but grading a still-running one would otherwise try
+        # to score a NULL answer. NULL only — an empty-string answer is still a (blank) answer.
+        if turn["answer"] is None:
+            continue
         grouped.setdefault(turn["question_id"], []).append(turn["answer"])
 
     for question_id, answer_list in grouped.items():

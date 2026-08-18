@@ -78,7 +78,8 @@ export interface MyInterviewsResponse {
 // One recorded answer, as get_interview returns it (slug under "question_id", exactly as stored).
 export interface InterviewTurn {
     question_id: string;
-    answer: string;
+    question_text: string; // the exact prompt shown (bank question or follow-up probe)
+    answer: string | null; // null = the open turn (presented, not yet answered)
     at: string; // ISO timestamp
 }
 // The detail view's payload: transcript + the persisted grade (null until graded, or until the
