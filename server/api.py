@@ -1,4 +1,4 @@
-"""The FastAPI backend for the SAME agent. Phase A rewrite. SCAFFOLD — fill in the TODOs.
+"""The FastAPI backend 
 
 Concept (unchanged since Phase 3.5): a web UI is the SAME kind of edge adapter as audio.
 The agent, the tools, the templates are byte-for-byte the ones you already built — we just
@@ -250,7 +250,7 @@ async def start_interview(
 # the one new failure mode of this design, and the clarification branch is where it's easiest
 # to miss — which is why that's the worked one.
 #
-# PHASE B TODO — the route where BOTH questions get asked:
+# the route where BOTH questions get asked:
 #   - add `user_id: str = Depends(require_user)` to the signature (copy /api/interview's)
 #   - right after the load, before anything else:
 #         require_ownership(state["profile_id"], user_id)
@@ -420,7 +420,7 @@ def get_openai_client() -> AsyncOpenAI:
     return _openai_client
 
 
-# PHASE B TODO — add `user_id: str = Depends(require_user)` here too, and note this one is
+# add `user_id: str = Depends(require_user)` here too, and note this one is
 # NOT about protecting data: there's no row and no owner, so there's nothing to authorize.
 # It's about protecting your WALLET. An open transcribe endpoint is a stranger's free
 # Whisper account billed to your OPENAI_API_KEY, found by anyone who scans your deployed
@@ -473,7 +473,7 @@ async def transcribe(
 # GROUPING STAYS, for a different reason: a question plus its follow-ups is still several
 # turns under ONE id, and still deserves one grade.
 # ===========================================================================
-# PHASE B TODO — the same pair as /api/answer, and the one where forgetting the ownership
+# the same pair as /api/answer, and the one where forgetting the ownership
 # check leaks the most: this route returns somebody's entire transcript, question by question.
 #   - `user_id: str = Depends(require_user)` on the signature
 #   - after the get_interview load: require_ownership(interview["profile_id"], user_id)
@@ -594,10 +594,6 @@ async def my_interviews(user_id: str = Depends(require_user)) -> dict:
 # GUARD ORDER, same as everywhere: exists (404) -> owns (403). The scorecard read comes AFTER
 # ownership, so a stranger never learns whether an interview was even graded.
 #
-# TODO (small — the structure is here): the scorecard half only lights up once get_scorecard
-# in tools/interview.py is implemented. Until then it returns {"status": "not_found"} and this
-# route serves the transcript with `scorecard: null`, which is a legitimate state anyway (an
-# interview that was never graded). Nothing to change here when you implement it.
 # ===========================================================================
 @app.get("/api/interviews/{interview_id}")
 async def interview_detail(
