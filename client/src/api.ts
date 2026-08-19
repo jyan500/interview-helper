@@ -61,6 +61,37 @@ export interface ScorecardRequest {
     role?: string;
 }
 
+// Phase C — the History shapes. These mirror GET /api/interviews and GET /api/interviews/{id}
+// in server/api.py. `InterviewSummary` is the LIST card (no transcript — that's the detail
+// view's job); `overall` is null until the interview has been graded.
+export interface InterviewSummary {
+    interview_id: string;
+    role: string; // human-readable name ("Backend Engineer")
+    level: string; // human-readable name ("Mid level")
+    created_at: string; // ISO timestamp
+    done: boolean;
+    overall: number | null; // the grade, or null if never scored
+}
+export interface MyInterviewsResponse {
+    interviews: InterviewSummary[];
+}
+// One recorded answer, as get_interview returns it (slug under "question_id", exactly as stored).
+export interface InterviewTurn {
+    question_id: string;
+    question_text: string; // the exact prompt shown (bank question or follow-up probe)
+    answer: string | null; // null = the open turn (presented, not yet answered)
+    at: string; // ISO timestamp
+}
+// The detail view's payload: transcript + the persisted grade (null until graded, or until the
+// backend's get_scorecard read-back is implemented). The scorecard is the SAME `Scorecard` shape
+// a live grade uses, so <ScorecardView> renders it unchanged.
+export interface InterviewDetail {
+    interview_id: string;
+    turns: InterviewTurn[];
+    summary: string | null;
+    scorecard: Scorecard | null;
+}
+
 // Phase 5 robust STT — the /api/transcribe response. The REQUEST is a FormData (the recorded
 // audio blob), not a JSON body, so there's no matching request interface: fetchBaseQuery detects
 // a FormData body, leaves it un-stringified, and lets the browser set the multipart Content-Type.
@@ -194,6 +225,18 @@ export const interviewApi = createApi({
         transcribe: builder.mutation<TranscribeResponse, FormData>({
             query: (body) => ({ url: "/transcribe", method: "POST", body }),
         }),
+        // Phase C — the History LIST. A QUERY, not a mutation: it's a cacheable GET of existing
+        // rows (no side effect), the frontend mirror of the read-vs-write split the backend draws
+        // between /api/interviews and /api/interview. RTK Query caches it and re-fetches on mount,
+        // so finishing an interview and clicking History shows it without a manual refresh.
+        getMyInterviews: builder.query<MyInterviewsResponse, void>({
+            query: () => "/interviews",
+        }),
+        // Phase C — the History DETAIL: one interview by id. Also a query; the arg is the slug,
+        // interpolated into the path. Backs the drill-in transcript + remembered scorecard.
+        getInterviewDetail: builder.query<InterviewDetail, string>({
+            query: (interviewId) => `/interviews/${interviewId}`,
+        }),
     }),
 });
 
@@ -203,4 +246,6 @@ export const {
     useSubmitAnswerMutation,
     useGetScorecardMutation,
     useTranscribeMutation,
+    useGetMyInterviewsQuery,
+    useGetInterviewDetailQuery,
 } = interviewApi;

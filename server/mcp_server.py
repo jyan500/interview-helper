@@ -63,15 +63,17 @@ async def next_question(role: str, asked_ids: list[str] | None = None) -> dict:
     return await questions.next_question(role, asked_ids)
 
 
-# record_answer — a side-effecting tool (persists a turn).
-#   signature: def record_answer(session_id: str, question_id: str, answer: str) -> dict
-#   docstring: tell the model to call this AFTER the candidate answers, to log the turn.
-#   body:      return session.record_answer(session_id, question_id, answer)
+# record_answer — a side-effecting tool. Phase C: it COMPLETES the open turn (the prompt that
+# was presented, awaiting an answer) rather than inserting a new one — so a turn must already be
+# OPEN for this interview, which the backend does when it presents a question. `question_id` is
+# kept as a guard (the open turn must be for that question), not as the thing that locates it.
 @mcp.tool
 async def record_answer(interview_id: str, question_id: str, answer: str) -> dict:
     """
-        This tool records the answer that the candidate gives to a given question, as a turn
-        of the interview. `interview_id` and `question_id` are both slugs (e.g. "be-1").
+        This tool records the candidate's answer to the question currently on the table, by
+        completing the interview's open turn. `interview_id` and `question_id` are both slugs
+        (e.g. "be-1"); the answer is refused if the interview has no open turn, or its open turn
+        is for a different question.
     """
     return await interview.record_answer(interview_id, question_id, answer)
 

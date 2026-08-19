@@ -583,17 +583,90 @@ This also closes Phase A's last open check.
 mirror of `draft`/`interviewId` so a dropped session doesn't eat a half-typed answer; cosmetics in
 `SignupPage.tsx` (green box with red text, unused `React` import).
 
-### Next action: Phase C — save & list interview sessions per user
+### Phase C — ✅ COMPLETE (migration applied + follow-up transcript verified live)
 
-Nothing is blocking. `/api/scorecard` still computes-and-forgets and `save_interview_summary` is still
-never called — both were deferred here deliberately, because a saved grade needs a `user_id` to scope
-it and a History view to read it back. Both are marked `(Phase C)` in `api.py`. The shape: persist a
-`scorecards` row (+ entries + per-dimension scores, mapping each grader dimension NAME back to its
-`rubric_dimensions.id`), add `GET /api/sessions` and `GET /api/sessions/{id}`, and a History route in
-the SPA — which drops into the existing `<Route element={<ProtectedRoute />}>` block as one line.
+*Branch `list-interview-history-and-scorecard`. History list + detail done; the follow-up-transcript
+open-turn model added on top. Migration `f3b9c1d5a7e2` **applied to the live Supabase DB**, and the
+transcript was verified to show the actual follow-up probes (not the repeated bank question). Client
+`tsc --noEmit` clean; all server modules import clean; alembic chain valid.*
 
-One design fork worth deciding rather than defaulting: "list my past interviews" is a pure
-owner-scoped read, and `interviews_own` already permits exactly the right rows — so PostgREST could
-serve it with no backend code. Reasons to keep it in FastAPI anyway: one auth story instead of two,
-the scorecard needs shaping the client shouldn't do, and a History view that speaks table names
-re-couples the frontend to the schema Phase A just normalized.
+**Naming decision (resolved, not defaulted):** the routes are **`GET /api/interviews`** and
+**`GET /api/interviews/{id}`**, NOT the `/api/sessions` this section originally named. That wording
+predates Phase A's *session → interview* rename; "one word for one thing" wins, so the whole wire
+contract stays `interview`. Recorded here so it isn't re-litigated.
+
+**Design fork (resolved): the list stays in FastAPI, not PostgREST.** Reasons as noted below —
+one auth story, the scorecard needs shaping, and a History view speaking table names would
+re-couple the SPA to the schema Phase A normalized. `list_interviews` scopes by the verified uid
+in the WHERE clause (the ownership IS the query), so that route needs no separate `require_ownership`.
+
+**Backend (done, committed):**
+- **`server/tools/interview.py`** — `list_interviews(profile_id)` (owner-scoped, newest-first,
+  reads each interview's `overall` via the new 1:1 relationship), `save_scorecard(interview_id,
+  overall, answers)` (the three-level nested write — scorecard → entries → per-dimension scores —
+  resolving each grader dimension NAME to `rubric_dimensions.id`, dropping unresolved names,
+  idempotent via delete-then-insert), and `get_scorecard(interview_id)` (reads the persisted grade
+  back into the live `Scorecard` shape; recomputes `dimension_averages`, keeps the cached `overall`).
+- **`server/db/models.py`** — added `Interview.scorecard` (1:1, `uselist=False`, `viewonly=True`,
+  selectin) so the list reads the grade in one load. **No column, no migration** — pure ORM.
+- **`server/api.py`** — `GET /api/interviews` (list) and `GET /api/interviews/{id}` (transcript via
+  `get_interview` + grade via `get_scorecard`, guard order exists→owns). `POST /api/scorecard` now
+  **persists** via `save_scorecard` (500s if the store fails rather than pretending it saved).
+- **THE AGGREGATE REFACTOR (`server/tools/scoring.py`, NEW).** `grading.aggregate` lived in the LLM
+  module; reusing it from the data layer would drag `pydantic_agent` + the model into `tools/` just
+  to average numbers. Moved the arithmetic DOWN into a pure leaf module both call: `aggregate_scores(
+  pairs, dimensions=None)` takes a flat `(name, score)` stream, so `grading.aggregate` is now a thin
+  adapter (flatten `AnswerGrade`s, pass the dimension whitelist) and `get_scorecard` calls it with no
+  whitelist (persisted rows are already clean). One implementation, no LLM stack in the data layer —
+  the same `no-indirection` instinct as dropping the MCP round-trip in Phase A.
+
+**Frontend (scaffolded):**
+- **`client/src/ScorecardView.tsx` (NEW)** — extracted verbatim from `App.tsx` so the History detail
+  view reuses the SAME component; live and persisted grades share the `Scorecard` shape (the
+  persisted one just leaves per-dimension `note` empty — the schema stores only the score).
+- **`client/src/api.ts`** — `getMyInterviews` (query) + `getInterviewDetail` (query) + the
+  `InterviewSummary` / `InterviewDetail` types. Queries, not mutations: cacheable GETs.
+- **`client/src/HistoryPage.tsx` (NEW)** — LIST (role/level/date/overall, em-dash for ungraded,
+  click → detail via local `selectedId`) AND the `InterviewDetailView` drill-in (transcript +
+  `{data.scorecard && <ScorecardView card={data.scorecard} />}`) are both implemented.
+- **`client/src/main.tsx`** — `/history` route inside the `<ProtectedRoute>` block; a "View past
+  interviews" `<Link>` in `App.tsx`.
+- Drive-by: fixed the committed sign-out code's `session.user.email` (nullable per `useAuth`) to
+  `session?.user.email` so `tsc` passes.
+
+**Follow-up transcript — the OPEN-TURN model (new schema work, needs a migration applied).**
+The transcript first pulled each turn's question text from the scorecard, so an UNGRADED interview
+showed no questions. Fixed in two steps:
+1. **Question text on the turn** (no scorecard dependency): `get_interview` now returns
+   `question_text = turn.prompt_text or turn.question.text`, and `InterviewTurn` gained the field.
+2. **The real fix — a turn is now an EXCHANGE, born at ask-time.** A follow-up answer records under
+   its parent `question_id` (grouping unchanged), but the transcript showed the *parent bank
+   question* for a probe, which read confusingly. Rather than parse the probe out of
+   `message_history` (pydantic-ai JSON), a turn now stores the exact prompt and is created when the
+   question/probe is PRESENTED, completed when the answer arrives:
+   - **`turns.prompt_text`** (the exact question/probe shown) + **`turns.answer` is now NULLABLE**
+     (`NULL` = presented-but-unanswered = the "open" turn; `""` is a real blank answer and closes it).
+   - **Partial unique index `uq_one_open_turn_per_interview`** (`WHERE answer IS NULL`) makes "at
+     most one open turn per interview" a DB guarantee — so `record_answer` finds the turn to
+     complete with `WHERE interview_id=? AND answer IS NULL`, **no turn id threaded through the
+     client** (it still holds only `interview_id`).
+   - **`open_turn(interview_id, question_id, prompt_text)`** (NEW, backend-only, NOT an MCP tool):
+     called at `POST /api/interview` (first question) and in the follow-up/advance branches of
+     `/api/answer`. The advance `open_turn` is **inside** the `next_question == ok` block, so an
+     exhausted bank falls to the END branch and opens nothing — a finished interview has ZERO open
+     turns. **Complete-then-open** ordering everywhere keeps the index happy.
+   - **`record_answer(interview_id, question_id, answer)`** now COMPLETES the open turn (UPDATE, not
+     INSERT). `question_id` was kept (not strictly needed to find the turn) as a GUARD: the open
+     turn must be for that question, else refuse. MCP tool signature therefore unchanged.
+   - `/api/answer` gained an **empty-answer 400 guard** (before the LLM call); `/api/scorecard`
+     **skips `answer IS NULL`** turns; migration **`f3b9c1d5a7e2`** adds the column, makes `answer`
+     nullable, backfills `prompt_text` from `question.text`, seeds one open turn per in-progress
+     interview, and creates the index. `message_history` stays — `turns` is the human transcript,
+     `message_history` is the model's replay buffer (reactions + clarifications + library shape).
+
+**Closed:**
+1. **Migration applied** (`f3b9c1d5a7e2`, DB at head).
+2. **Verified live:** the transcript shows the ACTUAL follow-up probes (not the repeated bank
+   question).
+3. Still deferred (own follow-up): `save_interview_summary` is implemented + registered but nothing
+   calls it — a one-line wrap-up on `/api/scorecard` if History wants a summary blurb.

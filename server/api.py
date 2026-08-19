@@ -1,4 +1,4 @@
-"""The FastAPI backend for the SAME agent. Phase A rewrite. SCAFFOLD — fill in the TODOs.
+"""The FastAPI backend 
 
 Concept (unchanged since Phase 3.5): a web UI is the SAME kind of edge adapter as audio.
 The agent, the tools, the templates are byte-for-byte the ones you already built — we just
@@ -109,9 +109,13 @@ from db.engine import engine
 from tools.interview import (
     create_interview,
     get_interview,
+    get_scorecard,
+    list_interviews,
     load_interview_state,
+    open_turn,
     record_answer,
     save_interview_state,
+    save_scorecard,
 )
 from tools.questions import get_question, get_rubric, next_question
 
@@ -218,6 +222,11 @@ async def start_interview(
     # column, not a dict key — which is why a restart can't lose the candidate's place.
     await save_interview_state(interview_id, current_qid=q["id"], followups_used=0)
 
+    # OPEN the first turn: the question has been PRESENTED, no answer yet. This is the turn the
+    # candidate's first /api/answer will complete. Opening it here (rather than at answer time)
+    # is what lets the transcript record the exact prompt shown — see the Turn docstring.
+    await open_turn(interview_id, q["id"], q["text"])
+
     # present the first question verbatim (short canned lead-in; the bank text is authoritative)
     return {"interview_id": interview_id, "message": f"Let's begin. {q['text']}", "done": False}
 
@@ -241,7 +250,7 @@ async def start_interview(
 # the one new failure mode of this design, and the clarification branch is where it's easiest
 # to miss — which is why that's the worked one.
 #
-# PHASE B TODO — the route where BOTH questions get asked:
+# the route where BOTH questions get asked:
 #   - add `user_id: str = Depends(require_user)` to the signature (copy /api/interview's)
 #   - right after the load, before anything else:
 #         require_ownership(state["profile_id"], user_id)
@@ -269,6 +278,13 @@ async def submit_answer(
         # that `done` is a column somebody else can read — it wasn't, when it was a dict key
         # that vanished with the process.
         raise HTTPException(status_code=409, detail="this interview is already finished")
+
+    if not req.text.strip():
+        # Reject a blank BEFORE the LLM call: it would otherwise close the open turn with "" and
+        # spend tokens on nothing. The open turn stays open, so the candidate just answers again.
+        # (PRODUCT choice, not a null-safety one — "" is a valid non-NULL answer as far as the
+        # schema cares; drop this guard if a blank should count as an "I don't know".)
+        raise HTTPException(status_code=400, detail="answer must not be empty")
 
     #    message_history comes back RAW (plain JSON out of JSONB) — tools/interview.py has no
     #    business importing pydantic-ai. Rehydrating it into real message objects is THIS
@@ -305,11 +321,12 @@ async def submit_answer(
         await save_interview_state(req.interview_id, message_history=new_history)
         return {"message": decision.reaction, "done": False}
 
-    # 4. RECORD — it's a real answer, so log it under the id the CLIENT is tracking
-    #    (current_qid). Correct BY CONSTRUCTION: the model never picked or labelled it, so it
-    #    can't be mislabelled. And `turns.question_id` is a real FOREIGN KEY now, so an id
-    #    that isn't a question can't reach the table at all — which is what retired the
-    #    `parent_question_id` normalizer this file used to carry (see /api/scorecard).
+    # 4. RECORD — it's a real answer, so COMPLETE the open turn (the one presented last, either
+    #    the bank question at start/advance or the probe we opened in the follow-up branch).
+    #    record_answer finds it by `answer IS NULL`; `current_qid` is passed as the guard that
+    #    the open turn is for the question the client thinks it's answering. Correct BY
+    #    CONSTRUCTION: the model never picked or labelled the question, so it can't be
+    #    mislabelled, and the FK means an id that isn't a question can't reach the table.
     await record_answer(req.interview_id, state["current_qid"], req.text)
 
     # 5. BRANCH. The reaction is ALWAYS shown; what follows it is the client's call — the probe
@@ -330,6 +347,11 @@ async def submit_answer(
     if decision.ask_followup and state["followups_used"] < state["max_followups"]:
         followups_used = state["followups_used"] + 1
         await save_interview_state(req.interview_id, followups_used=followups_used, message_history=new_history)
+        # OPEN the next turn — the probe, filed under the SAME parent question (current_qid), so
+        # the transcript stores the probe's text while the scorecard still groups it with the
+        # original. Opened AFTER the answer above closed the prior turn (complete-then-open),
+        # so the one-open-turn index is never violated.
+        await open_turn(req.interview_id, state["current_qid"], decision.followup)
         return {"message": f"{decision.reaction}\n\n{decision.followup}", "done": False}
 
     #    (b) ADVANCE — the CLIENT pulls the next bank question (never the model).
@@ -349,6 +371,11 @@ async def submit_answer(
         # CLIENT owns this marker (the model never announces "moving on" — it can't, it doesn't
         # know a new question is coming), so it's consistent regardless of the reaction's wording.
         await save_interview_state(req.interview_id, current_qid=q["id"], followups_used=0, message_history=new_history)
+        # OPEN the next turn for the new bank question. This is INSIDE the `status == "ok"`
+        # block on purpose: if the bank were exhausted we'd never get here, we'd fall to the END
+        # branch below — so the interview ends with its last turn COMPLETED and no dangling open
+        # turn. (That's what keeps a finished interview at zero open turns.)
+        await open_turn(req.interview_id, q["id"], q["text"])
         return {"message": f"{decision.reaction}\n\nLet's move on to the next question. {q['text']}",
                 "done": False}
 
@@ -393,7 +420,7 @@ def get_openai_client() -> AsyncOpenAI:
     return _openai_client
 
 
-# PHASE B TODO — add `user_id: str = Depends(require_user)` here too, and note this one is
+# add `user_id: str = Depends(require_user)` here too, and note this one is
 # NOT about protecting data: there's no row and no owner, so there's nothing to authorize.
 # It's about protecting your WALLET. An open transcribe endpoint is a stranger's free
 # Whisper account billed to your OPENAI_API_KEY, found by anyone who scans your deployed
@@ -446,7 +473,7 @@ async def transcribe(
 # GROUPING STAYS, for a different reason: a question plus its follow-ups is still several
 # turns under ONE id, and still deserves one grade.
 # ===========================================================================
-# PHASE B TODO — the same pair as /api/answer, and the one where forgetting the ownership
+# the same pair as /api/answer, and the one where forgetting the ownership
 # check leaks the most: this route returns somebody's entire transcript, question by question.
 #   - `user_id: str = Depends(require_user)` on the signature
 #   - after the get_interview load: require_ownership(interview["profile_id"], user_id)
@@ -487,6 +514,11 @@ async def scorecard(
     grades = []
     grouped: dict[str, list[str]] = {}
     for turn in turns:
+        # skip the OPEN turn (answer is None): a question that was presented but not answered
+        # yet. A finished interview has none, but grading a still-running one would otherwise try
+        # to score a NULL answer. NULL only — an empty-string answer is still a (blank) answer.
+        if turn["answer"] is None:
+            continue
         grouped.setdefault(turn["question_id"], []).append(turn["answer"])
 
     for question_id, answer_list in grouped.items():
@@ -506,10 +538,17 @@ async def scorecard(
     #    already judged; this just averages).
     agg = aggregate(grades, dimensions)
 
-    # (Phase C) persist this as a `scorecards` row instead of only returning it — that's what
-    # makes the History view possible. A one-line wrap-up can also go through
-    # save_interview_summary:
-    #   await save_interview_summary(req.interview_id, f"Overall {agg['overall']}/5 ...")
+    # 5. (Phase C) PERSIST the grade as rows so it OUTLIVES this request — the whole reason the
+    #    History view can show a past interview's score without re-grading (re-paying, and
+    #    getting a different number, since the model isn't deterministic). `answers` already
+    #    carries exactly what save_scorecard reads. Persist AFTER computing, but the ownership
+    #    check that guards this write ran back at the top (require_ownership above), so a
+    #    stranger never reaches here. Idempotent: a second /api/scorecard replaces the row.
+    saved = await save_scorecard(req.interview_id, agg["overall"], answers)
+    if not saved["ok"]:
+        # the grade was computed but couldn't be stored — surface it rather than pretend it
+        # was remembered. (A role with no rubric is the realistic cause; see save_scorecard.)
+        raise HTTPException(status_code=500, detail=f"could not save scorecard: {saved['error']}")
 
     return {
         "interview_id": req.interview_id,
@@ -517,4 +556,60 @@ async def scorecard(
         "answers": answers,
         "dimension_averages": agg["dimension_averages"],
         "overall": agg["overall"],
+    }
+
+
+# ===========================================================================
+# WORKED EXAMPLE — GET /api/interviews : the signed-in user's own interview history.
+#
+# NAMING (a deliberate choice, not the build plan's literal wording): Phase C's section was
+# drafted before Phase A renamed *session -> interview* across the whole wire contract
+# (`POST /api/interview`, `interview_id`). "One word for one thing" wins, so these are
+# /api/interviews, not the plan's older /api/sessions. Same rows, consistent vocabulary.
+#
+# WHY THIS IS A GET (and a plain function, no request body): it's a cacheable READ of existing
+# rows, the HTTP mirror of an MCP *resource* vs a tool — same instinct as queries-vs-mutations
+# on the frontend. Nothing is created.
+#
+# THE ONE SECURITY LINE THAT MATTERS: the list is scoped by the VERIFIED uid from the token
+# (`user_id`), passed straight into the WHERE clause in list_interviews. There is no id in the
+# request for an attacker to tamper with — "my history" can't be widened to "someone else's"
+# because the only identity in play is the one auth.py proved. That's why this route needs no
+# separate require_ownership call: the ownership IS the query.
+# ===========================================================================
+@app.get("/api/interviews")
+async def my_interviews(user_id: str = Depends(require_user)) -> dict:
+    result = await list_interviews(user_id)
+    return {"interviews": result["interviews"]}
+
+
+# ===========================================================================
+# GET /api/interviews/{interview_id} : one past interview — its transcript AND its grade.
+#
+# This is the History DETAIL view's data: the recorded turns (get_interview, which already
+# backs the interview:// resource) plus the persisted scorecard (get_scorecard). Reusing
+# get_interview here is the payoff of it returning `profile_id` since Phase B — the SAME load
+# both reads the transcript and answers "may this caller see it?".
+#
+# GUARD ORDER, same as everywhere: exists (404) -> owns (403). The scorecard read comes AFTER
+# ownership, so a stranger never learns whether an interview was even graded.
+#
+# ===========================================================================
+@app.get("/api/interviews/{interview_id}")
+async def interview_detail(
+    interview_id: str,
+    user_id: str = Depends(require_user),
+) -> dict:
+    interview = await get_interview(interview_id)
+    if interview.get("status") != "ok":
+        raise HTTPException(status_code=404, detail="unknown interview")
+    require_ownership(interview["profile_id"], user_id)
+
+    card = await get_scorecard(interview_id)
+    return {
+        "interview_id": interview["interview_id"],
+        "turns": interview["turns"],
+        "summary": interview["summary"],
+        # null until this interview has been graded (or until get_scorecard is implemented).
+        "scorecard": card if card.get("status") == "ok" else None,
     }

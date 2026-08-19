@@ -78,6 +78,11 @@ async def main() -> None:
         #     real slug (start one: curl -X POST localhost:8000/api/interview) to see it land.
         INTERVIEW_ID = "demo"   # <- replace with a real interviews.slug
 
+        # PHASE C — record_answer now COMPLETES an OPEN turn, so this only lands if INTERVIEW_ID
+        # is a real interview whose current open turn is question be-2 (i.e. you started one and
+        # it's sitting on be-2). Otherwise you get {"ok": False, "error": "no open turn ..."} /
+        # "... does not match ...". Opening a turn is backend-only (not an MCP tool), so an
+        # external client answers turns the backend presented — it doesn't invent them.
         rec = await c.call_tool("record_answer", {
             "interview_id": INTERVIEW_ID,
             "question_id": "be-2",
