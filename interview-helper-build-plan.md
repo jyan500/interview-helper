@@ -583,12 +583,12 @@ This also closes Phase A's last open check.
 mirror of `draft`/`interviewId` so a dropped session doesn't eat a half-typed answer; cosmetics in
 `SignupPage.tsx` (green box with red text, unused `React` import).
 
-### Phase C — 🚧 IN PROGRESS (built end to end; migration + live verify remain)
+### Phase C — ✅ COMPLETE (migration applied + follow-up transcript verified live)
 
-*Branch `list-interviews`. History list + detail done; the follow-up-transcript open-turn model
-added on top (new migration `f3b9c1d5a7e2`, NOT yet applied). Client `tsc --noEmit` clean; all
-server modules import clean; alembic chain valid. Remaining: apply the migration and verify live
-against Supabase (see "Remaining before Phase C closes" below).*
+*Branch `list-interview-history-and-scorecard`. History list + detail done; the follow-up-transcript
+open-turn model added on top. Migration `f3b9c1d5a7e2` **applied to the live Supabase DB**, and the
+transcript was verified to show the actual follow-up probes (not the repeated bank question). Client
+`tsc --noEmit` clean; all server modules import clean; alembic chain valid.*
 
 **Naming decision (resolved, not defaulted):** the routes are **`GET /api/interviews`** and
 **`GET /api/interviews/{id}`**, NOT the `/api/sessions` this section originally named. That wording
@@ -664,11 +664,9 @@ showed no questions. Fixed in two steps:
      interview, and creates the index. `message_history` stays — `turns` is the human transcript,
      `message_history` is the model's replay buffer (reactions + clarifications + library shape).
 
-**Remaining before Phase C closes:**
-1. **Apply the migration** (live-DB step, not yet run): from `server/`,
-   `.venv/Scripts/python.exe -m alembic upgrade head` (brings the DB to `f3b9c1d5a7e2`).
-2. **Verify live:** finish an interview → `scorecards` row written; reload → it's in History with its
-   grade; open it → transcript shows the ACTUAL follow-up probes (not the repeated bank question) +
-   remembered scorecard; a second account 403s on `/api/interviews/{id}`.
+**Closed:**
+1. **Migration applied** (`f3b9c1d5a7e2`, DB at head).
+2. **Verified live:** the transcript shows the ACTUAL follow-up probes (not the repeated bank
+   question).
 3. Still deferred (own follow-up): `save_interview_summary` is implemented + registered but nothing
    calls it — a one-line wrap-up on `/api/scorecard` if History wants a summary blurb.
