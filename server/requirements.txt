@@ -13,6 +13,11 @@ sqlalchemy[asyncio]>=2.0,<3
 asyncpg>=0.30
 alembic>=1.13
 
+# Phase D — server-side pagination for the picker's option endpoints (/api/roles, /api/levels).
+# Provides Params (page/size query params), Page[T] response envelope, and an async-SQLAlchemy
+# `paginate(session, select_stmt, params)` that runs the COUNT + LIMIT/OFFSET for us.
+fastapi-pagination>=0.15,<0.16
+
 # Auth — verify Supabase-issued JWTs on the backend (Phase B) via the project's JWKS endpoint.
 # THE [crypto] EXTRA IS NOT OPTIONAL: bare PyJWT is pure-python and can only do HMAC (HS256).
 # Supabase signs ours with ES256 (elliptic curve), which needs the `cryptography` package, and

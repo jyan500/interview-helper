@@ -206,6 +206,11 @@ async def load_interview_state(interview_id: str) -> dict:
             "max_followups": interview.max_followups,
             "done": interview.done,
             "role": interview.role.slug,
+            # Phase D — the interview's seniority, so the ADVANCE branch of /api/answer can ask
+            # next_question for a level-appropriate question. It's the `levels.slug` ("mid"),
+            # stored on the interview at kickoff; the relationship is selectin-loaded, so this
+            # is free. (`role` above is the same idea for the role dimension.)
+            "level": interview.level.slug,
             "asked_ids": list(asked_ids),
             "message_history": interview.message_history
         }

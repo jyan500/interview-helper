@@ -10,11 +10,16 @@ statement of how the old shape maps to the new one:
       .rubric.dimensions[]              -> a rubrics row + one rubric_dimensions row each
       .questions[]                      -> a questions row (its array index becomes sort_order)
         .type                           -> a question_types row, deduped across the bank
+        .level                          -> the question's level_id, via the levels map (Phase D)
         .tags[]                         -> tags rows + question_tags pairings
 
-Two things the JSON never had, invented here because the schema needs them:
-  - LEVELS (entry/mid/senior). Phase D assigns questions to them; the rows have to exist
-    first. `rank` is what gives them an order a string column couldn't hold.
+Two things about LEVELS and SLUGS the raw bank doesn't spell out:
+  - The LEVEL ROWS (entry/mid/senior) are authored HERE, not in the bank — they're a fixed
+    ladder, and `rank` gives them an order a string column couldn't hold. Each QUESTION,
+    though, names its level in the JSON (`"level": "mid"`), and this script resolves that slug
+    to the level_id. A question with no `level` seeds unassigned (NULL). RE-RUNNING the seed
+    after adding a level to a question BACKFILLS it onto the existing row (fill-if-missing, see
+    the questions loop) — the one place this otherwise-append-only seeder updates in place.
   - SLUGS for question types, tags, and rubric dimensions — derived from their text, so
     "Technical depth / correctness" becomes "technical-depth-correctness". The slug is the
     stable identity; the name stays free to be reworded.
@@ -91,8 +96,14 @@ async def seed() -> None:
 
     async with get_session() as db:
         # --- levels: authored, not from the bank ---------------------------------------
+        # Keep each level ROW as we create/fetch it: the questions below need to turn their
+        # `level` slug ("mid") into a level_id, and this is the map that does it. (The role
+        # loop resolves its own role row inline; levels are shared across all roles, so they're
+        # resolved once, up here.)
+        levels_by_slug: dict[str, Level] = {}
         for slug, name, rank in _LEVELS:
-            _, was_new = await _get_or_create(db, Level, slug=slug, name=name, rank=rank)
+            level_row, was_new = await _get_or_create(db, Level, slug=slug, name=name, rank=rank)
+            levels_by_slug[slug] = level_row
             created["levels"] += was_new
 
         for role_slug, role_data in bank["roles"].items():
@@ -161,6 +172,19 @@ async def seed() -> None:
                     created["tags"] += was_new
                     tags.append(tag)
 
+                # --- level, resolved from the map built at the top (Phase D) -------------
+                # `level` is optional in the JSON: a question with no `level` seeds as
+                # unassigned (level_id NULL) and next_question's at-or-below filter skips it
+                # until it's given one. A `level` that names no seeded level is a bank TYPO,
+                # not a legitimate NULL — fail loudly rather than silently drop the level.
+                level_slug = q.get("level")
+                if level_slug is not None and level_slug not in levels_by_slug:
+                    raise ValueError(
+                        f"question {q['id']} has unknown level {level_slug!r} "
+                        f"(known: {sorted(levels_by_slug)})"
+                    )
+                level_row = levels_by_slug.get(level_slug) if level_slug else None
+
                 question = (
                     await db.execute(select(Question).where(Question.slug == q["id"]))
                 ).scalar_one_or_none()
@@ -170,7 +194,7 @@ async def seed() -> None:
                         role_id=role.id,
                         type_id=qtype.id,
                         text=q["text"],
-                        level_id=None,         # Phase D fills this in
+                        level_id=level_row.id if level_row else None,   # Phase D
                         sort_order=i,          # array position becomes explicit bank order
                         tags=tags,             # writes the question_tags rows
                     )
@@ -183,6 +207,16 @@ async def seed() -> None:
                     for tag in tags:
                         if tag not in question.tags:
                             question.tags.append(tag)
+                    # PHASE D BACKFILL — the deliberate exception to this seeder's "never touch
+                    # existing rows" rule. Levels are a new attribute the first seed didn't set,
+                    # so the 5 already-seeded questions have level_id NULL. FILL a missing level,
+                    # but never OVERWRITE one already assigned (that would clobber an edit the
+                    # same way re-seeding a reworded question would — which is exactly what the
+                    # get-or-create philosophy avoids). So re-running the seed after adding levels
+                    # to the JSON assigns them to the live rows, and re-running it again is a
+                    # no-op.
+                    if question.level_id is None and level_row is not None:
+                        question.level_id = level_row.id
 
         await db.commit()
 

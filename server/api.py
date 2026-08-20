@@ -82,8 +82,14 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+# fastapi-pagination — the paginated option endpoints (Phase D picker). `Params` is the
+# page/size query-param dependency, `Page[T]` the {items,total,page,size,pages} response
+# envelope, `add_pagination(app)` wires the params in once. (Verified against 0.15.16: Params
+# fields = page,size; Page fields = items,total,page,size,pages; the sqlalchemy ext's paginate
+# awaits on an AsyncSession — the repo's "check live API shapes" rule.)
+from fastapi_pagination import Page, Params, add_pagination
 from openai import AsyncOpenAI
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 # pydantic-ai owns the shape of `message_history`, so it also owns the (de)serialization.
 # Never hand-roll it: dump_python(msgs, mode="json") out, validate_python(raw) back in.
 # (Verified against pydantic-ai 2.13.0 — the repo's "check live API shapes" rule.)
@@ -117,7 +123,13 @@ from tools.interview import (
     save_interview_state,
     save_scorecard,
 )
-from tools.questions import get_question, get_rubric, next_question
+from tools.questions import (
+    get_question,
+    get_rubric,
+    list_levels,
+    list_roles,
+    next_question,
+)
 
 
 # --- LIFESPAN: the terminal loop opened `async with agent:` ONCE and ran the whole
@@ -161,6 +173,25 @@ class AnswerRequest(BaseModel):
 class ScorecardRequest(BaseModel):
     interview_id: str
     role: str = "backend-engineer"   # which rubric to grade against (matches the interview)
+
+
+# --- response models for the paginated picker endpoints (Phase D). Page[T] is generic and
+#     needs a concrete item type to know how to serialize each row: list_roles/list_levels
+#     paginate `select(Role)` / `select(Level)`, which yield ORM objects, and these schemas are
+#     what turns those rows into JSON. `from_attributes=True` lets pydantic read straight off
+#     the ORM object's attributes (role.slug, role.name) rather than needing a dict. They also
+#     pin the wire contract — exactly which columns leave the server — and show up in /docs.
+class RoleOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    slug: str
+    name: str
+
+
+class LevelOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    slug: str
+    name: str
+    rank: int
 
 
 # ===========================================================================
@@ -212,8 +243,10 @@ async def start_interview(
         raise HTTPException(status_code=400, detail=created["error"])
     interview_id = created["interview_id"]
 
-    # the CLIENT picks the first question...
-    nq = await next_question(req.role, asked_ids=[])
+    # the CLIENT picks the first question... now level-aware (Phase D): `req.seniority` is the
+    # level slug, and next_question filters the bank to questions at or below it. An entry
+    # interview and a senior one for the same role can therefore open on different questions.
+    nq = await next_question(req.role, req.seniority, asked_ids=[])
     if nq.get("status") != "ok":
         raise HTTPException(status_code=400, detail=f"no questions for role: {req.role}")
     q = nq["question"]
@@ -357,7 +390,10 @@ async def submit_answer(
     #    (b) ADVANCE — the CLIENT pulls the next bank question (never the model).
     #        `asked_ids` is no longer a list we append to and hope stays right: load_interview_state
     #        DERIVES it from the turns + the current question every time, so it can't drift.
-    nq = await next_question(state["role"], asked_ids=state["asked_ids"])
+    #        Phase D — `state["level"]` scopes selection to the interview's seniority (the same
+    #        at-or-below filter the first question used), so a mid interview never advances into a
+    #        senior-only question. The level is a column on the row, so it survives a restart too.
+    nq = await next_question(state["role"], state["level"], asked_ids=state["asked_ids"])
     if nq["status"] == "ok":
         q = nq["question"]
         # write back: `current_qid=q["id"]`, `followups_used=0` (the probe budget is
@@ -613,3 +649,45 @@ async def interview_detail(
         # null until this interview has been graded (or until get_scorecard is implemented).
         "scorecard": card if card.get("status") == "ok" else None,
     }
+
+
+# ===========================================================================
+# PHASE D — GET /api/roles + GET /api/levels : the picker's options.
+#
+# The SPA can't hardcode the role/level lists without duplicating vocabulary that lives in the
+# DB — the exact "a copy that can silently disagree" trap models.py argues against. So the
+# picker READS them from here instead: two tiny cacheable GETs, the same read-vs-write instinct
+# as /api/interviews. Each returns {slug, name} per row — the slug is what the client sends
+# back to POST /api/interview, the name is what it shows a person.
+#
+# WHY require_user even though this is public-ish vocab: the picker only appears once you're
+# signed in (it's behind <ProtectedRoute>), so gating these matches every other route and costs
+# nothing. They spend no money and touch no user data — this is consistency, not protection.
+# ===========================================================================
+# `Params = Depends()` is the fastapi-pagination dependency — FastAPI fills page/size from the
+# query string (?page=&size=), so the client controls the window. `q` is OUR extra search
+# filter, threaded into the tool. `response_model=Page[RoleOut]` is what coerces the ORM rows
+# the tool returns into JSON (see RoleOut). The route bodies stay one line — all the paging
+# lives in list_roles/list_levels.
+@app.get("/api/roles", response_model=Page[RoleOut])
+async def roles(
+    params: Params = Depends(),
+    q: str | None = None,
+    user_id: str = Depends(require_user),
+):
+    return await list_roles(params, search=q)
+
+
+@app.get("/api/levels", response_model=Page[LevelOut])
+async def levels(
+    params: Params = Depends(),
+    q: str | None = None,
+    user_id: str = Depends(require_user),
+):
+    return await list_levels(params, search=q)
+
+
+# Wire fastapi-pagination into the app ONCE, after every paginated route is declared. This is
+# what registers the page/size query params and lets `Page[T]` responses serialize. Call it
+# last so it sees the routes above.
+add_pagination(app)

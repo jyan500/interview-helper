@@ -4,6 +4,8 @@ import {
     useStartInterviewMutation,
     useSubmitAnswerMutation,
     useGetScorecardMutation,
+    useGetRolesQuery,
+    useGetLevelsQuery,
     type Scorecard,
 } from "./api";
 import ScorecardView from "./ScorecardView";
@@ -26,6 +28,10 @@ export default function App() {
     const [interviewId, setInterviewId] = useState<string | null>(null);
     const [transcript, setTranscript] = useState<Line[]>([]);
     const [draft, setDraft] = useState("");
+    // Phase D — the candidate's picks BEFORE the interview starts. Both are slugs (what the
+    // backend wants); "" until the option lists load and the effects below seed a default.
+    const [selectedRole, setSelectedRole] = useState("");
+    const [selectedLevel, setSelectedLevel] = useState("");
     //
     // 1. A SIGN-OUT AFFORDANCE. `const { session, signOut } = useAuth()` (from
     //    ./auth/AuthProvider) gives you `session.user.email` to show and `signOut` to call.
@@ -51,6 +57,25 @@ export default function App() {
     const [submitAnswer, { isLoading: answering }] = useSubmitAnswerMutation();
     const [getScorecard, { isLoading: scoring }] = useGetScorecardMutation();
 
+    // Phase D — the picker's options. QUERY hooks (not mutations): they fire on mount and cache,
+    // so the two <select>s below populate from the DB vocab without a manual fetch.
+    const { data: rolesData } = useGetRolesQuery();
+    const { data: levelsData } = useGetLevelsQuery();
+
+    // Seed a default selection the moment each list arrives, so "Start" is valid without the
+    // user touching a dropdown. Guarded on the empty string so it runs ONCE and never fights a
+    // choice the user has since made. (levels come back rank-ordered, so [0] is "entry".)
+    useEffect(() => {
+        if (!selectedRole && rolesData?.roles.length) {
+            setSelectedRole(rolesData.roles[0].slug);
+        }
+    }, [rolesData, selectedRole]);
+    useEffect(() => {
+        if (!selectedLevel && levelsData?.levels.length) {
+            setSelectedLevel(levelsData.levels[0].slug);
+        }
+    }, [levelsData, selectedLevel]);
+
     // THE SEAM, made literal: both hooks return the SAME { supported, listening, start, stop }
     // contract, so swapping the INPUT edge adapter is a one-line change and nothing below moves.
     //   useSpeechRecognition — Phase 4, browser Web Speech API (Chrome-only, audio -> Google)
@@ -75,11 +100,13 @@ export default function App() {
         }
     }, [voices, selectedVoiceURI]);
 
-    // WORKED EXAMPLE — start the interview (drives POST /api/interview).
+    // WORKED EXAMPLE — start the interview (drives POST /api/interview). Phase D: the trigger
+    // now takes the picked {role, seniority} (both slugs) instead of no args — that choice is
+    // what makes the interview role- and level-scoped from its very first question.
     async function handleStart() {
         // .unwrap() returns the payload on success or THROWS on error (unlike the hook's
         // result object, which you'd have to inspect). Convenient with async/await.
-        const res = await startInterview().unwrap();
+        const res = await startInterview({ role: selectedRole, seniority: selectedLevel }).unwrap();
         setInterviewId(res.interview_id);
         setTranscript([{ who: "interviewer", text: res.message }]);
         speak(res.message)
@@ -129,13 +156,42 @@ export default function App() {
             }} className="ml-2 rounded-md bg-slate-800 px-4 py-2 font-medium text-white transition hover:bg-slate-700 disabled:opacity-50">Signout</button>
 
             {interviewId === null ? (
-                <button
-                    onClick={handleStart}
-                    disabled={starting}
-                    className="rounded-md bg-slate-800 px-4 py-2 font-medium text-white transition hover:bg-slate-700 disabled:opacity-50"
-                >
-                    {starting ? "Starting…" : "Start interview"}
-                </button>
+                <div className="space-y-4">
+                    {/* WORKED EXAMPLE — the ROLE picker. A controlled <select>: its value is the
+                        state, onChange writes the chosen SLUG back. Options come straight from the
+                        cached getRoles query — value is the slug we send, the label is the name. */}
+                    <label className="block">
+                        <span className="mb-1 block text-sm font-medium text-slate-700">Role</span>
+                        <select
+                            value={selectedRole}
+                            onChange={(e) => setSelectedRole(e.target.value)}
+                            className="w-full rounded-md border border-slate-300 p-2 focus:border-slate-500 focus:outline-none"
+                        >
+                            {rolesData?.roles.map((r) => (
+                                <option key={r.slug} value={r.slug}>{r.name}</option>
+                            ))}
+                        </select>
+                    </label>
+
+                    {/* TODO (Phase D) — the LEVEL picker, a near-copy of the role one above. Write a
+                        second <label>/<select> that:
+                          - binds `value={selectedLevel}` and `onChange` -> setSelectedLevel(e.target.value)
+                          - maps over `levelsData?.levels` for its <option>s (value = lvl.slug,
+                            label = lvl.name). They arrive rank-ordered, so entry/mid/senior render
+                            top-to-bottom with no sorting on your part.
+                        Until you add it, selectedLevel is defaulted to "entry" by the effect above,
+                        so Start still works — this control just lets the user change it. */}
+
+                    <button
+                        onClick={handleStart}
+                        // disabled until BOTH picks resolve — guards the brief moment before the
+                        // option lists load and the defaults seed (selectedRole/Level still "").
+                        disabled={starting || !selectedRole || !selectedLevel}
+                        className="rounded-md bg-slate-800 px-4 py-2 font-medium text-white transition hover:bg-slate-700 disabled:opacity-50"
+                    >
+                        {starting ? "Starting…" : "Start interview"}
+                    </button>
+                </div>
             ) : (
                 <>
                     <ul className="space-y-3">

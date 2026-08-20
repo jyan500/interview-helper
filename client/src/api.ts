@@ -25,6 +25,30 @@ export interface InterviewResponse {
     interview_id: string;
     message: string; // the first interview question
 }
+// Phase D — the kickoff now carries the candidate's choices. Both are SLUGS (the DB's
+// vocabulary), mirroring StartRequest in server/api.py: `role` = a roles.slug, `seniority` =
+// a levels.slug ("mid"). The backend defaults both, but the picker always sends them.
+export interface StartInterviewRequest {
+    role: string;
+    seniority: string;
+}
+// Phase D — the picker's options, from GET /api/roles and GET /api/levels. Each row pairs the
+// slug the client sends back with the name it shows the user (see list_roles/list_levels).
+export interface RoleOption {
+    slug: string;
+    name: string;
+}
+export interface LevelOption {
+    slug: string;
+    name: string;
+    rank: number; // entry(1) < mid(2) < senior(3) — the picker renders in this order
+}
+export interface RolesResponse {
+    roles: RoleOption[];
+}
+export interface LevelsResponse {
+    levels: LevelOption[];
+}
 export interface AnswerResponse {
     message: string; // feedback + the next question
     done?: boolean; // true once the client-driven loop exhausts the question bank
@@ -208,8 +232,11 @@ export const interviewApi = createApi({
         // CREATES server-side state — a row in `interviews` (a side effect). Rule of thumb:
         // queries = cacheable reads (GET), mutations = writes/actions (POST/PUT/DELETE). Same
         // tools-vs-resources instinct as the MCP server, one layer up.
-        startInterview: builder.mutation<InterviewResponse, void>({
-            query: () => ({ url: "/interview", method: "POST" }),
+        // Phase D — the second type param went from `void` to StartInterviewRequest: the
+        // mutation now takes the picked {role, seniority} and sends it as the POST body, so the
+        // trigger is called `startInterview({ role, seniority })` instead of `startInterview()`.
+        startInterview: builder.mutation<InterviewResponse, StartInterviewRequest>({
+            query: (body) => ({ url: "/interview", method: "POST", body }),
         }),
         submitAnswer: builder.mutation<AnswerResponse, AnswerRequest>({
             query: (body) => ({ url: "/answer", method: "POST", body }),
@@ -237,6 +264,15 @@ export const interviewApi = createApi({
         getInterviewDetail: builder.query<InterviewDetail, string>({
             query: (interviewId) => `/interviews/${interviewId}`,
         }),
+        // Phase D — the picker's option lists. QUERIES (cacheable GETs of slow-changing vocab),
+        // same read-vs-write instinct as getMyInterviews. RTK Query caches these, so the two
+        // <select>s populate once and don't refetch on every render.
+        getRoles: builder.query<RolesResponse, void>({
+            query: () => "/roles",
+        }),
+        getLevels: builder.query<LevelsResponse, void>({
+            query: () => "/levels",
+        }),
     }),
 });
 
@@ -248,4 +284,6 @@ export const {
     useTranscribeMutation,
     useGetMyInterviewsQuery,
     useGetInterviewDetailQuery,
+    useGetRolesQuery,
+    useGetLevelsQuery,
 } = interviewApi;
