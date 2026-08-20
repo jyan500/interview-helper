@@ -28,7 +28,10 @@ Quick test once filled in (from server/):
 from __future__ import annotations
 
 from fastapi_pagination import Params
-from fastapi_pagination.ext.sqlalchemy import paginate
+# `apaginate` is the ASYNC entry point (0.15.16 deprecated calling `paginate` on an AsyncSession
+# in favour of it; it's removed in 0.16). Same contract — (session, select_stmt, params) ->
+# Page(items, total, page, size, pages) — just the coroutine the async engine needs.
+from fastapi_pagination.ext.sqlalchemy import apaginate
 from sqlalchemy import select
 
 from db.engine import get_session
@@ -71,7 +74,7 @@ async def list_roles(params: Params, search: str | None = None):
             # finds "Backend engineer". Applied to the statement BEFORE paginate, so the COUNT
             # it runs counts only the matches — pagination is over the filtered set.
             stmt = stmt.where(Role.name.ilike(f"%{search}%"))
-        return await paginate(db, stmt, params)
+        return await apaginate(db, stmt, params)
 
 
 async def get_rubric(role: str) -> dict:
@@ -167,7 +170,7 @@ async def list_levels(params: Params, search: str | None = None):
         stmt = select(Level).order_by(Level.rank)
         if search:
             stmt = stmt.where(Level.name.ilike(f"%{search}%"))
-        return await paginate(db, stmt, params)
+        return await apaginate(db, stmt, params)
 
 
 

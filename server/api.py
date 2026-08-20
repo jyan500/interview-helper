@@ -84,10 +84,11 @@ from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 # fastapi-pagination — the paginated option endpoints (Phase D picker). `Params` is the
 # page/size query-param dependency, `Page[T]` the {items,total,page,size,pages} response
-# envelope, `add_pagination(app)` wires the params in once. (Verified against 0.15.16: Params
-# fields = page,size; Page fields = items,total,page,size,pages; the sqlalchemy ext's paginate
-# awaits on an AsyncSession — the repo's "check live API shapes" rule.)
-from fastapi_pagination import Page, Params, add_pagination
+# envelope. (Verified against 0.15.16: Params fields = page,size; Page fields =
+# items,total,page,size,pages; the async ext's `apaginate` awaits on an AsyncSession. Note
+# `add_pagination` is intentionally NOT imported — see the note at the bottom of this file for
+# why it breaks on FastAPI 0.139 and why we don't need it.)
+from fastapi_pagination import Page, Params
 from openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict
 # pydantic-ai owns the shape of `message_history`, so it also owns the (de)serialization.
@@ -687,7 +688,13 @@ async def levels(
     return await list_levels(params, search=q)
 
 
-# Wire fastapi-pagination into the app ONCE, after every paginated route is declared. This is
-# what registers the page/size query params and lets `Page[T]` responses serialize. Call it
-# last so it sees the routes above.
-add_pagination(app)
+# NOTE — deliberately NOT calling `add_pagination(app)`. In fastapi-pagination 0.15.16 that helper
+# rebuilds every route to inject the page/size params via a contextvar, and its rebuild calls a
+# FastAPI internal (`get_body_field(body_params=...)`) whose signature changed in FastAPI 0.139 —
+# so `add_pagination` raises at import on our version. We don't need it: both routes declare
+# `params: Params = Depends()` explicitly (so page/size are read from the query the normal way)
+# and pass that `params` straight into `apaginate(...)`. `add_pagination` only matters for the
+# IMPLICIT form (`apaginate(db, stmt)` with no params, pulled from the contextvar it installs),
+# which we never use. `Page[T]` is a plain pydantic model, so it serializes as a response_model
+# on its own. (If a future upgrade aligns the versions, add it back to also surface page/size in
+# the OpenAPI docs — cosmetic here.)

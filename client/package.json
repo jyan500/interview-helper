@@ -17,6 +17,8 @@
     "react-hook-form": "^7.85.0",
     "react-redux": "^9.1.2",
     "react-router": "^7.18.2",
+    "react-select": "^5.10.2",
+    "react-select-async-paginate": "^0.7.11",
     "tailwindcss": "^4.3.3"
   },
   "devDependencies": {
