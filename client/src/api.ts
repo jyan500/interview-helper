@@ -34,20 +34,30 @@ export interface StartInterviewRequest {
 }
 // Phase D — the picker's options, from GET /api/roles and GET /api/levels. Each row pairs the
 // slug the client sends back with the name it shows the user (see list_roles/list_levels).
-export interface RoleOption {
+export interface RolePageItem {
     slug: string;
     name: string;
 }
-export interface LevelOption {
+export interface LevelPageItem {
     slug: string;
     name: string;
     rank: number; // entry(1) < mid(2) < senior(3) — the picker renders in this order
 }
-export interface RolesResponse {
-    roles: RoleOption[];
+// The server-side pagination envelope, mirroring fastapi-pagination's Page[T] (see api.py's
+// Page[RoleOut] / Page[LevelOut] response models). The picker's loadOptions reads `items` for the
+// current page and derives "is there another page?" from page/size/total.
+export interface Page<T> {
+    items: T[];
+    total: number;
+    page: number;
+    size: number;
+    pages: number;
 }
-export interface LevelsResponse {
-    levels: LevelOption[];
+// The query arg for the paginated option endpoints: an optional search term (`q`) and 1-based
+// page. Both optional — omitting them asks for page 1 unfiltered.
+export interface OptionPageQuery {
+    q?: string;
+    page?: number;
 }
 export interface AnswerResponse {
     message: string; // feedback + the next question
@@ -264,14 +274,16 @@ export const interviewApi = createApi({
         getInterviewDetail: builder.query<InterviewDetail, string>({
             query: (interviewId) => `/interviews/${interviewId}`,
         }),
-        // Phase D — the picker's option lists. QUERIES (cacheable GETs of slow-changing vocab),
-        // same read-vs-write instinct as getMyInterviews. RTK Query caches these, so the two
-        // <select>s populate once and don't refetch on every render.
-        getRoles: builder.query<RolesResponse, void>({
-            query: () => "/roles",
+        // Phase D — the picker's option lists, now PAGINATED + SEARCHABLE. Still queries
+        // (cacheable GETs of slow-changing vocab), but the arg is { q, page }: the AsyncPaginate
+        // select calls these imperatively from inside its loadOptions — once per keystroke/scroll —
+        // rather than once on mount. That's why the LAZY hooks are exported below: the picker owns
+        // WHEN to fetch. RTK Query still caches per distinct arg, so re-scrolling a page is free.
+        getRoles: builder.query<Page<RolePageItem>, OptionPageQuery>({
+            query: ({ q = "", page = 1 }) => `/roles?q=${encodeURIComponent(q)}&page=${page}`,
         }),
-        getLevels: builder.query<LevelsResponse, void>({
-            query: () => "/levels",
+        getLevels: builder.query<Page<LevelPageItem>, OptionPageQuery>({
+            query: ({ q = "", page = 1 }) => `/levels?q=${encodeURIComponent(q)}&page=${page}`,
         }),
     }),
 });
@@ -284,6 +296,9 @@ export const {
     useTranscribeMutation,
     useGetMyInterviewsQuery,
     useGetInterviewDetailQuery,
-    useGetRolesQuery,
-    useGetLevelsQuery,
+    // LAZY variants: the picker triggers these imperatively inside loadOptions (see App.tsx),
+    // not on mount. useLazy* returns [trigger, result] where trigger(arg) returns a promise you
+    // can .unwrap() — exactly what an async loadOptions needs.
+    useLazyGetRolesQuery,
+    useLazyGetLevelsQuery,
 } = interviewApi;

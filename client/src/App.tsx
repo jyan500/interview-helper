@@ -1,13 +1,16 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
+import { useForm } from "react-hook-form";
 import {
     useStartInterviewMutation,
     useSubmitAnswerMutation,
     useGetScorecardMutation,
-    useGetRolesQuery,
-    useGetLevelsQuery,
+    useLazyGetRolesQuery,
+    useLazyGetLevelsQuery,
     type Scorecard,
 } from "./api";
+import { ControlledAsyncPaginateSelect } from "./components/ControlledAsyncPaginateSelect";
+import type { SelectOption } from "./components/AsyncPaginateSelect";
 import ScorecardView from "./ScorecardView";
 import {
     speak,
@@ -20,6 +23,15 @@ import { useAuth } from "./auth/AuthProvider"
 
 type Line = { who: "interviewer" | "you"; text: string };
 
+// Phase D — the kickoff form's shape. Each field holds react-select's Option ({value: slug,
+// label: name}) or null until picked; the submit handler unwraps `.value` to the slug the
+// backend wants. Kept as Option (not a bare slug) so the async select can show the chosen
+// label without re-fetching it.
+type StartFormValues = {
+    role: SelectOption | null;
+    level: SelectOption | null;
+};
+
 export default function App() {
     // The BROWSER is the loop now (build-plan Phase 3.5). React holds ONLY what it renders:
     // the interview id and the visible transcript. The agent's message_history stays on the
@@ -28,10 +40,6 @@ export default function App() {
     const [interviewId, setInterviewId] = useState<string | null>(null);
     const [transcript, setTranscript] = useState<Line[]>([]);
     const [draft, setDraft] = useState("");
-    // Phase D — the candidate's picks BEFORE the interview starts. Both are slugs (what the
-    // backend wants); "" until the option lists load and the effects below seed a default.
-    const [selectedRole, setSelectedRole] = useState("");
-    const [selectedLevel, setSelectedLevel] = useState("");
     //
     // 1. A SIGN-OUT AFFORDANCE. `const { session, signOut } = useAuth()` (from
     //    ./auth/AuthProvider) gives you `session.user.email` to show and `signOut` to call.
@@ -57,24 +65,19 @@ export default function App() {
     const [submitAnswer, { isLoading: answering }] = useSubmitAnswerMutation();
     const [getScorecard, { isLoading: scoring }] = useGetScorecardMutation();
 
-    // Phase D — the picker's options. QUERY hooks (not mutations): they fire on mount and cache,
-    // so the two <select>s below populate from the DB vocab without a manual fetch.
-    const { data: rolesData } = useGetRolesQuery();
-    const { data: levelsData } = useGetLevelsQuery();
+    // Phase D — the kickoff form. React Hook Form owns the role/level selection state (replacing
+    // the old useState + defaulting effects); mode "onChange" keeps formState.isValid live so the
+    // Start button can enable the instant both required fields are picked.
+    const { control, handleSubmit, formState } = useForm<StartFormValues>({
+        defaultValues: { role: null, level: null },
+        mode: "onChange",
+    });
 
-    // Seed a default selection the moment each list arrives, so "Start" is valid without the
-    // user touching a dropdown. Guarded on the empty string so it runs ONCE and never fights a
-    // choice the user has since made. (levels come back rank-ordered, so [0] is "entry".)
-    useEffect(() => {
-        if (!selectedRole && rolesData?.roles.length) {
-            setSelectedRole(rolesData.roles[0].slug);
-        }
-    }, [rolesData, selectedRole]);
-    useEffect(() => {
-        if (!selectedLevel && levelsData?.levels.length) {
-            setSelectedLevel(levelsData.levels[0].slug);
-        }
-    }, [levelsData, selectedLevel]);
+    // Phase D — the picker's data source. LAZY query triggers, handed straight to the two selects
+    // as their `fetchPage`: the AsyncPaginateSelect calls the trigger imperatively (per
+    // keystroke/scroll) and owns the paginate/map logic itself. We only inject WHICH endpoint.
+    const [triggerRoles] = useLazyGetRolesQuery();
+    const [triggerLevels] = useLazyGetLevelsQuery();
 
     // THE SEAM, made literal: both hooks return the SAME { supported, listening, start, stop }
     // contract, so swapping the INPUT edge adapter is a one-line change and nothing below moves.
@@ -100,13 +103,16 @@ export default function App() {
         }
     }, [voices, selectedVoiceURI]);
 
-    // WORKED EXAMPLE — start the interview (drives POST /api/interview). Phase D: the trigger
-    // now takes the picked {role, seniority} (both slugs) instead of no args — that choice is
-    // what makes the interview role- and level-scoped from its very first question.
-    async function handleStart() {
+    // WORKED EXAMPLE — start the interview (drives POST /api/interview). Phase D: RHF's
+    // handleSubmit hands us the validated form values, so we unwrap each Option to its slug and
+    // send {role, seniority} — that choice is what makes the interview role- and level-scoped from
+    // its very first question. `required` validation guarantees both are set; the guard just
+    // narrows SelectOption | null to SelectOption for TypeScript.
+    async function onStart({ role, level }: StartFormValues) {
+        if (!role || !level) return;
         // .unwrap() returns the payload on success or THROWS on error (unlike the hook's
         // result object, which you'd have to inspect). Convenient with async/await.
-        const res = await startInterview({ role: selectedRole, seniority: selectedLevel }).unwrap();
+        const res = await startInterview({ role: role.value, seniority: level.value }).unwrap();
         setInterviewId(res.interview_id);
         setTranscript([{ who: "interviewer", text: res.message }]);
         speak(res.message)
@@ -156,42 +162,43 @@ export default function App() {
             }} className="ml-2 rounded-md bg-slate-800 px-4 py-2 font-medium text-white transition hover:bg-slate-700 disabled:opacity-50">Signout</button>
 
             {interviewId === null ? (
-                <div className="space-y-4">
-                    {/* WORKED EXAMPLE — the ROLE picker. A controlled <select>: its value is the
-                        state, onChange writes the chosen SLUG back. Options come straight from the
-                        cached getRoles query — value is the slug we send, the label is the name. */}
+                // Phase D — the kickoff FORM. RHF's handleSubmit(onStart) runs onStart only when
+                // validation passes, so the two required selects gate the whole thing. Each
+                // ControlledAsyncPaginateSelect is the same component with a different endpoint
+                // trigger injected as `fetchPage` — the role/level difference is ONLY that.
+                <form onSubmit={handleSubmit(onStart)} className="space-y-4">
                     <label className="block">
                         <span className="mb-1 block text-sm font-medium text-slate-700">Role</span>
-                        <select
-                            value={selectedRole}
-                            onChange={(e) => setSelectedRole(e.target.value)}
-                            className="w-full rounded-md border border-slate-300 p-2 focus:border-slate-500 focus:outline-none"
-                        >
-                            {rolesData?.roles.map((r) => (
-                                <option key={r.slug} value={r.slug}>{r.name}</option>
-                            ))}
-                        </select>
+                        <ControlledAsyncPaginateSelect
+                            control={control}
+                            name="role"
+                            rules={{ required: true }}
+                            fetchPage={triggerRoles}
+                            placeholder="Search roles…"
+                        />
                     </label>
 
-                    {/* TODO (Phase D) — the LEVEL picker, a near-copy of the role one above. Write a
-                        second <label>/<select> that:
-                          - binds `value={selectedLevel}` and `onChange` -> setSelectedLevel(e.target.value)
-                          - maps over `levelsData?.levels` for its <option>s (value = lvl.slug,
-                            label = lvl.name). They arrive rank-ordered, so entry/mid/senior render
-                            top-to-bottom with no sorting on your part.
-                        Until you add it, selectedLevel is defaulted to "entry" by the effect above,
-                        so Start still works — this control just lets the user change it. */}
+                    <label className="block">
+                        <span className="mb-1 block text-sm font-medium text-slate-700">Level</span>
+                        <ControlledAsyncPaginateSelect
+                            control={control}
+                            name="level"
+                            rules={{ required: true }}
+                            fetchPage={triggerLevels}
+                            placeholder="Search levels…"
+                        />
+                    </label>
 
                     <button
-                        onClick={handleStart}
-                        // disabled until BOTH picks resolve — guards the brief moment before the
-                        // option lists load and the defaults seed (selectedRole/Level still "").
-                        disabled={starting || !selectedRole || !selectedLevel}
+                        type="submit"
+                        // disabled until BOTH required selects are valid — no defaulting anymore,
+                        // an explicit pick is required (cleaner with async-loaded options).
+                        disabled={starting || !formState.isValid}
                         className="rounded-md bg-slate-800 px-4 py-2 font-medium text-white transition hover:bg-slate-700 disabled:opacity-50"
                     >
                         {starting ? "Starting…" : "Start interview"}
                     </button>
-                </div>
+                </form>
             ) : (
                 <>
                     <ul className="space-y-3">
