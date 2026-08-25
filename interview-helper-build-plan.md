@@ -670,3 +670,80 @@ showed no questions. Fixed in two steps:
    question).
 3. Still deferred (own follow-up): `save_interview_summary` is implemented + registered but nothing
    calls it — a one-line wrap-up on `/api/scorecard` if History wants a summary blurb.
+
+### Phase D — ✅ COMPLETE (seniority-aware questions + a paginated role/level picker)
+
+*Branch `questions-by-level`. Backend level-filtering verified via `python -m tools.questions`
+smoke test; the paginated option endpoints verified returning the `Page` envelope; client
+`npx tsc --noEmit` clean.*
+
+**The idea:** interview questions and interviewing are now LEVEL-AWARE (entry/mid/senior), with
+**at-or-below-by-rank** semantics — a senior interview draws entry + mid + senior questions, a mid
+interview entry + mid, an entry interview only entry. `levels.rank` is the column that makes "at or
+below" orderable; a plain string level couldn't express it. The 5 seed questions were assigned
+starter levels (be-1 entry, be-2 senior, be-3 mid, pm-1 entry, pm-2 mid); the bank author adds more.
+
+**Backend — level filtering.**
+- **`server/tools/questions.py`** — `next_question(role, level=None, asked_ids=None)`. `level` is
+  OPTIONAL (defaults None = no filter = pre-Phase-D behaviour, so the MCP tool, `mcp_client_demo.py`,
+  and the smoke test keep working). When a level is passed, it resolves the `levels` row, guards an
+  unknown slug (`not_found` envelope), and filters `Question.level_id.in_(select(Level.id).where(
+  Level.rank <= level_row.rank))`. A question with `level_id` NULL has no rank and is EXCLUDED — an
+  unleveled question isn't in any level's set until assigned one.
+- **`server/mcp_server.py`** — the `next_question` MCP wrapper gained the `level` param, delegating on.
+- **`server/tools/interview.py`** — `load_interview_state` returns `level` (the slug), so `/api/answer`'s
+  advance branch can filter `next_question` by the interview's level, not just its role.
+- **`server/api.py`** — `POST /api/interview` threads `req.seniority` into the first `next_question`;
+  the advance branch threads `state["level"]`.
+- **`server/db/seed.py`** — resolves each question's `level` slug → `level_id`, raises on an unknown
+  level, backfills existing rows. **`server/data/questions.json`** — each question gained a `level`.
+
+**Backend — the picker's option endpoints (server-side pagination).**
+- **New dep `fastapi-pagination`** (`>=0.15,<0.16`). Provides `Params` (page/size query params),
+  the `Page[T]` response envelope, and `apaginate(session, stmt, params)` (the ASYNC ext entry point
+  — `paginate` is deprecated for AsyncSession in 0.15.16, removed in 0.16) that runs the COUNT +
+  LIMIT/OFFSET. The FastAPI/async-SQLAlchemy analog of the Node paginate plugins.
+- **`list_roles(params, search=None)` / `list_levels(params, search=None)`** build the statement
+  (our ordering + optional `ilike` search on name) and hand it to `apaginate`. **Division of labour:**
+  the SEARCH is ours (a domain decision), the PAGING/COUNT is the library's — no hand-written
+  `.limit()/.offset()`. Only scalar columns are read downstream, so serialization after the session
+  closes is detached-safe.
+- **`server/api.py`** — `RoleOut {slug,name}` / `LevelOut {slug,name,rank}` Pydantic models
+  (`model_config = from_attributes` coerces the ORM rows); `GET /api/roles` → `Page[RoleOut]` and
+  `GET /api/levels` → `Page[LevelOut]`, each taking `params: Params = Depends()` + our `q` +
+  `require_user`. **`add_pagination(app)` is deliberately NOT called** — it breaks on import against
+  FastAPI 0.139 (`get_body_field() unexpected kwarg 'body_params'`), and it isn't needed: `Params` is
+  passed explicitly to `apaginate` and declared explicitly as a route dependency. A NOTE in api.py
+  records this so it isn't "helpfully" re-added.
+
+**Frontend — a reusable async, paginated select + a separate RHF wrapper.**
+- **New deps** `react-select` + `react-select-async-paginate` (both installed explicitly; npm 6
+  doesn't pull peer deps, same gotcha as react-router).
+- **`client/src/components/AsyncPaginateSelect.tsx` (NEW)** — a reusable, RHF-AGNOSTIC select that
+  owns the WHOLE pagination dance internally (cursor threading, row→Option mapping, `hasMore`). A
+  caller differentiates one instance from another by injecting the ENDPOINT — a lazy RTK Query
+  trigger passed as `fetchPage` — and nothing else. Speaks react-select's native `{value,label}`
+  Option shape so the chosen option carries its own label (async loading can't guarantee it's in the
+  currently-loaded page to look up). *(Design note: the loadOptions closure was first written at the
+  call site, then moved INSIDE the component at the user's direction — the caller injects the endpoint
+  trigger, the component builds loadOptions from it. Centralizes fetch/paginate/map in one place.)*
+- **`client/src/components/ControlledAsyncPaginateSelect.tsx` (NEW)** — the React Hook Form
+  integration, kept SEPARATE (the separation-of-concerns the user asked for). Generic over the form
+  (`<TForm extends FieldValues>`), wraps the select in a `<Controller>` that supplies
+  value/onChange/onBlur; forwards `fetchPage` + the rest through. The one type assertion at the
+  boundary: the field value is asserted `SelectOption | null` (the wrapper's contract is that `name`
+  points at such a field).
+- **`client/src/api.ts`** — `getRoles`/`getLevels` are now `builder.query<Page<T>, {q?,page?}>` hitting
+  `/roles?q=&page=` / `/levels?q=&page=`; a generic `Page<T>` type + `RolePageItem`/`LevelPageItem`
+  mirror the backend envelope. The **LAZY** hooks (`useLazyGetRolesQuery`/`useLazyGetLevelsQuery`) are
+  exported — the select calls the trigger imperatively inside its loadOptions, not on mount.
+- **`client/src/App.tsx`** — the useState picker (+ two defaulting effects + raw `<select>`s) is
+  REPLACED by a React Hook Form `<form>` over `StartFormValues = {role, level: SelectOption | null}`,
+  `mode: "onChange"`. Two `ControlledAsyncPaginateSelect`s (role + level), each handed its lazy
+  trigger as `fetchPage`, `rules={{ required: true }}`. Submit unwraps each Option's `.value` (slug)
+  and sends `startInterview({role, seniority})`. No auto-default to the first option — an explicit
+  required pick is cleaner with async-loaded options; Start is disabled until `formState.isValid`.
+
+**Deferred / not gaps:** only the 5 seed questions carry levels so far (the bank author adds more);
+the picker's pagination is exercised more than 2 roles / 3 levels need — the point was the reusable
+paginated pattern for larger future lists (a growing question bank, tags).

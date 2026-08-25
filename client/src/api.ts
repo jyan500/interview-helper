@@ -25,6 +25,40 @@ export interface InterviewResponse {
     interview_id: string;
     message: string; // the first interview question
 }
+// Phase D — the kickoff now carries the candidate's choices. Both are SLUGS (the DB's
+// vocabulary), mirroring StartRequest in server/api.py: `role` = a roles.slug, `seniority` =
+// a levels.slug ("mid"). The backend defaults both, but the picker always sends them.
+export interface StartInterviewRequest {
+    role: string;
+    seniority: string;
+}
+// Phase D — the picker's options, from GET /api/roles and GET /api/levels. Each row pairs the
+// slug the client sends back with the name it shows the user (see list_roles/list_levels).
+export interface RolePageItem {
+    slug: string;
+    name: string;
+}
+export interface LevelPageItem {
+    slug: string;
+    name: string;
+    rank: number; // entry(1) < mid(2) < senior(3) — the picker renders in this order
+}
+// The server-side pagination envelope, mirroring fastapi-pagination's Page[T] (see api.py's
+// Page[RoleOut] / Page[LevelOut] response models). The picker's loadOptions reads `items` for the
+// current page and derives "is there another page?" from page/size/total.
+export interface Page<T> {
+    items: T[];
+    total: number;
+    page: number;
+    size: number;
+    pages: number;
+}
+// The query arg for the paginated option endpoints: an optional search term (`q`) and 1-based
+// page. Both optional — omitting them asks for page 1 unfiltered.
+export interface OptionPageQuery {
+    q?: string;
+    page?: number;
+}
 export interface AnswerResponse {
     message: string; // feedback + the next question
     done?: boolean; // true once the client-driven loop exhausts the question bank
@@ -208,8 +242,11 @@ export const interviewApi = createApi({
         // CREATES server-side state — a row in `interviews` (a side effect). Rule of thumb:
         // queries = cacheable reads (GET), mutations = writes/actions (POST/PUT/DELETE). Same
         // tools-vs-resources instinct as the MCP server, one layer up.
-        startInterview: builder.mutation<InterviewResponse, void>({
-            query: () => ({ url: "/interview", method: "POST" }),
+        // Phase D — the second type param went from `void` to StartInterviewRequest: the
+        // mutation now takes the picked {role, seniority} and sends it as the POST body, so the
+        // trigger is called `startInterview({ role, seniority })` instead of `startInterview()`.
+        startInterview: builder.mutation<InterviewResponse, StartInterviewRequest>({
+            query: (body) => ({ url: "/interview", method: "POST", body }),
         }),
         submitAnswer: builder.mutation<AnswerResponse, AnswerRequest>({
             query: (body) => ({ url: "/answer", method: "POST", body }),
@@ -237,6 +274,17 @@ export const interviewApi = createApi({
         getInterviewDetail: builder.query<InterviewDetail, string>({
             query: (interviewId) => `/interviews/${interviewId}`,
         }),
+        // Phase D — the picker's option lists, now PAGINATED + SEARCHABLE. Still queries
+        // (cacheable GETs of slow-changing vocab), but the arg is { q, page }: the AsyncPaginate
+        // select calls these imperatively from inside its loadOptions — once per keystroke/scroll —
+        // rather than once on mount. That's why the LAZY hooks are exported below: the picker owns
+        // WHEN to fetch. RTK Query still caches per distinct arg, so re-scrolling a page is free.
+        getRoles: builder.query<Page<RolePageItem>, OptionPageQuery>({
+            query: ({ q = "", page = 1 }) => `/roles?q=${encodeURIComponent(q)}&page=${page}`,
+        }),
+        getLevels: builder.query<Page<LevelPageItem>, OptionPageQuery>({
+            query: ({ q = "", page = 1 }) => `/levels?q=${encodeURIComponent(q)}&page=${page}`,
+        }),
     }),
 });
 
@@ -248,4 +296,9 @@ export const {
     useTranscribeMutation,
     useGetMyInterviewsQuery,
     useGetInterviewDetailQuery,
+    // LAZY variants: the picker triggers these imperatively inside loadOptions (see App.tsx),
+    // not on mount. useLazy* returns [trigger, result] where trigger(arg) returns a promise you
+    // can .unwrap() — exactly what an async loadOptions needs.
+    useLazyGetRolesQuery,
+    useLazyGetLevelsQuery,
 } = interviewApi;

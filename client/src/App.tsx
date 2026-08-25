@@ -1,11 +1,16 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
+import { useForm } from "react-hook-form";
 import {
     useStartInterviewMutation,
     useSubmitAnswerMutation,
     useGetScorecardMutation,
+    useLazyGetRolesQuery,
+    useLazyGetLevelsQuery,
     type Scorecard,
 } from "./api";
+import { ControlledAsyncPaginateSelect } from "./components/ControlledAsyncPaginateSelect";
+import type { SelectOption } from "./components/AsyncPaginateSelect";
 import ScorecardView from "./ScorecardView";
 import {
     speak,
@@ -17,6 +22,15 @@ import {
 import { useAuth } from "./auth/AuthProvider"
 
 type Line = { who: "interviewer" | "you"; text: string };
+
+// Phase D — the kickoff form's shape. Each field holds react-select's Option ({value: slug,
+// label: name}) or null until picked; the submit handler unwraps `.value` to the slug the
+// backend wants. Kept as Option (not a bare slug) so the async select can show the chosen
+// label without re-fetching it.
+type StartFormValues = {
+    role: SelectOption | null;
+    level: SelectOption | null;
+};
 
 export default function App() {
     // The BROWSER is the loop now (build-plan Phase 3.5). React holds ONLY what it renders:
@@ -51,6 +65,20 @@ export default function App() {
     const [submitAnswer, { isLoading: answering }] = useSubmitAnswerMutation();
     const [getScorecard, { isLoading: scoring }] = useGetScorecardMutation();
 
+    // Phase D — the kickoff form. React Hook Form owns the role/level selection state (replacing
+    // the old useState + defaulting effects); mode "onChange" keeps formState.isValid live so the
+    // Start button can enable the instant both required fields are picked.
+    const { control, handleSubmit, formState } = useForm<StartFormValues>({
+        defaultValues: { role: null, level: null },
+        mode: "onChange",
+    });
+
+    // Phase D — the picker's data source. LAZY query triggers, handed straight to the two selects
+    // as their `fetchPage`: the AsyncPaginateSelect calls the trigger imperatively (per
+    // keystroke/scroll) and owns the paginate/map logic itself. We only inject WHICH endpoint.
+    const [triggerRoles] = useLazyGetRolesQuery();
+    const [triggerLevels] = useLazyGetLevelsQuery();
+
     // THE SEAM, made literal: both hooks return the SAME { supported, listening, start, stop }
     // contract, so swapping the INPUT edge adapter is a one-line change and nothing below moves.
     //   useSpeechRecognition — Phase 4, browser Web Speech API (Chrome-only, audio -> Google)
@@ -75,11 +103,16 @@ export default function App() {
         }
     }, [voices, selectedVoiceURI]);
 
-    // WORKED EXAMPLE — start the interview (drives POST /api/interview).
-    async function handleStart() {
+    // WORKED EXAMPLE — start the interview (drives POST /api/interview). Phase D: RHF's
+    // handleSubmit hands us the validated form values, so we unwrap each Option to its slug and
+    // send {role, seniority} — that choice is what makes the interview role- and level-scoped from
+    // its very first question. `required` validation guarantees both are set; the guard just
+    // narrows SelectOption | null to SelectOption for TypeScript.
+    async function onStart({ role, level }: StartFormValues) {
+        if (!role || !level) return;
         // .unwrap() returns the payload on success or THROWS on error (unlike the hook's
         // result object, which you'd have to inspect). Convenient with async/await.
-        const res = await startInterview().unwrap();
+        const res = await startInterview({ role: role.value, seniority: level.value }).unwrap();
         setInterviewId(res.interview_id);
         setTranscript([{ who: "interviewer", text: res.message }]);
         speak(res.message)
@@ -129,13 +162,43 @@ export default function App() {
             }} className="ml-2 rounded-md bg-slate-800 px-4 py-2 font-medium text-white transition hover:bg-slate-700 disabled:opacity-50">Signout</button>
 
             {interviewId === null ? (
-                <button
-                    onClick={handleStart}
-                    disabled={starting}
-                    className="rounded-md bg-slate-800 px-4 py-2 font-medium text-white transition hover:bg-slate-700 disabled:opacity-50"
-                >
-                    {starting ? "Starting…" : "Start interview"}
-                </button>
+                // Phase D — the kickoff FORM. RHF's handleSubmit(onStart) runs onStart only when
+                // validation passes, so the two required selects gate the whole thing. Each
+                // ControlledAsyncPaginateSelect is the same component with a different endpoint
+                // trigger injected as `fetchPage` — the role/level difference is ONLY that.
+                <form onSubmit={handleSubmit(onStart)} className="space-y-4">
+                    <label className="block">
+                        <span className="mb-1 block text-sm font-medium text-slate-700">Role</span>
+                        <ControlledAsyncPaginateSelect
+                            control={control}
+                            name="role"
+                            rules={{ required: true }}
+                            fetchPage={triggerRoles}
+                            placeholder="Search roles…"
+                        />
+                    </label>
+
+                    <label className="block">
+                        <span className="mb-1 block text-sm font-medium text-slate-700">Level</span>
+                        <ControlledAsyncPaginateSelect
+                            control={control}
+                            name="level"
+                            rules={{ required: true }}
+                            fetchPage={triggerLevels}
+                            placeholder="Search levels…"
+                        />
+                    </label>
+
+                    <button
+                        type="submit"
+                        // disabled until BOTH required selects are valid — no defaulting anymore,
+                        // an explicit pick is required (cleaner with async-loaded options).
+                        disabled={starting || !formState.isValid}
+                        className="rounded-md bg-slate-800 px-4 py-2 font-medium text-white transition hover:bg-slate-700 disabled:opacity-50"
+                    >
+                        {starting ? "Starting…" : "Start interview"}
+                    </button>
+                </form>
             ) : (
                 <>
                     <ul className="space-y-3">

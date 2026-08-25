@@ -27,10 +27,15 @@ Quick test once filled in (from server/):
 """
 from __future__ import annotations
 
+from fastapi_pagination import Params
+# `apaginate` is the ASYNC entry point (0.15.16 deprecated calling `paginate` on an AsyncSession
+# in favour of it; it's removed in 0.16). Same contract — (session, select_stmt, params) ->
+# Page(items, total, page, size, pages) — just the coroutine the async engine needs.
+from fastapi_pagination.ext.sqlalchemy import apaginate
 from sqlalchemy import select
 
 from db.engine import get_session
-from db.models import Question, Role, Rubric
+from db.models import Level, Question, Role, Rubric
 
 
 def _question_dict(question: Question) -> dict:
@@ -48,19 +53,28 @@ def _question_dict(question: Question) -> dict:
     }
 
 
-async def list_roles() -> dict:
-    """Return the role slugs the bank knows about, e.g. ['backend-engineer', ...].
+async def list_roles(params: Params, search: str | None = None):
+    """Return a PAGE of roles the picker can search — backs GET /api/roles.
 
-    WORKED EXAMPLE — the shape every function below follows:
-      open a session -> SELECT -> convert rows to plain JSON-safe values -> return a dict.
+    WORKED EXAMPLE — server-side pagination via fastapi-pagination. We build the statement
+    (ordering + our own optional search filter), then hand it to `paginate`, which runs the
+    COUNT and the LIMIT/OFFSET for us and returns a Page(items, total, page, size, pages). The
+    DIVISION OF LABOUR is the thing to notice: the SEARCH is ours (a domain decision — match on
+    name), the PAGING is the library's. We never write .limit()/.offset() by hand.
 
-    `select(Role.slug)` asks for one COLUMN, not whole rows, so `.scalars().all()` gives a
-    list of strings directly. `async with` closes the session (returning its connection to
-    the pool) even if the query raises.
+    `params` (page + size) is resolved by FastAPI from the query string in the route and passed
+    straight through; `search` is our extra `?q=` filter. Returns a `Page[Role]` of ORM rows —
+    the route's `response_model=Page[RoleOut]` coerces each row to JSON (see api.py). Only the
+    scalar columns are read downstream, so serialization after this session closes is safe.
     """
     async with get_session() as db:
-        result = await db.execute(select(Role.slug).order_by(Role.slug))
-        return {"roles": list(result.scalars().all())}
+        stmt = select(Role).order_by(Role.name)
+        if search:
+            # ilike = case-insensitive LIKE. The %..% makes it a substring match, so "back"
+            # finds "Backend engineer". Applied to the statement BEFORE paginate, so the COUNT
+            # it runs counts only the matches — pagination is over the filtered set.
+            stmt = stmt.where(Role.name.ilike(f"%{search}%"))
+        return await apaginate(db, stmt, params)
 
 
 async def get_rubric(role: str) -> dict:
@@ -95,8 +109,10 @@ async def get_rubric(role: str) -> dict:
         }
 
 
-async def next_question(role: str, asked_ids: list[str] | None = None) -> dict:
-    """Return the next unasked question for `role`.
+async def next_question(
+    role: str, level: str | None = None, asked_ids: list[str] | None = None
+) -> dict:
+    """Return the next unasked question for `role`, optionally filtered by `level`.
 
     Same contract as before: {"status": "ok", "question": {...}} with the first question
     not in `asked_ids`, {"status": "exhausted", "role": role} once they're all asked, or
@@ -104,21 +120,18 @@ async def next_question(role: str, asked_ids: list[str] | None = None) -> dict:
 
     `asked_ids` is a list of SLUGS (that's what the caller tracks), not integer ids.
 
-    TODO — same three moves as get_rubric, plus a filter:
-      - resolve the role slug -> row; return not_found if there isn't one
-      - build the query:
-            stmt = (
-                select(Question)
-                .where(Question.role_id == role_row.id)
-                .order_by(Question.sort_order)     # <- the explicit bank order
-            )
-        and exclude the ones already asked. Two ways, both fine:
-          (a) let the DB do it:  .where(Question.slug.not_in(asked))  — but note an EMPTY
-              list makes a `NOT IN ()` that some drivers dislike, so guard with `if asked:`
-          (b) fetch all for the role and skip in Python — simpler, and the bank is tiny
-      - take the first result (`.scalars().first()`); if it's None every question has been
-        asked -> return the "exhausted" envelope
-      - otherwise return {"status": "ok", "question": _question_dict(q)}
+    PHASE D — the `level` argument (a slug: "entry" | "mid" | "senior"). It is OPTIONAL and
+    defaults to None, which means "no level filter" — exactly the pre-Phase-D behaviour, so
+    the MCP tool, `mcp_client_demo.py`, and the smoke test below all keep working untouched.
+    When api.py passes a level, we filter with the AT-OR-BELOW rule you chose: an interview
+    at a given level draws every question whose level ranks at or beneath it (a senior
+    interview gets entry + mid + senior; an entry interview only entry). `levels.rank` is the
+    column that makes "at or below" expressible — a plain string level couldn't be ordered.
+
+    NOTE on unassigned questions: a question with `level_id` NULL has no rank to compare, so
+    the at-or-below filter EXCLUDES it. That's intended — an unleveled question isn't part of
+    any level's set until the bank author assigns it one (see the Phase D seed).
+
     """
     async with get_session() as db:
         result = await db.execute(select(Role).where(Role.slug == role))
@@ -132,11 +145,32 @@ async def next_question(role: str, asked_ids: list[str] | None = None) -> dict:
         )
         if (asked):
             stmt = stmt.where(Question.slug.not_in(asked))
+        if level is not None:
+            level_row = (await db.execute(select(Level).where(Level.slug == level))).scalar_one_or_none()
+            if level_row is None:
+                return {"status": "not_found", "role": role, "level": level}
+            allowed_level_ids = select(Level.id).where(Level.rank <= level_row.rank)
+            stmt = stmt.where(Question.level_id.in_(allowed_level_ids)) 
         res = await db.execute(stmt)
         question_result = res.scalars().first()
         if (question_result is None):
             return {"status": "exhausted", "role": role}
         return {"status": "ok", "question": _question_dict(question_result)}
+
+
+async def list_levels(params: Params, search: str | None = None):
+    """Return a PAGE of seniority levels — backs GET /api/levels.
+
+    Same server-side pagination shape as list_roles, ordered by `Level.rank` so entry/mid/
+    senior come back in ladder order (the reason `rank` is a column and not insertion order).
+    Returns a `Page[Level]`; the route's `response_model=Page[LevelOut]` carries `rank` through
+    to the client too, in case the UI ever wants to order or badge by it.
+    """
+    async with get_session() as db:
+        stmt = select(Level).order_by(Level.rank)
+        if search:
+            stmt = stmt.where(Level.name.ilike(f"%{search}%"))
+        return await apaginate(db, stmt, params)
 
 
 
@@ -146,13 +180,6 @@ async def get_question(question_id: str) -> dict:
 
     Returns {"status": "ok", "question": {...}}, or
     {"status": "not_found", "question_id": question_id}.
-
-    TODO — the simplest one; it's `get_rubric` without the relationship walk:
-      - select(Question).where(Question.slug == question_id)
-      - scalar_one_or_none(); None -> the not_found envelope
-      - otherwise {"status": "ok", "question": _question_dict(question)}
-      (`question_id` is named for the wire contract, but it holds a slug — the whole app
-      has always passed "be-1" here.)
     """
     async with get_session() as db:
         stmt = await db.execute(select(Question).where(Question.slug == question_id))
@@ -167,12 +194,6 @@ async def list_questions(role: str) -> dict:
 
     Returns {"status": "ok", "role": role, "questions": [...]}, or
     {"status": "not_found", "role": role}.
-
-    TODO — resolve the role, then use the relationship instead of a second query:
-      - role_row.questions is selectin-loaded AND already ordered by sort_order (see the
-        order_by on the relationship in models.py), so this is just a list comprehension
-        over _question_dict
-      - guard the unknown role the same way get_rubric does
     """
     async with get_session() as db:
         stmt = await db.execute(select(Role).where(Role.slug == role))
@@ -188,11 +209,22 @@ if __name__ == "__main__":
     import asyncio
 
     async def _smoke():
-        print("roles:", await list_roles())
+        # list_roles/list_levels paginate now, so they need a Params(page, size). Off a
+        # request FastAPI builds this from ?page=&size=; here we construct it by hand. The
+        # result is a Page(items, total, page, size, pages) — .items holds the ORM rows.
+        print("roles:", (await list_roles(Params(page=1, size=50))).items)
+        print("levels:", (await list_levels(Params(page=1, size=50))).items)
         print("rubric:", await get_rubric("backend-engineer"))
         print("unknown role:", await get_rubric("no-such-role"))
-        # TODO: uncomment as you implement them
-        print("next:", await next_question("backend-engineer", asked_ids=["be-1"]))
+        # no level filter (pre-Phase-D behaviour): every question for the role
+        print("next (any level):", await next_question("backend-engineer", asked_ids=["be-1"]))
+        # Phase D — once the level TODO is filled, these two should differ: an entry interview
+        # sees fewer questions than a senior one (at-or-below by rank).
+        print("next (entry):", await next_question("backend-engineer", level="entry"))
+        print("next (senior):", await next_question("backend-engineer", level="senior"))
+        print("next be-1 asked (entry):", await next_question("backend-engineer", level="entry", asked_ids=["be-1"]))
+        print("next be-1 asked (senior):", await next_question("backend-engineer", level="senior", asked_ids=["be-1"]))
+        print("next be-1, be-2 asked (senior):", await next_question("backend-engineer", level="senior", asked_ids=["be-1", "be-2"]))
         print("q:", await get_question("be-2"))
         print("all:", await list_questions("product-manager"))
 

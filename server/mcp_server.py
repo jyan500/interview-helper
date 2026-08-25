@@ -55,12 +55,16 @@ mcp = FastMCP("interview-helper")
 # no session/state object), docstring = the model-facing description. FastMCP builds
 # the input schema from the hints, exactly like the helpdesk's get_customer.
 @mcp.tool
-async def next_question(role: str, asked_ids: list[str] | None = None) -> dict:
+async def next_question(
+    role: str, level: str | None = None, asked_ids: list[str] | None = None
+) -> dict:
     """Get the next interview question for a role the candidate hasn't been asked yet.
-    Pass the ids you've already asked in `asked_ids` so questions don't repeat. Returns
-    {status:"ok", question} with the next question, {status:"exhausted", role} once the
-    bank is used up, or {status:"not_found", role} for an unknown role."""
-    return await questions.next_question(role, asked_ids)
+    Pass the ids you've already asked in `asked_ids` so questions don't repeat. `level`
+    ("entry"|"mid"|"senior") is optional — omit it for the whole bank, or pass it to get
+    questions at or below that seniority. Returns {status:"ok", question} with the next
+    question, {status:"exhausted", role} once the bank is used up, or {status:"not_found",
+    role} for an unknown role/level."""
+    return await questions.next_question(role, level, asked_ids)
 
 
 # record_answer — a side-effecting tool. Phase C: it COMPLETES the open turn (the prompt that

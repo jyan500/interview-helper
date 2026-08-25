@@ -14,18 +14,21 @@
         {
           "id": "be-1",
           "type": "behavioral",
+          "level": "entry",
           "text": "Tell me about a time you had to debug a production issue under pressure. What was the problem and how did you approach it?",
           "tags": ["debugging", "ownership"]
         },
         {
           "id": "be-2",
           "type": "system-design",
+          "level": "senior",
           "text": "How would you design a rate limiter for a public API? Walk me through your approach.",
           "tags": ["system-design", "scalability"]
         },
         {
           "id": "be-3",
           "type": "technical",
+          "level": "mid",
           "text": "Explain the difference between optimistic and pessimistic locking, and when you'd choose each.",
           "tags": ["databases", "concurrency"]
         }
@@ -45,12 +48,14 @@
         {
           "id": "pm-1",
           "type": "behavioral",
+          "level": "entry",
           "text": "Tell me about a product decision you made that turned out to be wrong. What did you learn?",
           "tags": ["reflection", "ownership"]
         },
         {
           "id": "pm-2",
           "type": "product-sense",
+          "level": "mid",
           "text": "How would you improve the onboarding experience for a note-taking app?",
           "tags": ["product-sense", "ux"]
         }
