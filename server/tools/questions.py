@@ -35,7 +35,8 @@ from fastapi_pagination.ext.sqlalchemy import apaginate
 from sqlalchemy import select
 
 from db.engine import get_session
-from db.models import Level, Question, Role, Rubric
+# ReferenceBrief added for Phase E's get_reference (pre-imported so the TODO body has it ready).
+from db.models import Level, Question, ReferenceBrief, Role, Rubric
 
 
 def _question_dict(question: Question) -> dict:
@@ -203,6 +204,58 @@ async def list_questions(role: str) -> dict:
         return {"status": "ok", "role": role, "questions": [_question_dict(q) for q in result.questions]}
 
 
+async def get_reference(question_id: str) -> dict:
+    """Return the authored reference brief for a question (backs the reference:// resource).
+
+    PHASE E — SCAFFOLD, fill in the body. The brief is the grader's ANSWER KEY: leveling bands +
+    tiered (bad/good/great) concept anchors, authored per question (see data/reference_briefs/).
+    This is a read helper shaped EXACTLY like get_question / get_rubric above — resolve the slug
+    to a row, translate the ORM object back to a JSON-safe dict, return an envelope. Reuse those
+    as your template; the only new wrinkle is the design choice flagged below.
+
+    Contract to return:
+      {"status": "ok", "question_id": question_id, "brief": <text>}                on success
+      {"status": "not_found", "question_id": question_id}                          otherwise
+
+    IMPORTANT — "not_found" covers TWO cases, and both must be graceful (envelope, never an
+    exception): the question slug is unknown, OR the question exists but has NO brief authored
+    yet. Most of the bank is un-briefed until someone writes one, so an absent brief is a normal
+    state the grader has to tolerate — grade_one will just fall back to the model's priors.
+
+    THE ONE DESIGN CHOICE (yours to make in the body):
+      ReferenceBrief is a 1:1 keyed by `question_id`, but Question has NO relationship to it yet.
+      So you either
+        (a) add `brief: Mapped[ReferenceBrief | None] = relationship(lazy="selectin")` to the
+            Question model and read `question.brief` (consistent with how get_rubric reads
+            role.rubric — but ALWAYS loads a brief on every question fetch, everywhere), or
+        (b) query ReferenceBrief directly by `question.id` here (no model change; the brief is
+            loaded only when this function asks for it).
+      Pick one and leave a one-line comment saying why. (b) keeps the hot question-fetch paths —
+      next_question, the transcript — from dragging brief text they never use; (a) is tidier if
+      you expect most reads to want the brief. Given only the grader reads briefs, (b) is the
+      lean default, but it's your call.
+
+    TODO:
+      * async with get_session() as db:
+      * resolve the slug -> Question row (scalar_one_or_none); not_found if None.
+      * get the brief via (a) or (b); not_found if there's no brief row.
+      * return the ok envelope with the brief text.
+    """
+    async with get_session() as db:
+        stmt = await db.execute(select(Question).where(Question.slug == question_id))
+        result = stmt.scalar_one_or_none()
+        if result is None:
+            return {"status": "not_found", "question_id": question_id}
+        # only loads the reference brief when looking for it specifically rather than fetching it on each question via
+        # the model relationship (i.e question.brief)
+        ref_brief = await db.execute(select(ReferenceBrief).where(ReferenceBrief.question_id == result.id))
+        ref_brief_result = ref_brief.scalar_one_or_none()
+        if ref_brief_result is None:
+            return {"status": "not_found", "question_id": question_id}
+        return {"status": "ok", "question_id": question_id, "brief": ref_brief_result.brief}
+
+
+
 if __name__ == "__main__":
     # Smoke test with no LLM and no MCP — proves the DB reads work on their own.
     # asyncio.run is needed now that the bodies are async.
@@ -227,5 +280,9 @@ if __name__ == "__main__":
         print("next be-1, be-2 asked (senior):", await next_question("backend-engineer", level="senior", asked_ids=["be-1", "be-2"]))
         print("q:", await get_question("be-2"))
         print("all:", await list_questions("product-manager"))
+        # Phase E — once get_reference is filled AND `python -m db.seed` has loaded the briefs:
+        # be-2 has an authored brief; be-1 does not yet (should come back not_found, gracefully).
+        print("reference be-2:", await get_reference("be-2"))
+        print("reference be-1 (unbriefed):", await get_reference("be-1"))
 
     asyncio.run(_smoke())

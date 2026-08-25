@@ -146,6 +146,10 @@ async def get_interview(interview_id: str) -> dict:
             # this dict is also the `interview://` MCP resource payload and gets JSON-encoded
             # on the way out; a uuid.UUID isn't JSON-serializable.
             "profile_id": str(interview.profile_id) if interview.profile_id else None,
+            # add the interview's level so /api/scorecard can grade at the right
+            # bar. It's the levels.slug ("mid"), JSON-safe, and `interview.level` is selectin-
+            # loaded (free), exactly like `load_interview_state` already returns it:
+            "level": interview.level.slug,
             "turns": [
                 {
                     # the wire shape keeps the SLUG under the key "question_id", exactly as

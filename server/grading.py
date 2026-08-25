@@ -30,22 +30,45 @@ Smoke test (from server/, 1 LLM call — needs .env GEMINI_API_KEY):
 """
 from __future__ import annotations
 
+import os
+
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
+from pydantic_ai.models.google import GoogleModel
+from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import UsageLimits
 
-# Reuse the SAME model the interviewer uses — importing pydantic_agent runs its module-level
-# setup (model, toolset, agent) once; grading is just a second Agent over that model. It also
-# runs the load_dotenv there, which is how the API keys reach this process.
-from pydantic_agent import model
+# The interviewer's model + its id. Importing pydantic_agent runs its module-level setup once —
+# which ALSO runs the load_dotenv there, how GEMINI_API_KEY / GRADER_MODEL reach this process.
+# `model` (flash-lite) still drives turn_agent below; the GRADER now gets its own (see next block).
+from pydantic_agent import USE_MODEL, model
 # The grading TEMPLATE, imported directly (Phase A). It's a pure function in prompts.py, so
 # there's no transport between us and it — see that module's docstring for why.
 from prompts import evaluate_answer
+# Phase E — the grader FETCHES the authored reference brief itself (the plan's design: grade_one
+# grounds its own scoring). get_reference is a plain DB read in the same repo, imported directly
+# for the same "no transport to ourselves" reason as the template above.
+from tools.questions import get_reference
 # The shared score arithmetic (Phase C). Pure — no LLM, no DB — which is exactly why it moved
 # OUT of here: the data layer (get_scorecard) needed the same averaging without importing this
 # module's model stack. See tools/scoring.py.
 from tools.scoring import aggregate_scores
+
+
+# --- THE GRADER'S OWN MODEL (Phase E) --------------------------------------------------
+# The grader gets a SEPARATE, stronger model from the interviewer's flash-lite. It runs ONCE per
+# interview (low volume), so a pricier model is cheap here and buys better calibration + lets us
+# author LESS brief detail by hand. Env-configurable so the exact id is a config decision, not a
+# code edit (the project's config-in-.env convention) — set it in server/.env, e.g.
+#     GRADER_MODEL=gemini-3.1-pro-preview
+# It DEFAULTS to USE_MODEL (flash-lite) so grading still runs before you've picked a stronger id;
+# flip the .env var and restart to upgrade, no code change.
+GRADER_MODEL = "gemini-3.5-flash-lite"
+grader_model = GoogleModel(
+    GRADER_MODEL,
+    provider=GoogleProvider(api_key=os.environ["GEMINI_API_KEY"]),
+)
 
 
 # --- THE TYPED OUTPUT SHAPE ------------------------------------------------------------
@@ -77,7 +100,7 @@ class AnswerGrade(BaseModel):
 # a tool). output_type=AnswerGrade is the whole point. Same max_tokens guardrail as the
 # interviewer so a grade can't run away.
 grader_agent = Agent(
-    model,
+    grader_model,                              # Phase E: its OWN model, not the interviewer's
     output_type=AnswerGrade,
     model_settings=ModelSettings(max_tokens=600),
 )
@@ -138,9 +161,34 @@ turn_agent = Agent(
 # in this same repo, so that was a stdio round-trip and a JSON decode to reach an f-string.
 # The parameter is gone, which also means grade_one no longer needs a started MCP client to
 # run — its smoke test below is now a plain function call.
-async def grade_one(question_text: str, answer: str, rubric_text: str) -> AnswerGrade:
-    """Grade a single (question, answer) against the rubric -> a typed AnswerGrade."""
-    filled = evaluate_answer(question=question_text, answer=answer, rubric=rubric_text)
+async def grade_one(
+    question_id: str,
+    question_text: str,
+    answer: str,
+    rubric_text: str,
+    level: str | None = None,
+) -> AnswerGrade:
+    """Grade a single (question, answer) against the rubric -> a typed AnswerGrade.
+
+    PHASE E — SCAFFOLD. Now GROUNDED (in the authored brief) and LEVEL-AWARE. Two things changed:
+      * it takes `question_id` so it can FETCH the brief itself (the plan's design — the grader
+        grounds its own scoring rather than trusting the caller to pass the right brief), and
+      * it takes `level` (the interview's seniority slug) so the brief's leveling bands apply.
+
+    TOLERATE A MISSING BRIEF. Most of the bank is un-briefed; get_reference returns a not_found
+    envelope for those. That is NOT an error — pass "" as the brief and let evaluate_answer fall
+    back to plain rubric grading. A question without a brief must still grade, just ungrounded.
+
+    """
+    brief_env = await get_reference(question_id)
+    reference_brief = brief_env["brief"] if brief_env["status"] == "ok" else ""
+    filled = evaluate_answer(
+        question=question_text,
+        answer=answer,
+        rubric=rubric_text,
+        reference_brief=reference_brief,
+        level=level
+    )
     result = await grader_agent.run(
         filled,
         usage_limits=UsageLimits(request_limit=3),
@@ -173,15 +221,23 @@ if __name__ == "__main__":
     # directly, so this is just asyncio + the model.
     import asyncio
 
+    # Phase E — each entry now carries the question's SLUG and level, so grade_one can fetch the
+    # brief. be-2 (senior) has an authored brief -> grounded grading; be-1 (entry) has none yet ->
+    # grade_one should fall back to plain rubric grading. Run `python -m db.seed` first so the
+    # be-2 brief is loaded, and set GRADER_MODEL in .env to see the stronger model in action.
     qa = [
     {
+        "question_id": "be-2",
+        "level": "senior",
         "question": "How would you design a rate limiter for a public API? Walk me through your approach.",
-        "answer": """I'd use a token-bucket per client key in Redis: refill at the allowed rate, reject when empty. 
+        "answer": """I'd use a token-bucket per client key in Redis: refill at the allowed rate, reject when empty.
         It's atomic via a Lua script and survives multiple app servers."""
     },
     {
+        "question_id": "be-1",
+        "level": "entry",
         "question": "Tell me about a time when you handled a production issue.",
-        "answer": """ I accidentally pushed a regression to our React Native Mobile Application when fixing a bug. To handle this, 
+        "answer": """ I accidentally pushed a regression to our React Native Mobile Application when fixing a bug. To handle this,
         I notified customer service, used git bisect to find the problematic commit, applied the bug fix and worked with my engineering manager to push a hotfix deploy."""
     }
     ]
@@ -198,7 +254,7 @@ if __name__ == "__main__":
     async def _smoke():
         grades = []
         for q in qa:
-            grade = await grade_one(q["question"], q["answer"], _RUBRIC)
+            grade = await grade_one(q["question_id"], q["question"], q["answer"], _RUBRIC, level=q["level"])
             print("AnswerGrade:")
             for ds in grade.dimension_scores:
                 print(f"  {ds.dimension}: {ds.score} — {ds.note}")
