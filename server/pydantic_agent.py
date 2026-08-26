@@ -41,7 +41,7 @@ from voice.adapters import listen, speak  # noqa: E402
 
 # --- MODEL: same Gemini-via-google-genai wiring as the helpdesk. Copy USE_MODEL from
 #     there, or hardcode the model id string for now. --------------------------------
-USE_MODEL = "gemini-3.1-flash-lite-preview"  # confirmed: matches ../mcp-helpdesk USE_MODEL
+USE_MODEL = "gemini-3.1-flash-lite"  # confirmed: matches ../mcp-helpdesk USE_MODEL
 model = GoogleModel(
     USE_MODEL,
     provider=GoogleProvider(api_key=os.environ["GEMINI_API_KEY"]),

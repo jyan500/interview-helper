@@ -540,6 +540,12 @@ async def scorecard(
     dimensions = rubric_env["rubric"]["dimensions"]
     rubric_text = f"Dimensions: {'; '.join(dimensions)}. {rubric_env['rubric']['scale']}"
 
+    # PHASE E — the interview's seniority, so the grader calibrates each grade to the right bar
+    # (the same answer clears entry but not senior). TODO: get_interview must start returning
+    # `level` (see the TODO in tools/interview.py); until it does, this is None and grade_one
+    # grades un-leveled — safe, just not calibrated.
+    level = interview.get("level")
+
     # 3. GROUP turns by question_id, then grade ONCE per question.
     #    A follow-up isn't a bank question — it has no id of its own — so its answer is recorded
     #    under the ORIGINAL question_id (the client never moves `current_qid` while probing).
@@ -566,7 +572,9 @@ async def scorecard(
         combined = first
         if followups:
             combined += " (the following text is follow-up) " + "\n\n".join(followups)
-        grade = await grade_one(question_text, combined, rubric_text)
+        # Phase E — pass the question SLUG (so grade_one fetches this question's brief) and the
+        # interview level (so scoring is calibrated). grade_one tolerates an un-briefed question.
+        grade = await grade_one(question_id, question_text, combined, rubric_text, level=level)
         grades.append(grade)
         answers.append({"question_id": question_id, "question_text": question_text,
                         **grade.model_dump()})

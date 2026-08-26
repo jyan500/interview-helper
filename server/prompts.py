@@ -72,24 +72,68 @@ def behavioral_interview(role: str, seniority: str = "mid") -> str:
     """).strip()
 
 
-def evaluate_answer(question: str, answer: str, rubric: str) -> str:
+def evaluate_answer(
+    question: str,
+    answer: str,
+    rubric: str,
+    reference_brief: str = "",
+    level: str | None = None,
+) -> str:
     """The GRADING template: score, one strength, one gap, one fix.
 
     A PURE template — data in, instructions out. It does not read the DB and never should:
-    the caller (grading.py) fetches the question text and rubric and passes them in. Keeping
-    it pure is what makes the grader's input trivially inspectable when a grade looks wrong —
-    print the string and you have seen everything the model saw.
+    the caller (grading.py) fetches the question text, rubric, brief, and level and passes them
+    in. Keeping it pure is what makes the grader's input trivially inspectable when a grade looks
+    wrong — print the string and you have seen everything the model saw.
 
-    Phase E extends this signature with the reference brief + the interview's level, so
-    scoring is grounded in authored material and calibrated to seniority.
+    PHASE E — SCAFFOLD. Two new inputs, both OPTIONAL so the MCP wrapper and any pre-Phase-E
+    caller keep working unchanged:
+      reference_brief — the authored answer key for THIS question (leveling bands + tiered
+        anchors). When present, the grader scores AGAINST it; when "", it falls back to priors.
+      level — the interview's seniority slug ("entry"|"mid"|"senior"). The SAME answer clears
+        the bar at entry but not at senior, so the brief's leveling bands are read through this.
+
+    THE MEAT OF PHASE E IS THE INSTRUCTION PROSE BELOW — that's yours to author. It must do three
+    things the current pre-Phase-E wording does NOT:
+      (a) GROUND scoring in the brief — treat the brief's bad/good/great anchors as THE 1-5 scale,
+          not the model's own guess at what "good" looks like. (Only when a brief is present.)
+      (b) CALIBRATE to `level` using the brief's leveling bands — don't penalize an entry
+          candidate for missing a senior-only concept; don't over-reward a senior for a merely
+          adequate answer.
+      (c) REWARD DEMONSTRATED UNDERSTANDING over keyword presence — an answer that explains the
+          mechanism in its own words beats one that name-drops the term. (The anchors are written
+          as capability, not keywords, precisely to make this gradeable.)
     """
+    # WORKED — build the optional sections so an un-briefed / un-leveled call renders the
+    # pre-Phase-E prompt with NOTHING dangling (no empty "reference brief:" or "level: None"
+    # line). This is the mechanical half; the instruction rewrite above is the part to author.
+    brief_section = (
+        f"\n\nreference brief (grade the answer AGAINST this — it defines the bands and anchors):"
+        f"\n{reference_brief}"
+        if reference_brief else ""
+    )
+    level_section = f"\n\ncandidate seniority level: {level}" if level else ""
+
+    # TODO — rewrite this instruction paragraph to do (a), (b), (c) above, and to CONDITION on
+    # whether brief_section/level_section are present (fall back to plain rubric grading when
+    # they're empty). Right now it's the pre-Phase-E wording with the two sections merely
+    # appended — the model is handed the brief and level but never TOLD to ground/calibrate.
     return textwrap.dedent(f"""
         You are grading a candidate's answer.
 
         Given the question, answer, and rubric, score the answer on each rubric dimension (1 to 5),
         name one concrete strength, one gap, and one specific improvement.
 
+        If the rubric includes a reference brief, scoring must be grounded in the rubric's brief section. Treat the brief's bad/good/great anchors
+        as THE 1-5 scale. If the seniority level is present, calibrate the scoring to the candidate seniority level, don't penalize an entry candidate for missing a senior-only concept; don't
+        over-reward a senior for a merely adequate answer.
+
+        Reward demonstrated understanding over keyword presence. An answer that explains the mechanism in its own words should be scored
+        higher than one that merely mentions the keyword in passing. 
+
+        If a rubric does not include a reference brief and candidate seniority level, fall back to plain rubric grading.
+
         question: {question}
         answer: {answer}
-        rubric: {rubric}
+        rubric: {rubric}{brief_section}{level_section}
     """).strip()

@@ -146,6 +146,23 @@ async def interview_resource(interview_id: str) -> dict:
     return await interview.get_interview(interview_id)
 
 
+# reference://{question_id} — the authored grading brief for a question. Phase E — SCAFFOLD.
+# Same shape as question_resource: a thin async wrapper delegating to questions.get_reference.
+# It's a RESOURCE, not a tool — the brief is read-only context the grader pulls in to score,
+# the same tools-vs-resources instinct as rubric:// and question://.
+#
+# NOTE which door this is: the BACKEND's grader does NOT reach the brief over MCP — grading.py
+# imports get_reference directly (the Phase A "no transport to ourselves" rule). This
+# registration is for EXTERNAL clients (Claude Desktop, mcp_client_demo.py, --list), keeping the
+# MCP surface complete. (RLS makes reference_briefs deny-all over PostgREST — it's the answer
+# key — but that guards the anon-key door, not this one.)
+# TODO — mirror question_resource:
+@mcp.resource("reference://{question_id}")
+async def reference_resource(question_id: str) -> dict:
+    """The authored grading brief for a question — read-only context."""
+    return await questions.get_reference(question_id)
+
+
 # ===========================================================================
 # PROMPTS (reusable interaction templates)
 # ===========================================================================
@@ -167,10 +184,17 @@ def behavioral_interview(role: str, seniority: str = "mid") -> str:
 # evaluate_answer — the GRADING template. A pure data-in / instructions-out template: it
 # scores each rubric dimension (1-5), then names ONE concrete strength, ONE gap, and ONE
 # specific improvement. It never reads the DB — pair it with the rubric:// resource for data.
+# Phase E extends this: the same template now also grounds scoring in an authored reference
+# brief and calibrates to the candidate's seniority level. Both new args are OPTIONAL (default
+# to "no brief" / "no level"), so this MCP surface stays backward-compatible for external
+# clients that only pass question/answer/rubric.
 @mcp.prompt
-def evaluate_answer(question: str, answer: str, rubric: str) -> str:
-    """Grade one answer against a rubric: score, one strength, one gap, one fix."""
-    return prompts.evaluate_answer(question, answer, rubric)
+def evaluate_answer(question: str, answer: str, rubric: str,
+                    reference_brief: str = "", level: str | None = None) -> str:
+    """Grade one answer against a rubric — grounded in an authored reference brief and
+    calibrated to the candidate's seniority level when given: score, one strength, one gap,
+    one fix."""
+    return prompts.evaluate_answer(question, answer, rubric, reference_brief, level)
 
 
 if __name__ == "__main__":

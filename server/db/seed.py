@@ -45,6 +45,7 @@ from db.models import (
     Level,
     Question,
     QuestionType,
+    ReferenceBrief,
     Role,
     Rubric,
     RubricDimension,
@@ -92,7 +93,8 @@ async def _get_or_create(db: AsyncSession, model, *, slug: str, **fields):
 
 async def seed() -> None:
     bank = json.loads(_BANK.read_text(encoding="utf-8"))
-    created = {"levels": 0, "roles": 0, "types": 0, "tags": 0, "dimensions": 0, "questions": 0}
+    created = {"levels": 0, "roles": 0, "types": 0, "tags": 0, "dimensions": 0,
+               "questions": 0, "briefs": 0}
 
     async with get_session() as db:
         # --- levels: authored, not from the bank ---------------------------------------
@@ -217,6 +219,43 @@ async def seed() -> None:
                     # no-op.
                     if question.level_id is None and level_row is not None:
                         question.level_id = level_row.id
+
+        # --- reference briefs (Phase E): authored markdown, one file per question ---------
+        # Briefs live as data/reference_briefs/<question-slug>.md, NOT inline in questions.json:
+        # they're long-form prose (leveling bands + tiered anchors) that reads and edits far
+        # better as markdown than as an escaped JSON string. The FILENAME is the question slug,
+        # so "which question owns which brief" is just the directory listing — no mapping to keep.
+        #
+        # THE ONE PLACE THIS SEEDER UPDATES IN PLACE (besides the Phase D level backfill). The
+        # bank is authored once and protected from accidental overwrite; briefs are the opposite —
+        # they get TUNED iteratively (thickened wherever the grader drifts, per the plan), so
+        # re-seeding after an edit MUST pick up the new text. Create if missing, overwrite if the
+        # file changed. Everything else here stays get-or-create.
+        #
+        # A brief file whose slug names no seeded question is a TYPO (mirrors the level check) —
+        # fail loudly rather than silently drop authored work. Path.glob on a missing dir returns
+        # nothing, so an empty/absent reference_briefs/ dir is simply "no briefs yet".
+        briefs_dir = _BANK.parent / "reference_briefs"
+        for brief_path in sorted(briefs_dir.glob("*.md")):
+            q_slug = brief_path.stem                 # "be-2.md" -> "be-2"
+            brief_text = brief_path.read_text(encoding="utf-8").strip()
+            question = (
+                await db.execute(select(Question).where(Question.slug == q_slug))
+            ).scalar_one_or_none()
+            if question is None:
+                raise ValueError(
+                    f"reference brief {brief_path.name} names unknown question {q_slug!r}"
+                )
+            existing = (
+                await db.execute(
+                    select(ReferenceBrief).where(ReferenceBrief.question_id == question.id)
+                )
+            ).scalar_one_or_none()
+            if existing is None:
+                db.add(ReferenceBrief(question_id=question.id, brief=brief_text))
+                created["briefs"] += 1
+            elif existing.brief != brief_text:
+                existing.brief = brief_text          # tuned edit — the deliberate in-place update
 
         await db.commit()
 
