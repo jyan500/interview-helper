@@ -747,3 +747,74 @@ starter levels (be-1 entry, be-2 senior, be-3 mid, pm-1 entry, pm-2 mid); the ba
 **Deferred / not gaps:** only the 5 seed questions carry levels so far (the bank author adds more);
 the picker's pagination is exercised more than 2 roles / 3 levels need — the point was the reusable
 paginated pattern for larger future lists (a growing question bank, tags).
+
+### Phase E — ✅ COMPLETE (grounded + level-aware grading, verified via the grader smoke test)
+
+*Grader given its own separate model; the authored reference brief + the interview's level now
+flow into grading. All server modules compile; `mcp_server.py --list` shows the new surface;
+`python grading.py` produced a grounded, level-calibrated grade.*
+
+**The idea:** grading is now GROUNDED in an authored per-question **reference brief** (leveling
+bands + tiered bad/good/great concept anchors, phrased as *demonstrated capability* not keywords)
+and CALIBRATED to the interview's **level** (the same answer clears entry but not senior). The
+brief is a deterministic `question_id → brief` join — a `reference://{question_id}` MCP
+**resource**, NOT RAG. An un-briefed question still grades, just ungrounded (fallback to priors).
+
+**Grading source — authored markdown briefs.**
+- **`server/data/reference_briefs/<slug>.md`** — one markdown file per question; the FILENAME is
+  the question slug. Chosen over inline JSON because briefs are long-form prose that reads/edits
+  far better as markdown. `be-2` (rate limiter) authored as the worked exemplar; the rest are the
+  bank author's to write (be-1/be-3/pm-1/pm-2 currently un-briefed → graceful `not_found`).
+- **`server/db/seed.py`** — scans `reference_briefs/*.md` and upserts `reference_briefs` rows. The
+  ONE place the seeder UPDATES in place (besides the Phase D level backfill): briefs get tuned
+  iteratively, so re-seeding after an edit picks up new text (create if missing, overwrite if
+  changed). An unknown slug is a loud error (mirrors the level check). `created["briefs"]` tracks it.
+
+**Backend — the read helper + MCP surface.**
+- **`server/tools/questions.py`** — `get_reference(question_id)`: resolve slug → `Question`, then
+  query `ReferenceBrief` DIRECTLY by `question.id` (design choice: keeps the hot question-fetch
+  paths — `next_question`, the transcript — from dragging brief text they never use; no relationship
+  added to the `Question` model). Returns `{status:"ok", question_id, brief}` or a graceful
+  `not_found` for BOTH an unknown question and an un-briefed one.
+- **`server/mcp_server.py`** — `reference://{question_id}` **resource** (thin wrapper → `get_reference`,
+  mirrors `question://`). For EXTERNAL clients; the backend grader imports `get_reference` directly
+  (the Phase A "no transport to ourselves" rule). RLS already makes `reference_briefs` deny-all over
+  PostgREST (the answer key), so no anon-key read path exists.
+
+**Grader — its own model + brief/level threading.**
+- **`server/grading.py`** — `grader_agent` now runs on a SEPARATE `grader_model`
+  (`GoogleModel`, currently hardcoded to `gemini-3.5-flash-lite`), distinct from the interviewer's
+  `gemini-3.1-flash-lite-preview`; grading runs once per interview, so the grader's model is chosen
+  independently. `grade_one(question_id, question_text, answer, rubric_text, level=None)` FETCHES the
+  brief itself (`get_reference`, tolerating `not_found` → `""`) and threads `reference_brief` + `level`
+  into `evaluate_answer`. The smoke test passes real slugs (`be-2`/`be-1`) so it exercises the fetch.
+- **`server/prompts.py`** — `evaluate_answer` gained optional `reference_brief` + `level` (defaults
+  keep the MCP wrapper + pre-Phase-E callers working). The instruction prose now (a) grounds scoring
+  in the brief's bad/good/great anchors, (b) calibrates to the level, (c) rewards demonstrated
+  understanding over keyword presence, and falls back to plain rubric grading when brief/level absent.
+  The optional brief/level sections render nothing-dangling when empty.
+- **`server/mcp_server.py`** — the `evaluate_answer` prompt wrapper mirrors the new optional signature.
+
+**API — level flows to the grader.**
+- **`server/tools/interview.py`** — `get_interview` now returns `"level"` (the `levels.slug`),
+  which is what `/api/scorecard` reads to grade at the right bar.
+- **`server/api.py`** — `/api/scorecard` reads `level` off the interview and passes `question_id` +
+  `level` into `grade_one`.
+
+**Verified live:** `mcp_server.py --list` shows `reference://{question_id}` and the extended
+`evaluate_answer` args; `python -m db.seed` loads the be-2 brief idempotently; `python -m tools.questions`
+returns the be-2 brief and `not_found` for un-briefed be-1; `python grading.py` produced a grade that
+CITES the brief's own concepts (fail-open/closed, X-RateLimit-*, edge-vs-app) and calibrated to level
+("for a senior" vs "for an entry level candidate") — the plan's Phase E acceptance check.
+
+**Config note:** `GRADER_MODEL` is currently HARDCODED in `grading.py` rather than read from
+`.env`; the scaffold's `os.environ.get("GRADER_MODEL", USE_MODEL)` form is the config-in-env option
+if the model id should later change without a code edit.
+
+**Deferred / not gaps:** only `be-2` has a brief so far (the rest fall back to ungrounded grading
+until authored); pgvector/RAG-backed retrieval stays deferred to when briefs get long or the bank
+outgrows hand-authoring; the full HTTP round-trip of `/api/scorecard` reading `level` off a real
+interview wasn't curl-tested (the grader core is proven via the smoke test, and the wiring compiles).
+
+**Next up — Phase F (Neural TTS via OpenAI):** `POST /api/tts` proxy + swap `speak()`'s body in
+`client/src/voice/speech.ts`, keeping the `speak(text)` contract; gate `speak()`/mic behind a mode flag.
