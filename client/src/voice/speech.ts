@@ -24,8 +24,8 @@
  *           render a 🎤 button (only when `supported`) that toggles start()/stop(); the hook
  *           writes the transcript into `draft`, and you Send it exactly as a typed answer.
  */
-import { useEffect, useRef, useState } from "react";
-import { useTranscribeMutation } from "../api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranscribeMutation, useTtsMutation } from "../api";
 
 // ============================ TTS — the OUTPUT adapter ============================
 // SpeechSynthesis + SpeechSynthesisUtterance ARE in TypeScript's DOM lib, so no extra typing.
@@ -39,6 +39,11 @@ import { useTranscribeMutation } from "../api";
 // The prefs live at MODULE scope (below) so the two speak() call sites don't have to thread them
 // through — the voice picker calls setVoicePrefs(), speak() reads them. Same seam, richer knobs.
 
+// NO LONGER DEAD (was flagged for removal): this block (VoicePrefs / voicePrefs / setVoicePrefs, plus
+// useVoices / pickPreferredVoice below) drives the browser SpeechSynthesis voice — now the FREE "browser"
+// TTS engine the user can pick to avoid spending OpenAI tokens while debugging. useSpeak(engine)
+// dispatches to it or to the neural /api/tts path; App's auto-pick effect still feeds voicePrefs so the
+// browser voice is the best system voice available.
 type VoicePrefs = { voiceURI: string | null; rate: number; pitch: number };
 
 // Sensible defaults: system-default voice until a preferred one is chosen; natural cadence.
@@ -50,19 +55,123 @@ export function setVoicePrefs(patch: Partial<VoicePrefs>): void {
     voicePrefs = { ...voicePrefs, ...patch };
 }
 
-export function speak(text: string): void {
-    if (!("speechSynthesis" in window)) return; // unsupported browser -> silently no-op
-    window.speechSynthesis.cancel(); // interrupt any utterance still playing
-    const utterance = new SpeechSynthesisUtterance(text);
-    // Match the chosen voice by URI (stable id) out of the live voice list. If it's not found
-    // (e.g. voices not loaded yet, or null), leave utterance.voice unset -> OS default.
-    const chosen = window.speechSynthesis
-        .getVoices()
-        .find((v) => v.voiceURI === voicePrefs.voiceURI);
-    if (chosen) utterance.voice = chosen;
-    utterance.rate = voicePrefs.rate;
-    utterance.pitch = voicePrefs.pitch;
-    window.speechSynthesis.speak(utterance);
+// The two TTS engines the user can choose between: "openai" = neural /api/tts (spends tokens),
+// "browser" = free local SpeechSynthesis (robotic, good for debugging). useSpeak(engine) dispatches.
+export type TtsEngine = "openai" | "browser";
+
+// ============================ Phase F — useSpeak() (engine-switchable TTS) ============================
+// speak() used to be a bare module function driving the OS SpeechSynthesis. Phase F routes TTS
+// through OUR /api/tts proxy, and per the "one place HTTP lives" rule that call goes through RTK
+// Query (useTtsMutation) — the same path the transcribe adapter takes. RTK Query hooks can only be
+// called during render, so speak() becomes a HOOK: useSpeak() returns the imperative speak(text) fn.
+//
+// THE CONTRACT IS PRESERVED WHERE IT MATTERS — the CALL SITES. App.tsx changes exactly ONE line
+// (`const speak = useSpeak()` instead of `import { speak }`); after that every `speak(res.message)`
+// is byte-for-byte the same and the loop still never learns the interviewer's turn was spoken. Auth
+// (the Bearer JWT) and the origin come FREE from api.ts's prepareHeaders/baseUrl — no token handling
+// lives here. That centralization is the whole reason this beats a raw fetch in a module function.
+export function useSpeak(engine: TtsEngine): { speak: (text: string, onReady?: () => void) => Promise<void>; speaking: boolean } {
+    // isLoading covers the SYNTHESIS gap — the exact "text is up but no audio yet" window (#5) we're
+    // masking. `playing` extends the signal through actual playback so the indicator reads as
+    // "the interviewer is speaking" for the whole utterance, not just the wait.
+    const [tts, { isLoading: synthesizing }] = useTtsMutation();
+    const [playing, setPlaying] = useState(false);
+    // Barge-in + leak-free cleanup: hold the playing clip AND its object URL together, so replacing
+    // it can revoke the url it's dropping. pause() never fires `ended`, so an interrupted clip can't
+    // self-clean via onended — pairing the url here (Option A) is what closes that leak. A ref (not
+    // state) because nothing renders it.
+    const currentRef = useRef<{ audio: HTMLAudioElement; url: string } | null>(null);
+
+    // --- Engine A: OpenAI neural TTS (spends tokens). The Phase F path, unchanged.
+    // useCallback so the returned fn identity is stable across renders (safe to list in effect deps
+    // and to pass down without causing churn).
+    // onReady fires the moment audio ACTUALLY starts (or, on any failure, right away). The caller uses
+    // it to REVEAL the interviewer's text in sync with the voice — instead of showing text 1-2s before
+    // the sound. It MUST fire on every exit path below, or a "thinking…" bubble would hang forever.
+    const speakOpenAI = useCallback(async (text: string, onReady?: () => void): Promise<void> => {
+        if (!text.trim()) { onReady?.(); return } // nothing to say -> reveal immediately
+
+        // 1) SYNTHESIZE. If this fails, return WITHOUT touching the clip that may still be playing —
+        //    a synth error for the next line must not kill the current one. `synthesizing` is true
+        //    for this whole await (useTtsMutation's isLoading) — that IS the masked gap.
+        let blob: Blob
+        try{
+            blob = await tts({text}).unwrap()
+        }
+        catch (e){
+            console.error(e)
+            onReady?.() // synth failed -> reveal the text anyway (this turn just has no audio)
+            return
+        }
+
+        // 2) BARGE-IN. Stop the previous clip and revoke ITS url now: pause() never fires `ended`,
+        //    so that clip's onended (below) would never run to clean it up. Leave `playing` true —
+        //    the new clip takes over immediately, so the indicator shouldn't flicker off between them.
+        if (currentRef.current){
+            currentRef.current.audio.pause()
+            URL.revokeObjectURL(currentRef.current.url)
+            currentRef.current = null
+        }
+
+        // 3) PLAY the new clip.
+        const url = URL.createObjectURL(blob)
+        const audio = new Audio(url)
+        // Natural completion cleans itself up. The guard avoids nulling a ref a LATER clip installed
+        // (same reason it avoids a stale clip switching the indicator off mid-utterance).
+        audio.onended = () => {
+            URL.revokeObjectURL(url)
+            if (currentRef.current?.audio === audio){
+                currentRef.current = null
+                setPlaying(false)
+            }
+        }
+        currentRef.current = {audio, url}
+        try{
+            await audio.play()
+            onReady?.() // playing NOW -> reveal the text at the same instant the voice starts
+            setPlaying(true)
+        }
+        catch (e){
+            // Autoplay blocked / interrupted before playback -> this clip won't reach `ended`; revoke now.
+            URL.revokeObjectURL(url)
+            if (currentRef.current?.audio === audio){
+                currentRef.current = null
+                setPlaying(false)
+            }
+            onReady?.() // couldn't play -> still reveal the text so the bubble doesn't hang on "thinking…"
+            console.error(e)
+        }
+    }, [tts]);
+
+    // --- Engine B: browser SpeechSynthesis (FREE, robotic). The pre-Phase-F path, restored as the
+    // token-saving / debug option. No network, so onReady fires on the utterance's `start` event — the
+    // "thinking…" gap is effectively instant. Reads the shared voicePrefs the auto-pick effect sets.
+    const speakBrowser = useCallback((text: string, onReady?: () => void): void => {
+        if (!("speechSynthesis" in window)) { onReady?.(); return } // unsupported -> just reveal the text
+        window.speechSynthesis.cancel() // barge-in: drop any utterance still queued/speaking
+        const utterance = new SpeechSynthesisUtterance(text)
+        const chosen = window.speechSynthesis.getVoices().find(v => v.voiceURI === voicePrefs.voiceURI)
+        if (chosen) utterance.voice = chosen
+        utterance.rate = voicePrefs.rate
+        utterance.pitch = voicePrefs.pitch
+        utterance.onstart = () => { setPlaying(true); onReady?.() } // reveal text as speech begins
+        utterance.onend = () => setPlaying(false)
+        utterance.onerror = () => { setPlaying(false); onReady?.() } // reveal even if it fails to speak
+        window.speechSynthesis.speak(utterance)
+    }, []);
+
+    // Dispatch on the chosen engine — SAME (text, onReady) contract either way, so App stays engine-blind
+    // (the whole edge-adapter thesis: the loop never learns WHICH voice engine spoke). Wrap the browser
+    // path in Promise.resolve so both branches satisfy the Promise<void> return.
+    const speak = useCallback((text: string, onReady?: () => void): Promise<void> => {
+        return engine === "browser"
+            ? Promise.resolve(speakBrowser(text, onReady))
+            : speakOpenAI(text, onReady)
+    }, [engine, speakOpenAI, speakBrowser]);
+
+    // speaking = the whole audible window (synth wait OR playback). The synth half masks the latency
+    // you saw; the playback half just keeps the indicator honest until the voice actually stops.
+    return { speak, speaking: synthesizing || playing };
 }
 
 /**

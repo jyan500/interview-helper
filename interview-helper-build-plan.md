@@ -411,8 +411,8 @@ get different questions and level-calibrated feedback).
 
 ## CURRENT STATUS (resume point)
 
-*Last updated 2026-08-13. Branch: `sign-out` (Phase B landed across `supabase-auth` +
-`supabase-auth-frontend`).*
+*Last updated 2026-08-27. Branch: `neural-tts` (Phase F complete). Phases A–F all ✅; **Phase G
+(production hardening & deploy) is the next phase.***
 
 ### Phase A — ✅ COMPLETE (all verified against the live Supabase DB)
 
@@ -816,5 +816,61 @@ until authored); pgvector/RAG-backed retrieval stays deferred to when briefs get
 outgrows hand-authoring; the full HTTP round-trip of `/api/scorecard` reading `level` off a real
 interview wasn't curl-tested (the grader core is proven via the smoke test, and the wiring compiles).
 
-**Next up — Phase F (Neural TTS via OpenAI):** `POST /api/tts` proxy + swap `speak()`'s body in
-`client/src/voice/speech.ts`, keeping the `speak(text)` contract; gate `speak()`/mic behind a mode flag.
+### Phase F — ✅ COMPLETE (engine-switchable neural TTS, latency-masked, verified live in the SPA)
+
+*Branch `neural-tts`. Client `npx tsc --noEmit` clean; `python -m py_compile api.py` clean. Tested end
+to end in the browser: the OpenAI voice plays with no `App.tsx` change to the call sites, the free
+browser voice is selectable, and text now reveals in sync with the audio.*
+
+**Design fork (resolved, NOT the plan's default):** the OUTPUT adapter routes through **RTK Query via
+a `useSpeak()` hook**, not a raw `fetch` in a module function. The plan said "swap speak()'s body",
+but a raw fetch would DUPLICATE api.ts's `prepareHeaders` auth. So `speak()` became a hook wrapping
+`useTtsMutation` (auth + origin come free); App call sites are unchanged. Recorded as the
+`route-client-http-through-rtk-hook` memory. RTK Query hooks only run during render, hence the shape.
+
+**Backend — `server/api.py`.** `POST /api/tts`: `TtsRequest {text}`, `Depends(require_user)` **wallet
+gate** (an open TTS proxy is a stranger's OpenAI bill — same reasoning as `/api/transcribe`), reuses
+the lazy `get_openai_client()`, returns `fastapi.Response(content=audio_bytes, media_type="audio/mpeg")`
+(binary, not a dict). Guards: empty text → 400, `len(text) > 4096` → 413 (OpenAI's own input cap — a
+**character** ceiling, NOT transcribe's byte/MB math, which was a category error when copied over).
+Model is **`tts-1`** (OpenAI's latency-optimized voice; switched from `gpt-4o-mini-tts` after testing
+showed a 1–2s gap), `voice="alloy"`, `response_format="mp3"`, read async via `await resp.aread()`.
+
+**Client — `client/src/api.ts`.** `tts` mutation returns a **`Blob`** via `responseHandler: r =>
+r.blob()` (the one binary-response endpoint — fetchBaseQuery's default `r.json()` would choke on mp3);
+`TtsRequest` type; `useTtsMutation` exported.
+
+**Client — `client/src/voice/speech.ts`.** `speak()` → **`useSpeak(engine)`** hook, returning
+`{ speak(text, onReady?), speaking }`:
+- **Two engines behind ONE `speak(text, onReady)` contract** (App stays engine-blind — the thesis):
+  `speakOpenAI` (neural `/api/tts`, spends tokens) and `speakBrowser` (the RESTORED `SpeechSynthesis`
+  path — free/robotic, for debugging without burning credit). The old `voicePrefs`/`useVoices`/
+  `pickPreferredVoice` block I'd flagged "dead-once-verified" came **back to life** as the browser
+  engine's voice machinery rather than being deleted. `useSpeak(engine)` dispatches.
+- **Leak-free audio cleanup (Option A):** `currentRef` pairs the `HTMLAudioElement` WITH its object
+  URL, so every path revokes exactly once — natural end (`onended`), barge-in (pause + revoke the
+  replaced clip, since `pause()` never fires `ended`), `play()` rejection (autoplay blocked), and a
+  synth failure that returns early WITHOUT disturbing a clip still playing.
+- **`onReady` callback** fires the instant audio actually starts (and on every failure path), letting
+  the caller sync text to sound.
+
+**Client — `client/src/App.tsx`.**
+- `const { speak } = useSpeak(ttsEngine)`; call sites (`speak(res.message, …)`) otherwise unchanged.
+- **Latency masking (#5), done RIGHT:** instead of showing text 1–2s before sound, a new interviewer
+  turn pushes a `pending` bubble rendering **"thinking…"**, and `speak(text, () => revealLine(id, text))`
+  swaps in the real text the moment audio starts — **text + voice land together.** `Line` gained
+  `id` (a `useRef` counter — stable key, race-safe reveal by id) + `pending`. The earlier standalone
+  "🔊 speaking…" indicator was removed in favor of this.
+- **Engine picker:** a **`react-select`** dropdown (same widget family as the kickoff role/level
+  selects; a plain static options list, not the async-paginate variant — recorded as the
+  `prefer-react-select-for-dropdowns` memory) toggles `ttsEngine` (`"openai"` default | `"browser"`).
+  Works mid-interview — `useSpeak(engine)` just re-dispatches the next `speak()`.
+
+**Deferred / not gaps:** the **mode-flag gate** (`speak()` + mic behind a per-session voice vs
+text-only flag — the dual-mode split; when built, text-only mode should skip the thinking→reveal wait);
+persisting the engine choice across reloads (a `localStorage` mirror); cross-engine mid-utterance stop
+(switching engines while a clip plays can briefly overlap — harmless for a debug toggle). The
+SpeechSynthesis block is NO LONGER slated for removal — it's the free engine now.
+
+**Next up — Phase G (production hardening & deploy):** env-driven CORS, `client/vercel.json` SPA
+rewrite + `VITE_*` vars in Vercel, a FastAPI `Dockerfile` for Render/Railway, keep the guardrails.
