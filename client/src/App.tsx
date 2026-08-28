@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import { useForm } from "react-hook-form";
+import Select from "react-select";
 import {
     useStartInterviewMutation,
     useSubmitAnswerMutation,
@@ -13,15 +14,28 @@ import { ControlledAsyncPaginateSelect } from "./components/ControlledAsyncPagin
 import type { SelectOption } from "./components/AsyncPaginateSelect";
 import ScorecardView from "./ScorecardView";
 import {
-    speak,
+    useSpeak,
     useWhisperRecognition,
     useVoices,
     pickPreferredVoice,
     setVoicePrefs,
+    type TtsEngine,
 } from "./voice/speech"
 import { useAuth } from "./auth/AuthProvider"
 
-type Line = { who: "interviewer" | "you"; text: string };
+// `id` is a STABLE key so we can reveal a specific bubble later by id (race-safe even if other lines
+// were appended meanwhile). `pending` = an interviewer turn whose audio is still synthesizing: we show
+// "thinking…" and withhold the real text until useSpeak's onReady fires, so text + voice land together
+// (no more reading the question in silence for a beat while TTS loads).
+type Line = { id: number; who: "interviewer" | "you"; text: string; pending?: boolean };
+
+// Phase F — the TTS engine picker's options (react-select shape). Typed with the TtsEngine union so
+// onChange stays type-safe end to end (no cast back from a bare string). Static, so module scope.
+type EngineOption = { value: TtsEngine; label: string };
+const TTS_ENGINE_OPTIONS: EngineOption[] = [
+    { value: "openai", label: "OpenAI — neural (uses tokens)" },
+    { value: "browser", label: "Browser — free (robotic)" },
+];
 
 // Phase D — the kickoff form's shape. Each field holds react-select's Option ({value: slug,
 // label: name}) or null until picked; the submit handler unwraps `.value` to the slug the
@@ -85,6 +99,27 @@ export default function App() {
     //   useWhisperRecognition — Phase 5, mic capture here + our /api/transcribe (OpenAI Whisper)
     const { supported, listening, start, stop, transcribing } = useWhisperRecognition(setDraft)
 
+    // Which TTS engine to use. "openai" = neural (spends tokens); "browser" = free local
+    // SpeechSynthesis (robotic), handy for debugging without burning OpenAI credit. The picker below
+    // flips this; useSpeak(engine) dispatches. Defaults to openai (the production voice).
+    const [ttsEngine, setTtsEngine] = useState<TtsEngine>("openai")
+
+    // Phase F — the OUTPUT edge adapter, engine-switchable. useSpeak(engine) wraps whichever TTS is
+    // chosen and hands back speak(text, onReady). We pass onReady to REVEAL the interviewer bubble in
+    // sync with the voice (#5): it shows "thinking…" until audio is ready, then text + sound together.
+    const { speak } = useSpeak(ttsEngine)
+
+    // Stable per-line id (a ref counter, not state — it never renders). Lets revealLine() target the
+    // exact "thinking…" bubble by id, even if the user sends again before the audio starts.
+    const lineIdRef = useRef(0)
+    function nextId() { lineIdRef.current += 1; return lineIdRef.current }
+
+    // Swap a pending interviewer bubble's placeholder for the real text — called from speak()'s onReady,
+    // i.e. exactly when audio begins. Matches by id so it hits the right bubble regardless of order.
+    function revealLine(id: number, text: string) {
+        setTranscript(t => t.map(l => (l.id === id ? { ...l, text, pending: false } : l)))
+    }
+
     // Phase 5 TTS polish — the OUTPUT edge adapter, richer knobs. `useVoices()` gives the live
     // (async-loaded) voice list; `selectedVoiceURI` records which voice we've settled on (also the
     // "have we auto-picked yet?" guard for the effect below).
@@ -114,8 +149,11 @@ export default function App() {
         // result object, which you'd have to inspect). Convenient with async/await.
         const res = await startInterview({ role: role.value, seniority: level.value }).unwrap();
         setInterviewId(res.interview_id);
-        setTranscript([{ who: "interviewer", text: res.message }]);
-        speak(res.message)
+        // Show a "thinking…" interviewer bubble immediately, then reveal the question the moment the
+        // voice is ready (onReady) — text and audio in lockstep. onStart is a click, so autoplay is allowed.
+        const id = nextId();
+        setTranscript([{ id, who: "interviewer", text: "", pending: true }]);
+        speak(res.message, () => revealLine(id, res.message))
     }
 
     // send the candidate's answer (drives POST /api/answer). This is one iteration
@@ -125,12 +163,14 @@ export default function App() {
             return
         }
         // include your answer to the interview question
-        setTranscript(t => [...t, { who: "you", text: draft }])
+        setTranscript(t => [...t, { id: nextId(), who: "you", text: draft }])
         // send the answer to the backend
         const res = await submitAnswer({ interview_id: interviewId, text: draft }).unwrap()
-        // include the feedback/next question from the interviewer
-        setTranscript(t => [...t, { who: "interviewer", text: res.message }])
-        speak(res.message)
+        // add a "thinking…" placeholder for the interviewer turn, then reveal its text + start audio
+        // together via onReady (below) instead of showing the question a beat before any sound.
+        const id = nextId()
+        setTranscript(t => [...t, { id, who: "interviewer", text: "", pending: true }])
+        speak(res.message, () => revealLine(id, res.message))
         // reset the textarea text for the next answer
         setDraft("")
         // the client-driven loop tells us when the bank is exhausted — stop taking answers
@@ -160,6 +200,20 @@ export default function App() {
             <button onClick={() => {
                 signOut()
             }} className="ml-2 rounded-md bg-slate-800 px-4 py-2 font-medium text-white transition hover:bg-slate-700 disabled:opacity-50">Signout</button>
+
+            {/* Phase F — voice engine picker (react-select, same widget family as the kickoff role/level
+                selects; no API here so a plain static options list, not the async-paginate variant).
+                Switch to the free browser voice to debug without spending OpenAI tokens; switch back for
+                neural. Works mid-interview — useSpeak(engine) just re-dispatches the next speak() call. */}
+            <div className="mt-3 max-w-xs">
+                <label className="mb-1 block text-sm font-medium text-slate-700">Voice</label>
+                <Select<EngineOption>
+                    options={TTS_ENGINE_OPTIONS}
+                    value={TTS_ENGINE_OPTIONS.find((o) => o.value === ttsEngine)}
+                    onChange={(opt) => opt && setTtsEngine(opt.value)}
+                    isSearchable={false}
+                />
+            </div>
 
             {interviewId === null ? (
                 // Phase D — the kickoff FORM. RHF's handleSubmit(onStart) runs onStart only when
@@ -202,9 +256,9 @@ export default function App() {
             ) : (
                 <>
                     <ul className="space-y-3">
-                        {transcript.map((line, i) => (
+                        {transcript.map((line) => (
                             <li
-                                key={i}
+                                key={line.id}
                                 className={
                                     "rounded-lg p-3 " +
                                     (line.who === "interviewer" ? "bg-slate-100" : "bg-blue-50")
@@ -213,7 +267,9 @@ export default function App() {
                                 <span className="font-semibold">
                                     {line.who === "interviewer" ? "🧑‍💼 Interviewer" : "🗣️ You"}:
                                 </span>{" "}
-                                {line.text}
+                                {line.pending
+                                    ? <span className="italic text-slate-400">thinking…</span>
+                                    : line.text}
                             </li>
                         ))}
                     </ul>

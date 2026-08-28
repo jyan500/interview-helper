@@ -80,7 +80,7 @@ from __future__ import annotations
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 # fastapi-pagination — the paginated option endpoints (Phase D picker). `Params` is the
 # page/size query-param dependency, `Page[T]` the {items,total,page,size,pages} response
@@ -174,6 +174,16 @@ class AnswerRequest(BaseModel):
 class ScorecardRequest(BaseModel):
     interview_id: str
     role: str = "backend-engineer"   # which rubric to grade against (matches the interview)
+
+
+# Phase F — the /api/tts request. Unlike /api/transcribe (whose request is raw multipart audio,
+# so it has no BaseModel), TTS goes the OTHER way: a plain JSON body carrying the text to speak.
+class TtsRequest(BaseModel):
+    text: str
+    # OPTIONAL later: let the client pick the voice/model per session. Leave it out for now —
+    # a fixed default keeps the speak(text) contract dead simple. (If you add it, thread it into
+    # the create() call below and mirror the field in api.ts's TtsRequest.)
+    # voice: str = "alloy"
 
 
 # --- response models for the paginated picker endpoints (Phase D). Page[T] is generic and
@@ -491,6 +501,63 @@ async def transcribe(
     # Same shape the client's onResult(text) expects — mirrors the Web Speech path's output.
     return {"text": result.text}
 
+
+# ===========================================================================
+# SCAFFOLD (Phase F) — POST /api/tts : the neural-TTS OUTPUT edge adapter, server side.
+#
+# THIS IS THE MIRROR OF /api/transcribe. Transcribe is audio-in / text-out (the INPUT seam);
+# this is text-in / audio-out (the OUTPUT seam). The thesis one more time: the interview loop
+# above never learns that the interviewer's turn was SPOKEN. In the browser `speak(text)` used
+# to lean on the OS's robotic SpeechSynthesis; now it POSTs text HERE and plays the neural audio
+# that comes back. The entire server-side cost of that swap is this one route — text in, mp3 out.
+#
+# REUSE what transcribe already stood up, don't reinvent it:
+#   - get_openai_client()  — the same lazy AsyncOpenAI singleton (reads OPENAI_API_KEY on first use).
+#   - Depends(require_user) — the same WALLET gate. An open TTS proxy is a stranger's OpenAI bill
+#     billed to your key, found by scanning your deployed origin. `user_id` goes unused in the body
+#     (there's no row to own) — that's fine and normal for a money-spending gate, exactly like
+#     transcribe. Any route that spends money on someone's behalf must know whose behalf.
+#
+# VERIFIED CALL SHAPE (openai 2.46.0, AsyncSpeech.create — args are KEYWORD-ONLY):
+#     resp = await get_openai_client().audio.speech.create(
+#         model="gpt-4o-mini-tts",   # newer + steerable; "tts-1" is the cheaper classic
+#         voice="alloy",             # alloy | echo | fable | onyx | nova | shimmer | ...
+#         input=text,
+#         response_format="mp3",     # mp3 | opus | aac | flac | wav | pcm
+#     )
+#     audio_bytes = await resp.aread()   # HttpxBinaryResponseContent -> bytes.
+#                                        # NOTE: aread(), the ASYNC read — plain .read() is the
+#                                        # sync client's method and won't await here.
+# Then hand the bytes back as a BINARY body FastAPI won't try to JSON-encode (that's why the
+# route returns fastapi.Response, not a dict):
+#     return Response(content=audio_bytes, media_type="audio/mpeg")   # audio/mpeg == mp3
+#
+# GUARDRAILS to mirror from transcribe (fill these in — they're the whole point of a proxy you own):
+#   - empty text -> 400 (nothing to synthesize; don't spend a cent on "").
+#   - very long text -> 413. A runaway 20k-char answer read aloud is real money + latency; pick a
+#     sane character ceiling (transcribe caps bytes at 10MB — do the char equivalent here).
+@app.post("/api/tts")
+async def tts(
+    req: TtsRequest,
+    user_id: str = Depends(require_user),
+) -> Response:
+    text = req.text.strip()
+
+    if len(text) == 0:
+        raise HTTPException(status_code=400, detail="No text found")
+
+    if len(text) > 4096:
+        raise HTTPException(status_code=413, detail="Text is too long to process")
+
+    resp = await get_openai_client().audio.speech.create(
+        model="tts-1",
+        voice="alloy", # alloy, echo, fable, nova, etc
+        input=text,
+        response_format="mp3", # mp3 | opus | aac | flac | wav | pcm
+    )
+
+    audio_bytes = await resp.aread()
+    return Response(content=audio_bytes, media_type="audio/mpeg")
 
 # ===========================================================================
 # WORKED EXAMPLE — POST /api/scorecard : grade the whole interview, return a scorecard.

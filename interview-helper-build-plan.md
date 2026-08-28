@@ -816,5 +816,36 @@ until authored); pgvector/RAG-backed retrieval stays deferred to when briefs get
 outgrows hand-authoring; the full HTTP round-trip of `/api/scorecard` reading `level` off a real
 interview wasn't curl-tested (the grader core is proven via the smoke test, and the wiring compiles).
 
-**Next up — Phase F (Neural TTS via OpenAI):** `POST /api/tts` proxy + swap `speak()`'s body in
-`client/src/voice/speech.ts`, keeping the `speak(text)` contract; gate `speak()`/mic behind a mode flag.
+### Phase F — 🚧 SCAFFOLDED (neural TTS via OpenAI; TODO bodies left for the author to fill)
+
+*Branch `neural-tts`. Client `npx tsc --noEmit` clean; `python -m py_compile api.py` clean. The
+plumbing + design decisions are in place; the actual OpenAI call, the guards, and the audio playback
+are marked `TODO` for the fill-in exercise.*
+
+**Design fork (resolved, NOT the plan's default):** the OUTPUT adapter routes through **RTK Query via
+a `useSpeak()` hook**, not a raw `fetch` in a module function. The plan said "swap speak()'s body",
+but a raw fetch would DUPLICATE api.ts's `prepareHeaders` auth. Instead `speak()` became a hook that
+wraps `useTtsMutation`; App.tsx changed exactly one line (`const speak = useSpeak()`), every
+`speak(res.message)` call site is unchanged. Recorded as the `route-client-http-through-rtk-hook`
+memory. RTK Query hooks only run during render, hence the hook shape.
+
+**Scaffolded (compiles; TODOs inside):**
+- **`server/api.py`** — `POST /api/tts` route (mirror of the `/api/transcribe` worked example):
+  `TtsRequest {text}` model, `Depends(require_user)` wallet gate, reuses `get_openai_client()`,
+  returns `fastapi.Response` (binary, not a dict). The verified openai-2.46.0 call shape is in the
+  route's comment (`audio.speech.create(model,voice,input,response_format="mp3")` →
+  `await resp.aread()`). **TODO:** empty/over-long guards, the create() call, the `Response(...,
+  media_type="audio/mpeg")` return. Currently raises 501.
+- **`client/src/api.ts`** — `tts` mutation (`Blob` result via `responseHandler: r => r.blob()`, the
+  one binary-response endpoint), `TtsRequest` type, `useTtsMutation` exported. **Complete**, not TODO.
+- **`client/src/voice/speech.ts`** — `speak()` replaced by **`useSpeak()`** hook: wraps
+  `useTtsMutation`, holds a `currentRef` for barge-in. **TODO:** `tts({text}).unwrap()` → play the
+  Blob via `new Audio(URL.createObjectURL(blob))`. Old SpeechSynthesis voice-picker block
+  (`VoicePrefs`/`setVoicePrefs`/`useVoices`/`pickPreferredVoice`) flagged **⚠️ dead-once-verified** —
+  kept only because App.tsx still imports it; delete with its App effect together after confirming.
+- **`client/src/App.tsx`** — `import { useSpeak }` + `const speak = useSpeak()`. One line, call sites
+  untouched.
+
+**Still to do (after the TODOs):** verify end to end (hear the OpenAI voice, no other App change);
+then the **mode-flag gate** (`speak()` + mic behind a per-session voice/text-only flag — the deferred
+dual-mode split's cheap-now hook) and the SpeechSynthesis-block removal. Then Phase G (deploy).

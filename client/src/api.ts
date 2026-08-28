@@ -133,6 +133,13 @@ export interface TranscribeResponse {
     text: string;
 }
 
+// Phase F neural TTS — the /api/tts request. A plain JSON body ({ text }), UNLIKE transcribe's
+// FormData (transcribe ships raw audio; this ships text). The RESPONSE has no interface here: it's
+// binary audio (a Blob), not JSON — see the `tts` endpoint's responseHandler below.
+export interface TtsRequest {
+    text: string;
+}
+
 // ===========================================================================
 // PHASE B — THE JWT, ATTACHED IN ONE PLACE.
 //
@@ -262,6 +269,20 @@ export const interviewApi = createApi({
         transcribe: builder.mutation<TranscribeResponse, FormData>({
             query: (body) => ({ url: "/transcribe", method: "POST", body }),
         }),
+        // Phase F neural TTS — synthesize one interviewer line via /api/tts (OpenAI TTS). A mutation
+        // (POST with a side effect), same instinct as transcribe, and its OUTPUT-seam mirror. The one
+        // thing that differs from every other endpoint here: the RESPONSE is binary audio, not JSON.
+        // fetchBaseQuery defaults to `r.json()`, which would choke on mp3 bytes — so `responseHandler`
+        // hands back a Blob instead, and the result type is `Blob`. useSpeak() (voice/speech.ts) plays
+        // it. Auth rides along via prepareHeaders exactly like the others — the win over a raw fetch.
+        tts: builder.mutation<Blob, TtsRequest>({
+            query: (body) => ({
+                url: "/tts",
+                method: "POST",
+                body,
+                responseHandler: (response) => response.blob(),
+            }),
+        }),
         // Phase C — the History LIST. A QUERY, not a mutation: it's a cacheable GET of existing
         // rows (no side effect), the frontend mirror of the read-vs-write split the backend draws
         // between /api/interviews and /api/interview. RTK Query caches it and re-fetches on mount,
@@ -294,6 +315,7 @@ export const {
     useSubmitAnswerMutation,
     useGetScorecardMutation,
     useTranscribeMutation,
+    useTtsMutation,
     useGetMyInterviewsQuery,
     useGetInterviewDetailQuery,
     // LAZY variants: the picker triggers these imperatively inside loadOptions (see App.tsx),
