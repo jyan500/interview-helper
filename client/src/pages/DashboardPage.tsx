@@ -48,7 +48,6 @@ export default function DashboardPage() {
     const navigate = useNavigate();
     const { session } = useAuth();
     const [level, setLevel] = useState<Level>("Mid");
-    console.log(session.user)
 
     return (
         <div className="min-h-screen bg-bg text-ink">
