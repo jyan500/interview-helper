@@ -11,6 +11,7 @@
  */
 import { useState } from "react";
 import { useNavigate } from "react-router";
+import { useAuth } from "../auth/AuthProvider"
 import AppNav from "../components/AppNav";
 
 // The four seniority levels, in rank order (the active one takes the accent tint).
@@ -41,7 +42,9 @@ const WORK_ON_NEXT = [
 
 export default function DashboardPage() {
     const navigate = useNavigate();
+    const { session } = useAuth();
     const [level, setLevel] = useState<Level>("Mid");
+    console.log(session.user)
 
     return (
         <div className="min-h-screen bg-bg text-ink">
@@ -52,7 +55,7 @@ export default function DashboardPage() {
                 <div className="px-7 pt-[22px]">
                     <div className="kicker">Wednesday, 3 September</div>
                     <h1 className="mt-1.5 font-heading text-[34px] font-medium leading-[1.05]">
-                        Good afternoon, Jian
+                        Hello, {session.user.user_metadata.display_name}
                     </h1>
                 </div>
 
