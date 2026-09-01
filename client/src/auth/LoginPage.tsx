@@ -1,28 +1,20 @@
 /**
- * WORKED EXAMPLE — sign in, with react-hook-form doing the form state.
+ * Sign in — Nocturne mock 4a. A split panel: marketing on the left, the form on the
+ * right. The FORM LOGIC is unchanged from the pre-redesign page (react-hook-form +
+ * supabase.auth.signInWithPassword); only the presentation is new.
  *
- * WHAT react-hook-form BUYS YOU. The useState version of this page is two more state
- * variables per field, an onChange per input, a manual validity check, and a submitting
- * flag. Here: `register` wires an input to the form, `handleSubmit` validates and only then
- * calls your handler, and `formState` hands back errors and `isSubmitting`. It keeps values
- * in refs rather than state, so typing in one field doesn't re-render the whole form.
+ * react-hook-form recap: `register` wires an input, `handleSubmit` validates then calls
+ * onSubmit, `errors.email` is a field error, `errors.root` is the form-level error we set
+ * ourselves from Supabase's message. This page only navigates — it never sets a session;
+ * signInWithPassword succeeding fires onAuthStateChange, which updates AuthProvider's
+ * mirror and lets ProtectedRoute through.
  *
- * TWO KINDS OF ERROR, AND THEY LIVE IN THE SAME PLACE:
- *
- *      errors.email    a FIELD error — the rules in register() failed, no network involved
- *      errors.root     a FORM error — the server rejected the whole attempt ("Invalid login
- *                      credentials"). "root" is react-hook-form's reserved key for exactly
- *                      this; you set it yourself with setError.
- *
- * WHAT THIS PAGE DOES *NOT* DO: it never touches AuthProvider, never sets a session, never
- * stores a token. `signInWithPassword` succeeds -> supabase-js stores the session and fires
- * onAuthStateChange -> the provider's mirror updates -> <ProtectedRoute> re-renders and lets
- * you through. This page only navigates. If you find yourself wanting to setSession()
- * anywhere, the mirror has grown a second writer and will start to drift.
+ * The social buttons are DESIGN ONLY (no OAuth wired) — TODO(wire).
  */
 import { useForm } from "react-hook-form";
 import { Link, useLocation, useNavigate } from "react-router";
 import { supabase } from "../supabase";
+import { Brand } from "../components/AuthCard";
 
 type LoginFields = {
     email: string;
@@ -39,88 +31,138 @@ export default function LoginPage() {
         formState: { errors, isSubmitting },
     } = useForm<LoginFields>();
 
-    // Where to go after a successful sign-in. <ProtectedRoute> stashes the page you were
-    // trying to reach in navigation state, so being bounced to /login and back is invisible.
     const from = (location.state as { from?: string } | null)?.from ?? "/";
 
     async function onSubmit(values: LoginFields) {
-        // supabase-js returns errors in the RESULT, it does not throw — so there's no
-        // try/catch here. Forgetting this is how you end up with a login page that silently
-        // does nothing on a wrong password.
         const { error } = await supabase.auth.signInWithPassword({
             email: values.email,
             password: values.password,
         });
-
         if (error) {
             setError("root", { message: error.message });
             return;
         }
-
-        // `replace: true` so the browser Back button doesn't return to the login page of a
-        // session that's now signed in.
         navigate(from, { replace: true });
     }
 
+    const hasError = !!errors.root;
+
     return (
-        <main className="mx-auto max-w-sm p-6 font-sans">
-            <h1 className="mb-4 text-2xl font-bold text-slate-800">Sign in</h1>
-
-            {/* handleSubmit(onSubmit) runs validation FIRST and calls onSubmit only if it
-                passes — which is why onSubmit can assume `values` is well-formed. */}
-            <form onSubmit={handleSubmit(onSubmit)} className="space-y-3">
-                <div>
-                    <label className="block text-sm font-medium text-slate-700">Email</label>
-                    {/* register() returns {name, onChange, onBlur, ref} — spreading it is what
-                        connects this input to the form. The second argument is the rule set. */}
-                    <input
-                        type="email"
-                        {...register("email", {
-                            required: "Email is required",
-                            pattern: { value: /\S+@\S+\.\S+/, message: "That doesn't look like an email" },
-                        })}
-                        className="mt-1 w-full rounded-md border border-slate-300 p-2 focus:border-slate-500 focus:outline-none"
-                    />
-                    {errors.email && (
-                        <p className="mt-1 text-sm text-red-600">{errors.email.message}</p>
-                    )}
-                </div>
-
-                <div>
-                    <label className="block text-sm font-medium text-slate-700">Password</label>
-                    <input
-                        type="password"
-                        {...register("password", {
-                            required: "Password is required",
-                            // Matches Supabase's own default minimum, so the browser catches
-                            // it before the round-trip. Raising it here does NOT raise it at
-                            // Supabase — that's a dashboard setting (Authentication -> Policies).
-                            minLength: { value: 6, message: "At least 6 characters" },
-                        })}
-                        className="mt-1 w-full rounded-md border border-slate-300 p-2 focus:border-slate-500 focus:outline-none"
-                    />
-                    {errors.password && (
-                        <p className="mt-1 text-sm text-red-600">{errors.password.message}</p>
-                    )}
-                </div>
-
-                {/* the FORM-level error — whatever Supabase said. */}
-                {errors.root && (
-                    <p className="rounded-md bg-red-50 p-2 text-sm text-red-700">{errors.root.message}</p>
-                )}
-
-                <button
-                    type="submit"
-                    disabled={isSubmitting}
-                    className="w-full rounded-md bg-slate-800 px-4 py-2 font-medium text-white transition hover:bg-slate-700 disabled:opacity-50"
+        <div className="flex min-h-screen items-center justify-center bg-canvas p-6">
+            <div className="grid h-[720px] max-h-full w-[1180px] max-w-full grid-cols-1 overflow-hidden rounded-md bg-bg shadow-lg md:grid-cols-[1fr_440px]">
+                {/* ── Left marketing panel ─────────────────────────────────────── */}
+                <div
+                    className="hidden flex-col p-12 md:flex"
+                    style={{ background: "radial-gradient(120% 100% at 8% 0%, #1c1f31 0%, var(--color-bg) 62%)" }}
                 >
-                    {isSubmitting ? "Signing in…" : "Sign in"}
-                </button>
-            </form>
+                    <Brand size={19} />
+                    <div className="mt-auto max-w-[460px]">
+                        <h1 className="font-heading text-[40px] font-medium leading-[1.1] tracking-[-0.025em] [text-wrap:pretty]">
+                            Practise the interview before it counts.
+                        </h1>
+                        <p className="mt-4 text-[15px] leading-[1.6] text-neutral-300 [text-wrap:pretty]">
+                            Pick a role and level, talk or type your way through a real interview, and get a scorecard
+                            with the gaps named.
+                        </p>
+                        <div className="mt-[30px] flex flex-col gap-3 text-sm text-neutral-300">
+                            {[
+                                "Questions drawn from the role you are targeting",
+                                "Switch between voice and text mid-session",
+                                "Every transcript kept, scored on four criteria",
+                            ].map((line) => (
+                                <div key={line} className="flex items-center gap-[11px]">
+                                    <span className="h-[5px] w-[5px] flex-none rounded-full bg-accent" />
+                                    {line}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                    <div className="mt-auto pt-[34px] text-[12.5px] text-neutral-400">
+                        Transcripts stay in your account. Nothing is shared.
+                    </div>
+                </div>
 
-            <p className="mt-4 text-sm text-slate-600">
-                No account? <Link to="/signup" className="font-medium underline">Sign up</Link>
-            </p>
-        </main>
+                {/* ── Right form column ────────────────────────────────────────── */}
+                <div className="flex flex-col justify-center border-divider p-10 md:border-l">
+                    <h2 className="font-heading text-[26px] font-medium tracking-[-0.02em]">Sign in</h2>
+                    <p className="mt-2 text-[13.5px] text-neutral-400">Welcome back.</p>
+
+                    <form onSubmit={handleSubmit(onSubmit)} className="mt-[26px] flex flex-col gap-4">
+                        {/* Form-level error — the Gap-colored banner from mock 4b */}
+                        {hasError && (
+                            <div className="rounded-md border border-gap-border bg-gap-bg px-3.5 py-[11px] text-[13.5px] leading-[1.45] text-gap">
+                                {errors.root?.message}
+                            </div>
+                        )}
+
+                        <div className="field">
+                            <label>Email</label>
+                            <input
+                                type="email"
+                                className="input"
+                                style={hasError ? { borderColor: "var(--color-gap-border)" } : undefined}
+                                {...register("email", {
+                                    required: "Email is required",
+                                    pattern: { value: /\S+@\S+\.\S+/, message: "That doesn't look like an email" },
+                                })}
+                            />
+                            {errors.email && <p className="mt-1 text-[12.5px] text-gap">{errors.email.message}</p>}
+                        </div>
+
+                        <div className="field">
+                            <div className="flex items-baseline justify-between">
+                                <label className="mb-0">Password</label>
+                                <Link to="/forgot-password" className="text-[12.5px] text-accent-300">
+                                    Forgot?
+                                </Link>
+                            </div>
+                            <input
+                                type="password"
+                                className="input mt-[5px]"
+                                style={hasError ? { borderColor: "var(--color-gap-border)" } : undefined}
+                                {...register("password", {
+                                    required: "Password is required",
+                                    minLength: { value: 6, message: "At least 6 characters" },
+                                })}
+                            />
+                            {errors.password && <p className="mt-1 text-[12.5px] text-gap">{errors.password.message}</p>}
+                        </div>
+
+                        <button
+                            type="submit"
+                            disabled={isSubmitting}
+                            className="btn btn-primary btn-block text-[15px]"
+                            style={{ padding: "11px 0" }}
+                        >
+                            {isSubmitting ? "Signing in…" : "Sign in"}
+                        </button>
+                    </form>
+
+                    {/* "or" divider */}
+                    <div className="my-6 flex items-center gap-3">
+                        <span className="h-px flex-1 bg-divider" />
+                        <span className="text-[12px] text-neutral-400">or</span>
+                        <span className="h-px flex-1 bg-divider" />
+                    </div>
+
+                    {/* Social sign-in — DESIGN ONLY (TODO(wire): supabase OAuth) */}
+                    <div className="flex flex-col gap-2.5">
+                        <button className="btn btn-secondary btn-block text-sm" style={{ padding: "10px 0" }}>
+                            Continue with Google
+                        </button>
+                        <button className="btn btn-secondary btn-block text-sm" style={{ padding: "10px 0" }}>
+                            Continue with GitHub
+                        </button>
+                    </div>
+
+                    <p className="mt-[26px] text-[13.5px] text-neutral-400">
+                        No account?{" "}
+                        <Link to="/signup" className="text-accent-300">
+                            Create one
+                        </Link>
+                    </p>
+                </div>
+            </div>
+        </div>
     );
 }
