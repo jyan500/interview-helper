@@ -5,11 +5,17 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { store } from "./store";
 import App from "./App";
 import HistoryPage from "./HistoryPage";
+import DashboardPage from "./pages/DashboardPage";
+import SessionPage from "./pages/SessionPage";
+import InterviewsPage from "./pages/InterviewsPage";
+import InterviewDetailPage from "./pages/InterviewDetailPage";
 import { AuthProvider } from "./auth/AuthProvider";
 import LoginPage from "./auth/LoginPage";
-import ProtectedRoute from "./auth/ProtectedRoute";
 import SignupPage from "./auth/SignupPage";
-import "./index.css"; // pulls in Tailwind's generated utilities
+import ForgotPasswordPage from "./auth/ForgotPasswordPage";
+import ResetPasswordPage from "./auth/ResetPasswordPage";
+import ProtectedRoute from "./auth/ProtectedRoute";
+import "./index.css"; // pulls in Tailwind's generated utilities + the Nocturne theme
 
 // <Provider> makes the Redux store — and therefore the RTK Query cache and hooks —
 // available to every component in the tree. Standard one-time wiring.
@@ -39,17 +45,26 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             <BrowserRouter>
                 <AuthProvider>
                     <Routes>
-                        {/* PUBLIC — reachable signed out, which is the entire point of them. */}
+                        {/* PUBLIC — reachable signed out, which is the entire point of them.
+                            The Nocturne redesign adds the forgot/reset password flow (mock 4c);
+                            reset-password is where the emailed recovery link lands. */}
                         <Route path="/login" element={<LoginPage />} />
                         <Route path="/signup" element={<SignupPage />} />
+                        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+                        <Route path="/reset-password" element={<ResetPasswordPage />} />
 
                         {/* PROTECTED — a layout route with no path of its own. Everything
                             nested inside renders only if <ProtectedRoute> returns <Outlet />.
-                            Phase C's /history goes in this block: one line, no new plumbing. */}
+                            The Nocturne design pages live here; the old working interview flow
+                            (App.tsx) is preserved at /interview-legacy so nothing functional
+                            is lost while the new screens are design-only. */}
                         <Route element={<ProtectedRoute />}>
-                            <Route path="/" element={<App />} />
-                            {/* Phase C — the History view. One line, no new plumbing: it's
-                                gated by the same <ProtectedRoute> and speaks to the same API. */}
+                            <Route path="/" element={<DashboardPage />} />
+                            <Route path="/session" element={<SessionPage />} />
+                            <Route path="/interviews" element={<InterviewsPage />} />
+                            <Route path="/interviews/:id" element={<InterviewDetailPage />} />
+                            {/* Preserved: the pre-redesign working interview + history. */}
+                            <Route path="/interview-legacy" element={<App />} />
                             <Route path="/history" element={<HistoryPage />} />
                         </Route>
 
