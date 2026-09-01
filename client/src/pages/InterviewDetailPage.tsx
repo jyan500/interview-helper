@@ -8,6 +8,7 @@
 import { useParams, Link } from "react-router";
 import AppNav from "../components/AppNav";
 import MessageRow from "../components/MessageRow";
+import Donut from "../components/Donut";
 
 // ── Static transcript (the four turns from the mock) ──────────────────────────
 const TRANSCRIPT = [
@@ -98,9 +99,8 @@ const FEEDBACK_STYLE: Record<FeedbackKind, string> = {
 export default function InterviewDetailPage() {
     const { id } = useParams(); // TODO(wire): useGetInterviewDetailQuery(id)
 
-    // Overall 4.25 / 5 → dasharray (4.25/5 × 176 ≈ 149.5) on the donut.
+    // Overall score, out of 5 — feeds the <Donut> ring.
     const overall = 4.25;
-    const dash = (overall / 5) * 176;
 
     return (
         <div className="min-h-screen bg-bg text-ink">
@@ -160,20 +160,8 @@ export default function InterviewDetailPage() {
                                     Above your Entry-level average of 3.8
                                 </div>
                             </div>
-                            <svg width="66" height="66" viewBox="0 0 66 66">
-                                <circle cx="33" cy="33" r="28" fill="none" stroke="var(--color-neutral-800)" strokeWidth="5" />
-                                <circle
-                                    cx="33"
-                                    cy="33"
-                                    r="28"
-                                    fill="none"
-                                    stroke="var(--color-accent)"
-                                    strokeWidth="5"
-                                    strokeLinecap="round"
-                                    strokeDasharray={`${dash} 176`}
-                                    transform="rotate(-90 33 33)"
-                                />
-                            </svg>
+                            <Donut value={overall} max={5} />
+
                         </div>
 
                         {/* Criteria bars */}

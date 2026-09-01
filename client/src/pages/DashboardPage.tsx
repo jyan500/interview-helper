@@ -13,6 +13,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router";
 import { useAuth } from "../auth/AuthProvider"
 import AppNav from "../components/AppNav";
+import Sparkline from "../components/Sparkline";
 
 // The four seniority levels, in rank order (the active one takes the accent tint).
 const LEVELS = ["Entry", "Mid", "Senior", "Staff"] as const;
@@ -33,6 +34,9 @@ const SKILLS = [
     { label: "Structure (STAR)", value: 69, weak: false },
     { label: "Tradeoff reasoning", value: 54, weak: true },
 ];
+
+// The readiness score series feeding the sparkline (oldest → newest, ending at 78).
+const READINESS = [58, 61, 66, 64, 70, 74, 78];
 
 const WORK_ON_NEXT = [
     "Name the tradeoff before choosing. Two answers on 1 Sep skipped it.",
@@ -55,7 +59,7 @@ export default function DashboardPage() {
                 <div className="px-7 pt-[22px]">
                     <div className="kicker">Wednesday, 3 September</div>
                     <h1 className="mt-1.5 font-heading text-[34px] font-medium leading-[1.05]">
-                        Hello, {session.user.user_metadata.display_name}
+                        Hello, {session?.user?.user_metadata?.display_name ?? ""}
                     </h1>
                 </div>
 
@@ -171,21 +175,9 @@ export default function DashboardPage() {
                                 <span className="font-heading text-[46px] leading-none">78</span>
                                 <span className="pb-2 text-[13px] text-accent-300">+7 over 4 sessions</span>
                             </div>
-                            <svg
-                                viewBox="0 0 320 74"
-                                className="mt-2 h-[74px] w-full"
-                                preserveAspectRatio="none"
-                            >
-                                <line x1="0" y1="73" x2="320" y2="73" stroke="var(--color-divider)" />
-                                <line x1="0" y1="37" x2="320" y2="37" stroke="var(--color-divider)" strokeDasharray="3 4" />
-                                <polyline
-                                    points="4,62 56,58 108,49 160,52 212,38 264,30 316,20"
-                                    fill="none"
-                                    stroke="var(--color-accent)"
-                                    strokeWidth="1.5"
-                                />
-                                <circle cx="316" cy="20" r="3" fill="var(--color-accent)" />
-                            </svg>
+                            <div className="mt-2">
+                                <Sparkline data={READINESS} />
+                            </div>
                         </div>
 
                         {/* Skill breakdown */}
