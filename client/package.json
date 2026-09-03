@@ -6,11 +6,15 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "copy:vad": "node scripts/copy-vad-assets.mjs",
+    "predev": "node scripts/copy-vad-assets.mjs",
+    "prebuild": "node scripts/copy-vad-assets.mjs"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",
     "@reduxjs/toolkit": "^2.2.7",
+    "@ricky0123/vad-web": "^0.0.30",
     "@supabase/supabase-js": "^2.112.2",
     "@tailwindcss/vite": "^4.3.3",
     "@visx/group": "^4.0.0",

@@ -58,7 +58,7 @@ export default function LoginPage() {
                     <Brand size={19} />
                     <div className="mt-auto max-w-[460px]">
                         <h1 className="font-heading text-[40px] font-medium leading-[1.1] tracking-[-0.025em] [text-wrap:pretty]">
-                            Practise the interview before it counts.
+                            Practice the interview before it counts.
                         </h1>
                         <p className="mt-4 text-[15px] leading-[1.6] text-neutral-300 [text-wrap:pretty]">
                             Pick a role and level, talk or type your way through a real interview, and get a scorecard
