@@ -54,3 +54,18 @@ export const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 export const VAD_SPEECH_THRESHOLD = 0.5;
 export const VAD_REDEMPTION_MS = 800;
 export const CONFIRM_COUNTDOWN_MS = 6000;
+
+/**
+ * Where MicVAD loads the onnxruntime-web wasm from (its `onnxWASMBasePath`). ORT pulls its wasm glue
+ * via a dynamic `import()`, and Vite's DEV server refuses to serve /public files as JS modules ("...
+ * should not be imported from source code" → 500) — so in dev we point at a cross-origin CDN, which
+ * Vite never intercepts. The prod build serves /public statically with no such block, so it uses the
+ * self-hosted copy in /vad/ (from scripts/copy-vad-assets.mjs). The worklet + Silero .onnx model still
+ * come from /vad/ in BOTH modes (they're fetched / addModule'd, not imported, so Vite serves them fine).
+ *
+ * PIN the CDN version to the installed onnxruntime-web (it must match the ORT JS bundled by
+ * @ricky0123/vad-web, or the wasm/JS handshake fails) — bump it whenever that dependency upgrades.
+ */
+export const VAD_ONNX_WASM_BASE = import.meta.env.DEV
+    ? "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.29.0/dist/"
+    : "/vad/";

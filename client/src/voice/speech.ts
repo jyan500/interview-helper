@@ -27,7 +27,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranscribeMutation, useTtsMutation } from "../api";
 import { MicVAD } from "@ricky0123/vad-web";
-import { VAD_SPEECH_THRESHOLD, VAD_REDEMPTION_MS, CONFIRM_COUNTDOWN_MS } from "../constants";
+import { VAD_SPEECH_THRESHOLD, VAD_REDEMPTION_MS, CONFIRM_COUNTDOWN_MS, VAD_ONNX_WASM_BASE } from "../constants";
 
 // ============================ TTS — the OUTPUT adapter ============================
 // SpeechSynthesis + SpeechSynthesisUtterance ARE in TypeScript's DOM lib, so no extra typing.
@@ -412,11 +412,12 @@ export function useVoiceActivity(active: boolean, handlers: VoiceActivityHandler
         (async () => {
             try {
                 const instance = await MicVAD.new({
-                    // Serve the worklet + Silero onnx model + onnxruntime wasm from /vad/ (copied into
-                    // public/vad by scripts/copy-vad-assets.mjs). MicVAD's default is "./", which 404s
-                    // under Vite — and a failed load is exactly why smart mode would never detect speech.
+                    // Worklet + Silero .onnx model: self-hosted from /vad/ (copied into public/vad by
+                    // scripts/copy-vad-assets.mjs) — these are fetched/addModule'd, so Vite serves them fine.
+                    // onnxruntime wasm: dev = CDN, prod = /vad/ — Vite's dev server 500s on /public files
+                    // imported as JS modules (which is how ORT loads its wasm). See VAD_ONNX_WASM_BASE.
                     baseAssetPath: "/vad/",
-                    onnxWASMBasePath: "/vad/",
+                    onnxWASMBasePath: VAD_ONNX_WASM_BASE,
                     positiveSpeechThreshold: VAD_SPEECH_THRESHOLD,
                     redemptionMs: VAD_REDEMPTION_MS,
                     onSpeechStart: () => handlersRef.current.onSpeech(),
