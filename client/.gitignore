@@ -3,6 +3,10 @@ node_modules
 dist
 dist-ssr
 
+# VAD runtime assets — copied from node_modules by scripts/copy-vad-assets.mjs (predev/prebuild),
+# ~40MB of onnx wasm we regenerate rather than commit
+public/vad/
+
 # vite / logs
 *.local
 logs

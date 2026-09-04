@@ -30,3 +30,42 @@ export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localho
  */
 export const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 export const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+/**
+ * Smart voice turn-taking (layer 1) — the tunables for the VAD auto-endpoint experience. They live
+ * here, not inline in voice/speech.ts, so the "feel" of the mic is adjustable in ONE place (same rule
+ * as API_BASE_URL). All three encode ONE tradeoff: end the turn promptly vs. don't cut someone off
+ * mid-thought. Start here if smart mode feels twitchy or sluggish.
+ *
+ * Acoustic detection is delegated to the Silero VAD (@ricky0123/vad-web), so the first two map onto
+ * that library's MicVAD options rather than a hand-rolled RMS threshold:
+ *
+ *   VAD_SPEECH_THRESHOLD  — MicVAD `positiveSpeechThreshold` (0..1): Silero's speech-probability above
+ *                           which a frame counts as speech. ~0.5 is the library default; raise it in a
+ *                           noisy room so background hum doesn't read as talking, lower it if soft
+ *                           speech gets missed.
+ *   VAD_REDEMPTION_MS     — MicVAD `redemptionMs`: how long (ms) of below-threshold audio to wait (the
+ *                           model's own hysteresis) before declaring speech ended. Higher = more forgiving
+ *                           of short pauses mid-sentence before we even reach the countdown below.
+ *   CONFIRM_COUNTDOWN_MS  — the "still there?" grace window. A tap or keypress cancels it; on expiry we
+ *                           stop + transcribe + submit. This is the human-scale safety net against a
+ *                           thinking pause, layered on top of the model's short redemption window.
+ */
+export const VAD_SPEECH_THRESHOLD = 0.5;
+export const VAD_REDEMPTION_MS = 800;
+export const CONFIRM_COUNTDOWN_MS = 6000;
+
+/**
+ * Where MicVAD loads the onnxruntime-web wasm from (its `onnxWASMBasePath`). ORT pulls its wasm glue
+ * via a dynamic `import()`, and Vite's DEV server refuses to serve /public files as JS modules ("...
+ * should not be imported from source code" → 500) — so in dev we point at a cross-origin CDN, which
+ * Vite never intercepts. The prod build serves /public statically with no such block, so it uses the
+ * self-hosted copy in /vad/ (from scripts/copy-vad-assets.mjs). The worklet + Silero .onnx model still
+ * come from /vad/ in BOTH modes (they're fetched / addModule'd, not imported, so Vite serves them fine).
+ *
+ * PIN the CDN version to the installed onnxruntime-web (it must match the ORT JS bundled by
+ * @ricky0123/vad-web, or the wasm/JS handshake fails) — bump it whenever that dependency upgrades.
+ */
+export const VAD_ONNX_WASM_BASE = import.meta.env.DEV
+    ? "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.29.0/dist/"
+    : "/vad/";

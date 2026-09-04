@@ -26,6 +26,8 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranscribeMutation, useTtsMutation } from "../api";
+import { MicVAD } from "@ricky0123/vad-web";
+import { VAD_SPEECH_THRESHOLD, VAD_REDEMPTION_MS, CONFIRM_COUNTDOWN_MS, VAD_ONNX_WASM_BASE } from "../constants";
 
 // ============================ TTS — the OUTPUT adapter ============================
 // SpeechSynthesis + SpeechSynthesisUtterance ARE in TypeScript's DOM lib, so no extra typing.
@@ -375,4 +377,192 @@ export function useWhisperRecognition(onResult: (text: string) => void) {
     }
 
     return { supported, listening, start, stop, transcribing };
+}
+
+// ============ VAD — the acoustic silence detector (smart-mode endpointing, layer 1) ============
+// The "notice when they've gone quiet" half of smart mode. Everything else (record -> Whisper ->
+// submit) is the useSmartVoiceTurn spine below; this hook only reports the acoustic edges.
+//
+// It is ACOUSTIC ONLY: it answers "is someone talking right now?", NOT "did they say something that
+// MEANS they're done" (that's SEMANTIC endpointing = layer 2, deferred). Detection is delegated to the
+// Silero VAD (@ricky0123/vad-web) rather than a hand-rolled RMS threshold — a small neural model is far
+// more robust in a real room, and it ships its own hysteresis (redemptionFrames), which is the flappy
+// "is this a real pause?" logic we'd otherwise have to get right by hand.
+//
+// MicVAD manages its OWN microphone (a second getUserMedia alongside the recorder's — one permission,
+// shared). It loads an onnx model + wasm at runtime, by default from a CDN, so there's nothing to serve
+// in dev. It exposes onSpeechStart / onSpeechEnd, which we forward as onSpeech / onSilence.
+type VoiceActivityHandlers = {
+    onSilence: () => void; // the model decided speech ended -> open the countdown
+    onSpeech: () => void;  // speech (re)started -> cancel the countdown
+};
+
+export function useVoiceActivity(active: boolean, handlers: VoiceActivityHandlers) {
+    // Keep the latest handlers in a ref so the VAD's callbacks always call the CURRENT closures (which
+    // capture fresh state) without us tearing down and rebuilding the model every render.
+    const handlersRef = useRef(handlers);
+    handlersRef.current = handlers;
+
+    useEffect(() => {
+        if (!active) return; // not smart mode, or not listening -> don't hold a mic/model
+
+        let vad: MicVAD | null = null;
+        let cancelled = false; // guards the async gap: the effect can be torn down mid-load
+
+        (async () => {
+            try {
+                const instance = await MicVAD.new({
+                    // Worklet + Silero .onnx model: self-hosted from /vad/ (copied into public/vad by
+                    // scripts/copy-vad-assets.mjs) — these are fetched/addModule'd, so Vite serves them fine.
+                    // onnxruntime wasm: dev = CDN, prod = /vad/ — Vite's dev server 500s on /public files
+                    // imported as JS modules (which is how ORT loads its wasm). See VAD_ONNX_WASM_BASE.
+                    baseAssetPath: "/vad/",
+                    onnxWASMBasePath: VAD_ONNX_WASM_BASE,
+                    positiveSpeechThreshold: VAD_SPEECH_THRESHOLD,
+                    redemptionMs: VAD_REDEMPTION_MS,
+                    onSpeechStart: () => handlersRef.current.onSpeech(),
+                    // onSpeechEnd also hands us the utterance audio (Float32Array @16k); we ignore it and
+                    // keep MediaRecorder as the source for the Whisper blob (layer-1 scope).
+                    onSpeechEnd: () => handlersRef.current.onSilence(),
+                });
+                if (cancelled) { instance.destroy(); return } // torn down before the model finished loading
+                vad = instance;
+                vad.start();
+            } catch (e) {
+                // A load failure (missing assets, unsupported browser) must be VISIBLE, not a silent
+                // unhandled rejection — otherwise smart mode just quietly never detects speech.
+                console.error("VAD failed to initialize:", e);
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+            vad?.destroy(); // releases MicVAD's mic + audio graph
+        };
+    }, [active]);
+}
+
+// ============ Smart voice turn-taking — the layer-1 controller (both modes) ============
+// Evolves useWhisperRecognition for the turn-taking UX. SAME capture -> Whisper spine; what's new:
+//   - it exposes the live `stream` in state so useVoiceActivity can watch it (smart mode),
+//   - "stop" now means STOP + TRANSCRIBE + SUBMIT in one go (onFinalTranscript), so the UI drops the
+//     separate "Send answer" click for the spoken path,
+//   - a "still there?" countdown sits between VAD silence and the actual submit.
+//
+// Modes:
+//   "manual" — user taps start, taps stop. No VAD, no countdown. (Good for long design answers where
+//              you pause a lot to think — nothing auto-decides you're done.)
+//   "smart"  — VAD watches for silence; silence opens the countdown; expiry submits. App auto-starts
+//              this after the AI stops speaking (the mic-mute turn-taking effect lives up in App).
+export type TurnMode = "manual" | "smart";
+
+export function useSmartVoiceTurn(opts: {
+    mode: TurnMode;
+    onFinalTranscript: (text: string) => void; // App passes handleSend — the COMBINED stop+send
+}) {
+    const { mode, onFinalTranscript } = opts;
+    const [transcribe, { isLoading: transcribing }] = useTranscribeMutation();
+
+    const [listening, setListening] = useState(false);
+    const [confirming, setConfirming] = useState(false); // in the "still there?" window
+    const [countdownMs, setCountdownMs] = useState(0);   // remaining, for the UI number/ring
+
+    const recorderRef = useRef<MediaRecorder | null>(null);
+    const chunksRef = useRef<Blob[]>([]);
+    const countdownRef = useRef<number | null>(null); // the setInterval id for the countdown
+
+    // onFinalTranscript is a fresh closure each render (it captures draft/interviewId in App). Ref it
+    // so `start` below doesn't need it in its dep list and never goes stale — same trick as handlersRef.
+    const onFinalRef = useRef(onFinalTranscript);
+    onFinalRef.current = onFinalTranscript;
+
+    // Same broad-support guard as useWhisperRecognition (getUserMedia + MediaRecorder, secure context).
+    const supported =
+        typeof navigator !== "undefined" &&
+        !!navigator.mediaDevices?.getUserMedia &&
+        typeof MediaRecorder !== "undefined";
+
+    // Start capture. Mirrors useWhisperRecognition.start; on stop it routes the final text to onFinalRef
+    // (submit) instead of setDraft — the combined stop+send. The VAD runs off its OWN mic (see
+    // useVoiceActivity), so we don't hand it this stream.
+    const start = useCallback(async () => {
+        if (!supported || listening) return;
+        try {
+            const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+            chunksRef.current = [];
+            const recorder = new MediaRecorder(s);
+            recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+            recorder.onstop = async () => {
+                s.getTracks().forEach((t) => t.stop()); // release the mic (the browser "recording" dot)
+                try {
+                    const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
+                    const form = new FormData();
+                    form.append("audio", blob, "answer.webm");
+                    const data = await transcribe(form).unwrap();
+                    const text = (data.text ?? "").trim();
+                    // The COMBINED stop+send — but only if there's actually text. A pure-silence misfire
+                    // (countdown expired with nothing said) must not POST an empty answer; in smart mode
+                    // App's auto-restart effect just re-opens the mic.
+                    if (text) onFinalRef.current(text);
+                } catch (e) {
+                    console.error("Failed to transcribe...", e);
+                }
+            };
+            recorderRef.current = recorder;
+            recorder.start();
+            setListening(true);
+        } catch {
+            setListening(false); // denied mic / no device -> button resets to "Record"
+        }
+    }, [supported, listening, transcribe]);
+
+    // Clear the countdown timer + its UI if one is running. Shared by stop and keepListening.
+    const clearCountdown = useCallback(() => {
+        if (countdownRef.current !== null) {
+            clearInterval(countdownRef.current);
+            countdownRef.current = null;
+        }
+        setConfirming(false);
+        setCountdownMs(0);
+    }, []);
+
+    // stop = end the turn NOW: fires recorder.onstop -> transcribe -> submit. Called by the manual "stop"
+    // tap AND by the countdown on expiry. Clear the countdown first so a near-simultaneous tick can't
+    // re-enter stop().
+    const stop = useCallback(() => {
+        clearCountdown();
+        recorderRef.current?.stop();
+        setListening(false);
+    }, [clearCountdown]);
+
+    // onSilence (from the VAD) opens the "still there?" countdown; expiry submits via stop().
+    const beginCountdown = useCallback(() => {
+        if (countdownRef.current !== null) return; // already counting
+        setConfirming(true);
+        setCountdownMs(CONFIRM_COUNTDOWN_MS);
+        const startedAt = Date.now();
+        countdownRef.current = window.setInterval(() => {
+            const remaining = CONFIRM_COUNTDOWN_MS - (Date.now() - startedAt);
+            if (remaining <= 0) {
+                stop(); // clears the interval, then stops + submits
+            } else {
+                setCountdownMs(remaining);
+            }
+        }, 100);
+    }, [stop]);
+
+    // The user tapped / pressed a key / the VAD heard speech again: cancel the countdown but DON'T stop
+    // the recorder — the same audio keeps rolling so a resumed sentence stays one continuous answer.
+    const keepListening = useCallback(() => {
+        clearCountdown();
+    }, [clearCountdown]);
+
+    // Wire the VAD to the countdown — only in smart mode, and only while actually listening, so it never
+    // holds a mic during the AI's turn or in manual mode (where silence must never auto-end a turn).
+    useVoiceActivity(mode === "smart" && listening, {
+        onSilence: beginCountdown,
+        onSpeech: keepListening,
+    });
+
+    return { supported, listening, confirming, countdownMs, transcribing, start, stop, keepListening };
 }

@@ -15,7 +15,8 @@ import type { SelectOption } from "./components/AsyncPaginateSelect";
 import ScorecardView from "./ScorecardView";
 import {
     useSpeak,
-    useWhisperRecognition,
+    useSmartVoiceTurn,
+    type TurnMode,
     useVoices,
     pickPreferredVoice,
     setVoicePrefs,
@@ -93,11 +94,15 @@ export default function App() {
     const [triggerRoles] = useLazyGetRolesQuery();
     const [triggerLevels] = useLazyGetLevelsQuery();
 
-    // THE SEAM, made literal: both hooks return the SAME { supported, listening, start, stop }
-    // contract, so swapping the INPUT edge adapter is a one-line change and nothing below moves.
-    //   useSpeechRecognition — Phase 4, browser Web Speech API (Chrome-only, audio -> Google)
-    //   useWhisperRecognition — Phase 5, mic capture here + our /api/transcribe (OpenAI Whisper)
-    const { supported, listening, start, stop, transcribing } = useWhisperRecognition(setDraft)
+    // Smart voice turn-taking (layer 1), replacing useWhisperRecognition's manual-only path.
+    //   "manual" = tap to start, tap to stop (good for long coding/design answers with lots of pauses)
+    //   "smart"  = VAD notices silence -> "still there?" countdown -> auto stop+submit; App auto-opens
+    //              the mic after the AI finishes speaking (the effect further down)
+    // onFinalTranscript is the COMBINED stop+send: the hook hands us the Whisper text and we submit it
+    // exactly like a typed answer (handleSend), so the spoken path no longer needs a separate "Send" click.
+    const [voiceMode, setVoiceMode] = useState<TurnMode>("manual")
+    const { supported, listening, confirming, countdownMs, transcribing, start, stop, keepListening } =
+        useSmartVoiceTurn({ mode: voiceMode, onFinalTranscript: (text) => handleSend(text) })
 
     // Which TTS engine to use. "openai" = neural (spends tokens); "browser" = free local
     // SpeechSynthesis (robotic), handy for debugging without burning OpenAI credit. The picker below
@@ -107,7 +112,7 @@ export default function App() {
     // Phase F — the OUTPUT edge adapter, engine-switchable. useSpeak(engine) wraps whichever TTS is
     // chosen and hands back speak(text, onReady). We pass onReady to REVEAL the interviewer bubble in
     // sync with the voice (#5): it shows "thinking…" until audio is ready, then text + sound together.
-    const { speak } = useSpeak(ttsEngine)
+    const { speak, speaking } = useSpeak(ttsEngine)
 
     // Stable per-line id (a ref counter, not state — it never renders). Lets revealLine() target the
     // exact "thinking…" bubble by id, even if the user sends again before the audio starts.
@@ -156,16 +161,20 @@ export default function App() {
         speak(res.message, () => revealLine(id, res.message))
     }
 
-    // send the candidate's answer (drives POST /api/answer). This is one iteration
-    // of the interview loop, frontend side.
-    async function handleSend() {
-        if (!interviewId || !draft.trim()){
+    // send the candidate's answer (drives POST /api/answer). This is one iteration of the interview
+    // loop, frontend side. Now takes an optional `textOverride` so the VOICE path can submit the Whisper
+    // transcript directly (combined stop+send) instead of round-tripping through the `draft` textarea
+    // state — which wouldn't have updated yet when the hook calls us. Typed answers call handleSend()
+    // with no arg and fall back to `draft`.
+    async function handleSend(textOverride?: string) {
+        const text = (textOverride ?? draft).trim()
+        if (!interviewId || !text){
             return
         }
         // include your answer to the interview question
-        setTranscript(t => [...t, { id: nextId(), who: "you", text: draft }])
+        setTranscript(t => [...t, { id: nextId(), who: "you", text }])
         // send the answer to the backend
-        const res = await submitAnswer({ interview_id: interviewId, text: draft }).unwrap()
+        const res = await submitAnswer({ interview_id: interviewId, text }).unwrap()
         // add a "thinking…" placeholder for the interviewer turn, then reveal its text + start audio
         // together via onReady (below) instead of showing the question a beat before any sound.
         const id = nextId()
@@ -189,6 +198,34 @@ export default function App() {
         const card = await getScorecard({ interview_id: interviewId }).unwrap()
         setScorecard(card)
     }
+
+    // ── Smart-mode turn-taking: open the mic ONLY on the AI-finished-speaking EDGE ───────────────
+    // The mic (recorder + VAD) belongs to the AI's turn until it stops talking. We trigger on the
+    // `speaking` true->false EDGE — not merely on "not speaking" — because there's a brief gap between an
+    // answer submitting (answering flips false) and TTS synthesis starting (speaking flips true). A
+    // level check ("if not speaking, start") fires IN that gap and opens the mic over the AI's turn,
+    // which is the "recording while the AI talks" bug. prevSpeakingRef remembers last render's value so we
+    // only act when the AI has just FINISHED. During the AI's turn `listening` stays false, so the VAD
+    // (gated on listening) and the recorder are both off — the mic is genuinely paused until it's our turn.
+    const prevSpeakingRef = useRef(false)
+    useEffect(() => {
+        const wasSpeaking = prevSpeakingRef.current
+        prevSpeakingRef.current = speaking
+        if (voiceMode !== "smart" || !interviewId || done) return
+        if (wasSpeaking && !speaking && !listening && !confirming && !transcribing && !answering) {
+            start()
+        }
+    }, [voiceMode, speaking, interviewId, done, listening, confirming, transcribing, answering, start])
+
+    // ── "Still there?" — any keypress keeps the turn open during the countdown ───────────────────
+    // The countdown UI has a "Keep talking" button (a tap); this makes ANY key do the same, so the
+    // candidate can keep the turn without reaching for the mouse. Only armed while confirming.
+    useEffect(() => {
+        if (!confirming) return
+        const onKey = () => keepListening()
+        window.addEventListener("keydown", onKey)
+        return () => window.removeEventListener("keydown", onKey)
+    }, [confirming, keepListening])
 
     return (
         <main className="mx-auto max-w-2xl p-6 font-sans">
@@ -260,15 +297,20 @@ export default function App() {
                             <li
                                 key={line.id}
                                 className={
-                                    "rounded-lg p-3 " +
-                                    (line.who === "interviewer" ? "bg-slate-100" : "bg-blue-50")
+                                    "rounded-md border p-3 text-ink " +
+                                    (line.who === "interviewer" ? "border-divider" : "border-accent")
                                 }
                             >
-                                <span className="font-semibold">
+                                <span
+                                    className={
+                                        "font-semibold " +
+                                        (line.who === "interviewer" ? "text-neutral-300" : "text-accent-300")
+                                    }
+                                >
                                     {line.who === "interviewer" ? "🧑‍💼 Interviewer" : "🗣️ You"}:
                                 </span>{" "}
                                 {line.pending
-                                    ? <span className="italic text-slate-400">thinking…</span>
+                                    ? <span className="italic text-neutral-400">thinking…</span>
                                     : line.text}
                             </li>
                         ))}
@@ -285,27 +327,50 @@ export default function App() {
                                 placeholder="Type your answer…"
                                 className="mt-4 w-full rounded-md border border-slate-300 p-2 focus:border-slate-500 focus:outline-none"
                             />
+
+                            {/* Voice controls — a Manual|Smart toggle plus the mic. The mic STOP now
+                                submits (combined stop+send), so the spoken path has no separate Send. */}
                             {supported && (
-                                <button
-                                    onClick={() => {
-                                        if (!listening){
-                                            start()
-                                        }
-                                        else {
-                                            stop()
-                                        }
-                                    }}
-                                    className="mt-2 rounded-md bg-slate-800 px-4 py-2 font-medium text-white transition hover:bg-slate-700 disabled:opacity-50"
-                                >
-                                    🎤 {!listening ? "Record your answer" : "Stop recording"}
-                                </button>
+                                <div className="mt-2 flex items-center gap-2">
+                                    <button
+                                        onClick={() => setVoiceMode((m) => (m === "manual" ? "smart" : "manual"))}
+                                        disabled={listening || confirming}
+                                        className="rounded-md border border-slate-800 px-3 py-2 text-sm font-medium text-slate-800 transition hover:bg-slate-100 disabled:opacity-50"
+                                    >
+                                        Mode: {voiceMode} · tap to switch
+                                    </button>
+                                    <button
+                                        onClick={() => (listening ? stop() : start())}
+                                        className="rounded-md bg-slate-800 px-4 py-2 font-medium text-white transition hover:bg-slate-700 disabled:opacity-50"
+                                    >
+                                        🎤 {listening
+                                            ? (voiceMode === "manual" ? "Stop & send" : "Stop")
+                                            : "Record your answer"}
+                                    </button>
+                                </div>
                             )}
+
+                            {/* "Still there?" countdown — smart mode only, shown while confirming. Any key
+                                (the effect above) or this button keeps the turn open. */}
+                            {confirming && (
+                                <div className="mt-2 flex items-center gap-3 rounded-md bg-amber-50 p-3 text-amber-800">
+                                    <span>Still there? Submitting in {Math.ceil(countdownMs / 1000)}s.</span>
+                                    <button
+                                        onClick={keepListening}
+                                        className="rounded-md border border-amber-700 px-3 py-1 font-medium transition hover:bg-amber-100"
+                                    >
+                                        Keep talking
+                                    </button>
+                                </div>
+                            )}
+
+                            {/* Typed-answer send. The spoken path submits itself; this is for the textarea. */}
                             <button
-                                onClick={handleSend}
+                                onClick={() => handleSend()}
                                 disabled={answering || transcribing}
                                 className="mt-2 rounded-md bg-slate-800 px-4 py-2 font-medium text-white transition hover:bg-slate-700 disabled:opacity-50"
                             >
-                                {!transcribing ? "Send answer" : "Transcribing..."}
+                                {!transcribing ? "Send answer" : "Transcribing…"}
                             </button>
                         </>
                     ) : (
