@@ -7,6 +7,7 @@ import App from "./App";
 import HistoryPage from "./HistoryPage";
 import DashboardPage from "./pages/DashboardPage";
 import SessionPage from "./pages/SessionPage";
+import SessionLayout from "./pages/SessionLayout";
 import InterviewsPage from "./pages/InterviewsPage";
 import InterviewDetailPage from "./pages/InterviewDetailPage";
 import { AuthProvider } from "./auth/AuthProvider";
@@ -60,7 +61,12 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                             is lost while the new screens are design-only. */}
                         <Route element={<ProtectedRoute />}>
                             <Route path="/" element={<DashboardPage />} />
-                            <Route path="/session" element={<SessionPage />} />
+                            {/* /session is gated by SessionLayout (a layout route): it renders the
+                                session only when a valid interview arrived in navigation state, and
+                                otherwise redirects (the seam for a future "invalid interview" page). */}
+                            <Route element={<SessionLayout />}>
+                                <Route path="/session" element={<SessionPage />} />
+                            </Route>
                             <Route path="/interviews" element={<InterviewsPage />} />
                             <Route path="/interviews/:id" element={<InterviewDetailPage />} />
                             {/* Preserved: the pre-redesign working interview + history. */}

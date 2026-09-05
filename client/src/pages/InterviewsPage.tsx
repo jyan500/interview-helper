@@ -57,8 +57,11 @@ export default function InterviewsPage() {
                                 28 sessions · 14 scored · 6 still in progress
                             </p>
                         </div>
-                        {/* TODO(wire): start a new interview */}
-                        <button className="btn btn-primary text-sm" onClick={() => navigate("/session")}>
+                        {/* Starting an interview needs the role/level pickers, which live in the Dashboard's
+                            "Start an interview" card — so send the user there rather than duplicate the
+                            kickoff form (or POST with guessed defaults). The interview is created there,
+                            then /session is entered with it in route state. */}
+                        <button className="btn btn-primary text-sm" onClick={() => navigate("/")}>
                             New interview
                         </button>
                     </div>
