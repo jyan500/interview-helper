@@ -247,4 +247,20 @@
     text-transform: uppercase;
     color: var(--color-neutral-400);
   }
+
+  /* Speaking indicator — the Zoom-style pulse on a participant's mic/speaker icon while they're
+     making sound. Gentle scale + opacity so it reads as "live" without being distracting. Applied by
+     the session's ParticipantCell when that participant is active. */
+  .speaking-pulse {
+    animation: speaking-pulse 0.9s ease-in-out infinite;
+  }
+  @keyframes speaking-pulse {
+    0%, 100% { transform: scale(1); opacity: 0.9; }
+    50% { transform: scale(1.16); opacity: 1; }
+  }
+  /* Respect reduced-motion: drop the animation but keep the icon fully lit (the color/fill change in
+     the component still signals "speaking"), so the cue survives without movement. */
+  @media (prefers-reduced-motion: reduce) {
+    .speaking-pulse { animation: none; }
+  }
 }

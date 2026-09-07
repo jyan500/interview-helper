@@ -1,29 +1,3 @@
-/**
- * Browser voice adapters — Phase 4 (the last slice). The audio "edge adapters", in the browser.
- *
- * The whole thesis of the project, made concrete: audio is an EDGE ADAPTER, not part of the
- * loop. In Phase 3.5 the browser BECAME the loop (one fetch per turn). Phase 4 only bolts
- * audio onto the two ENDS of that loop:
- *
- *     speak(text)             -> TTS: say the interviewer's turn out loud    (OUTPUT seam)
- *     useSpeechRecognition()  -> STT: fill the answer box from the mic        (INPUT seam)
- *
- * Nothing in handleStart / handleSend, the RTK Query calls, or the transcript state changes.
- * You only (a) call speak() where interviewer text appears, and (b) add a mic button that
- * writes into `draft`. "The loop never learns whether the answer was typed or spoken" is the
- * headline lesson — the same seam as the server's voice/adapters.py listen()/speak(), now in
- * the browser via the free, built-in Web Speech API (no npm packages).
- *
- * Support: SpeechSynthesis (TTS) is broadly supported. SpeechRecognition (STT) is Chrome/Edge
- * only (webkit-prefixed), not Firefox, and prompts for mic permission on first use.
- *
- * --- How to wire into App.tsx (your fill-in) --------------------------------------------
- *   OUTPUT: after each `setTranscript(t => [...t, { who: "interviewer", text: msg }])`,
- *           also call `speak(msg)`.
- *   INPUT:  const { supported, listening, start, stop } = useSpeechRecognition(setDraft);
- *           render a 🎤 button (only when `supported`) that toggles start()/stop(); the hook
- *           writes the transcript into `draft`, and you Send it exactly as a typed answer.
- */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranscribeMutation, useTtsMutation } from "../api";
 import { MicVAD } from "@ricky0123/vad-web";
@@ -41,11 +15,6 @@ import { VAD_SPEECH_THRESHOLD, VAD_REDEMPTION_MS, CONFIRM_COUNTDOWN_MS, VAD_ONNX
 // The prefs live at MODULE scope (below) so the two speak() call sites don't have to thread them
 // through — the voice picker calls setVoicePrefs(), speak() reads them. Same seam, richer knobs.
 
-// NO LONGER DEAD (was flagged for removal): this block (VoicePrefs / voicePrefs / setVoicePrefs, plus
-// useVoices / pickPreferredVoice below) drives the browser SpeechSynthesis voice — now the FREE "browser"
-// TTS engine the user can pick to avoid spending OpenAI tokens while debugging. useSpeak(engine)
-// dispatches to it or to the neural /api/tts path; App's auto-pick effect still feeds voicePrefs so the
-// browser voice is the best system voice available.
 type VoicePrefs = { voiceURI: string | null; rate: number; pitch: number };
 
 // Sensible defaults: system-default voice until a preferred one is chosen; natural cadence.
@@ -466,6 +435,10 @@ export function useSmartVoiceTurn(opts: {
     const [listening, setListening] = useState(false);
     const [confirming, setConfirming] = useState(false); // in the "still there?" window
     const [countdownMs, setCountdownMs] = useState(0);   // remaining, for the UI number/ring
+    // The live mic stream while recording, exposed so a consumer (useMicLevel) can meter the input
+    // level — e.g. to light the candidate's waveform / mic border when actual sound comes in. null
+    // whenever we're not recording; the recorder still owns capture, this is just a read-only handle.
+    const [stream, setStream] = useState<MediaStream | null>(null);
 
     const recorderRef = useRef<MediaRecorder | null>(null);
     const chunksRef = useRef<Blob[]>([]);
@@ -489,11 +462,13 @@ export function useSmartVoiceTurn(opts: {
         if (!supported || listening) return;
         try {
             const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+            setStream(s); // publish the live stream for level-metering; cleared in onstop below
             chunksRef.current = [];
             const recorder = new MediaRecorder(s);
             recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
             recorder.onstop = async () => {
                 s.getTracks().forEach((t) => t.stop()); // release the mic (the browser "recording" dot)
+                setStream(null); // stream is dead now (tracks stopped) -> tear down any meter watching it
                 try {
                     const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
                     const form = new FormData();
@@ -564,5 +539,5 @@ export function useSmartVoiceTurn(opts: {
         onSpeech: keepListening,
     });
 
-    return { supported, listening, confirming, countdownMs, transcribing, start, stop, keepListening };
+    return { supported, listening, confirming, countdownMs, transcribing, stream, start, stop, keepListening };
 }

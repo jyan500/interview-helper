@@ -25,13 +25,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import Select from "react-select";
-import { Gear, Microphone, PencilSimple, Sparkle } from "@phosphor-icons/react";
+import { Gear, Microphone, PencilSimple, SpeakerHigh, Sparkle } from "@phosphor-icons/react";
+import type { Icon } from "@phosphor-icons/react";
 import MessageRow from "../components/MessageRow";
 import { useAuth } from "../auth/AuthProvider";
 import { useGetScorecardMutation, useSubmitAnswerMutation } from "../api";
 import { useSessionNav } from "./SessionLayout";
 import { initialsFrom } from "../helpers";
-import { useElapsedClock } from "../hooks";
+import { useElapsedClock, useSpeaking } from "../hooks";
 import { nocturneSelectStyles } from "../selectStyles";
 import {
     pickPreferredVoice,
@@ -95,8 +96,13 @@ export default function SessionPage() {
     // auto-opens after the AI finishes speaking (the edge effect below). onFinalTranscript is the
     // COMBINED stop+send: the hook hands us the Whisper text and we submit it like a typed answer.
     const [voiceMode, setVoiceMode] = useState<TurnMode>("manual");
-    const { supported, listening, confirming, countdownMs, transcribing, start, stop, keepListening } =
+    const { supported, listening, confirming, countdownMs, transcribing, stream, start, stop, keepListening } =
         useSmartVoiceTurn({ mode: voiceMode, onFinalTranscript: (text) => handleSend(text) });
+
+    // Is the candidate actually making sound right now? hark watches the live mic stream (null when
+    // not recording -> false). Drives the "You" cell's pulsing mic icon — the real "you're speaking"
+    // signal, unlike `listening` which is just "the mic is armed". See useSpeaking.
+    const userSpeaking = useSpeaking(stream);
 
     // Browser-voice auto-pick (only matters for the "browser" engine, harmless otherwise): grab the
     // best system voice the moment the async list loads and push it into speak()'s shared prefs.
@@ -241,7 +247,12 @@ export default function SessionPage() {
                         initials={initials}
                         question={currentQuestion}
                         listening={listening}
+                        userSpeaking={userSpeaking}
                         speaking={speaking}
+                        // busy = the dead window between the user finishing (mic stop) and the next
+                        // interviewer turn arriving: transcription (Whisper) + the /api/answer round-trip.
+                        // Drives the "thinking" indicator and locks the mic so no new recording starts.
+                        busy={answering || transcribing}
                         voiceMode={voiceMode}
                         supported={supported}
                         confirming={confirming}
@@ -289,7 +300,9 @@ function VoiceColumn({
     initials,
     question,
     listening,
+    userSpeaking,
     speaking,
+    busy,
     voiceMode,
     supported,
     confirming,
@@ -305,7 +318,9 @@ function VoiceColumn({
     initials: string;
     question?: Line;
     listening: boolean;
+    userSpeaking: boolean;
     speaking: boolean;
+    busy: boolean;
     voiceMode: TurnMode;
     supported: boolean;
     confirming: boolean;
@@ -318,23 +333,28 @@ function VoiceColumn({
     onSwitch: () => void;
     onEnd: () => void;
 }) {
+    // "thinking" covers the whole gap the candidate is waiting on the interviewer: transcription +
+    // the answer round-trip (busy), and then the pending bubble while its TTS synthesizes. We show
+    // the same indicator across all of it — indistinguishable to the user, which is fine here.
+    const thinking = busy || !!question?.pending;
     return (
         <div className="flex flex-col items-center justify-center gap-[34px] px-[60px] py-8">
-            {/* Current question — the latest interviewer turn (or "thinking…" while its audio loads) */}
+            {/* Current question — the latest interviewer turn, or "thinking…" while we wait on the next */}
             <div className="max-w-[680px] text-center">
-                <div className="kicker">{question?.pending ? "Interviewer is thinking" : "Interviewer asked"}</div>
+                <div className="kicker">{thinking ? "Interviewer is thinking" : "Interviewer asked"}</div>
                 <p className="mt-2 font-heading text-[31px] font-medium leading-[1.18] [text-wrap:pretty]">
-                    {question?.pending ? "…" : question?.text ?? "…"}
+                    {thinking ? "…" : question?.text ?? "…"}
                 </p>
             </div>
 
-            {/* Two participant cells — "You" lights up while the mic is open, the interviewer while it speaks */}
+            {/* Two participant cells — each pulses its icon while that participant is actually making
+                sound: "You" on real mic input (hark), the interviewer while its TTS plays. */}
             <div className="grid w-[600px] max-w-full grid-cols-2 rounded-md border border-divider">
                 <ParticipantCell
                     initials={initials}
                     name="You"
                     role="Candidate"
-                    speaking={listening}
+                    speaking={userSpeaking}
                     className="border-r border-divider"
                 />
                 <ParticipantCell ai name="Interviewer" role="AI · Staff engineer" speaking={speaking} />
@@ -360,7 +380,9 @@ function VoiceColumn({
                             className="btn btn-primary flex items-center gap-[9px] text-[15px] disabled:opacity-50"
                             style={{ padding: "13px 30px" }}
                             onClick={onToggleMic}
-                            disabled={speaking || ended}
+                            // Locked while the AI is speaking, while we're mid-transcription/answer
+                            // (busy), or once ended — so no new recording starts over any of those.
+                            disabled={speaking || busy || ended}
                         >
                             <Microphone size={17} weight="regular" />
                             {micLabel(listening, voiceMode)}
@@ -369,7 +391,7 @@ function VoiceColumn({
                             className="btn btn-ghost flex items-center gap-2 border-l border-divider disabled:opacity-50"
                             style={{ padding: "13px 18px" }}
                             onClick={onToggleVoiceMode}
-                            disabled={listening || confirming}
+                            disabled={listening || confirming || busy}
                         >
                             Mode: {voiceMode}
                         </button>
@@ -428,6 +450,10 @@ function ParticipantCell({
     speaking: boolean;
     className?: string;
 }) {
+    // Zoom-style status icon — a mic for the candidate, a speaker for the interviewer — that pulses
+    // (accent + filled) while that participant is making sound, idle/neutral otherwise. Fixed-height
+    // slot so the cell doesn't reflow as it toggles.
+    const StatusIcon: Icon = ai ? SpeakerHigh : Microphone;
     return (
         <div className={"flex flex-col items-center gap-3 px-[22px] py-[26px] " + className}>
             <div
@@ -442,31 +468,19 @@ function ParticipantCell({
                 <div className="font-heading text-[19px]">{name}</div>
                 <div className="text-[12.5px] text-neutral-400">{role}</div>
             </div>
-            <Waveform speaking={speaking} />
+            <div className="flex h-[34px] items-center justify-center">
+                <StatusIcon
+                    size={26}
+                    weight={speaking ? "fill" : "regular"}
+                    className={speaking ? "text-accent-300 speaking-pulse" : "text-neutral-600"}
+                />
+            </div>
             {speaking ? (
                 <span className="tag tag-accent">Speaking</span>
             ) : (
                 <span className="tag tag-neutral">Listening</span>
             )}
         </div>
-    );
-}
-
-// The 180×34 waveform: 20 varying accent strokes when speaking, a flat neutral row when not.
-function Waveform({ speaking }: { speaking: boolean }) {
-    const heights = [0, 5, 11, 7, 14, 8, 3, 12, 6, 9, 2, 13, 5, 10, 4, 8, 1, 6, 2, 0];
-    return (
-        <svg viewBox="0 0 200 34" className="h-[34px] w-[180px]">
-            <g stroke={speaking ? "var(--color-accent)" : "var(--color-neutral-800)"} strokeWidth="2">
-                {speaking
-                    ? heights.map((h, i) => (
-                          <line key={i} x1={6 + i * 10} y1={17 - h} x2={6 + i * 10} y2={17 + h} />
-                      ))
-                    : Array.from({ length: 10 }).map((_, i) => (
-                          <line key={i} x1={6 + i * 20} y1={17} x2={6 + i * 20} y2={17} />
-                      ))}
-            </g>
-        </svg>
     );
 }
 
