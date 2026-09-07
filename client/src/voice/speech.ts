@@ -52,6 +52,9 @@ export function useSpeak(engine: TtsEngine): { speak: (text: string, onReady?: (
     // self-clean via onended — pairing the url here (Option A) is what closes that leak. A ref (not
     // state) because nothing renders it.
     const currentRef = useRef<{ audio: HTMLAudioElement; url: string } | null>(null);
+    // Cancels a DEFERRED first browser utterance (one still waiting on `voiceschanged`, below) if a newer
+    // speak supersedes it before it starts — barge-in for that wait window. null when nothing is pending.
+    const pendingBrowserSpeakRef = useRef<(() => void) | null>(null);
 
     // --- Engine A: OpenAI neural TTS (spends tokens). The Phase F path, unchanged.
     // useCallback so the returned fn identity is stable across renders (safe to list in effect deps
@@ -119,16 +122,51 @@ export function useSpeak(engine: TtsEngine): { speak: (text: string, onReady?: (
     // "thinking…" gap is effectively instant. Reads the shared voicePrefs the auto-pick effect sets.
     const speakBrowser = useCallback((text: string, onReady?: () => void): void => {
         if (!("speechSynthesis" in window)) { onReady?.(); return } // unsupported -> just reveal the text
-        window.speechSynthesis.cancel() // barge-in: drop any utterance still queued/speaking
-        const utterance = new SpeechSynthesisUtterance(text)
-        const chosen = window.speechSynthesis.getVoices().find(v => v.voiceURI === voicePrefs.voiceURI)
-        if (chosen) utterance.voice = chosen
-        utterance.rate = voicePrefs.rate
-        utterance.pitch = voicePrefs.pitch
-        utterance.onstart = () => { setPlaying(true); onReady?.() } // reveal text as speech begins
-        utterance.onend = () => setPlaying(false)
-        utterance.onerror = () => { setPlaying(false); onReady?.() } // reveal even if it fails to speak
-        window.speechSynthesis.speak(utterance)
+        const synth = window.speechSynthesis
+        // Barge-in: drop any utterance still queued/speaking AND any first utterance still WAITING on
+        // voices (below), so a newer line supersedes cleanly.
+        pendingBrowserSpeakRef.current?.()
+        pendingBrowserSpeakRef.current = null
+        synth.cancel()
+
+        // Build + speak, resolving the voice off the LIVE list at the moment we actually speak. Prefer
+        // the explicitly-set voicePrefs (auto-pick effect / a picker); else fall back to the same
+        // pickPreferredVoice heuristic so we still get a good voice, not the OS default.
+        const speakNow = () => {
+            const utterance = new SpeechSynthesisUtterance(text)
+            const voices = synth.getVoices()
+            const chosen = voices.find(v => v.voiceURI === voicePrefs.voiceURI) ?? pickPreferredVoice(voices)
+            if (chosen) utterance.voice = chosen
+            utterance.rate = voicePrefs.rate
+            utterance.pitch = voicePrefs.pitch
+            utterance.onstart = () => { setPlaying(true); onReady?.() } // reveal text as speech begins
+            utterance.onend = () => setPlaying(false)
+            utterance.onerror = () => { setPlaying(false); onReady?.() } // reveal even if it fails to speak
+            synth.speak(utterance)
+        }
+
+        // getVoices() is populated ASYNCHRONOUSLY and is often [] for the very first call right after
+        // load — which is exactly the first interview question, so speaking then uses the OS default.
+        // If the list isn't ready, DEFER until `voiceschanged` actually reports voices (with a timeout
+        // fallback so we never hang if the event doesn't come), then speak with the preferred voice.
+        if (synth.getVoices().length > 0) {
+            speakNow()
+            return
+        }
+        let settled = false
+        const finish = (proceed: boolean) => {
+            if (settled) return
+            settled = true
+            synth.removeEventListener("voiceschanged", onVoices)
+            window.clearTimeout(timer)
+            pendingBrowserSpeakRef.current = null
+            if (proceed) speakNow()
+            else onReady?.() // superseded before speaking -> reveal the text so the bubble doesn't hang
+        }
+        const onVoices = () => { if (synth.getVoices().length > 0) finish(true) }
+        const timer = window.setTimeout(() => finish(true), 1500) // fallback: speak anyway, best-effort voice
+        synth.addEventListener("voiceschanged", onVoices)
+        pendingBrowserSpeakRef.current = () => finish(false) // barge-in canceller for the wait window
     }, []);
 
     // Dispatch on the chosen engine — SAME (text, onReady) contract either way, so App stays engine-blind

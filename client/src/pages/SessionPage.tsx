@@ -88,7 +88,7 @@ export default function SessionPage() {
     // Which TTS engine speaks the interviewer's turns. "openai" = neural (spends tokens),
     // "browser" = free/robotic (handy for debugging without burning credit). useSpeak(engine)
     // dispatches; the picker in the right rail flips it, mid-session is fine.
-    const [ttsEngine, setTtsEngine] = useState<TtsEngine>("openai");
+    const [ttsEngine, setTtsEngine] = useState<TtsEngine>("browser");
     const { speak, speaking } = useSpeak(ttsEngine);
 
     // Smart voice turn-taking, exactly as App.tsx drove it. "manual" = tap to start/stop;
@@ -151,26 +151,31 @@ export default function SessionPage() {
     async function handleSend(textOverride?: string) {
         const text = (textOverride ?? draft).trim();
         if (!interviewId || !text || done || ended) return;
-        setTranscript((t) => [...t, { id: nextId(), who: "you", text }]);
+        // Append the answer AND the interviewer's pending "thinking…" bubble in ONE update, UP FRONT
+        // (not after submitAnswer resolves). Keeping the pending line present for the whole request means
+        // there's never a render where `answering` has flipped false but the pending line isn't there yet
+        // — that gap briefly unhid the PREVIOUS question ("flash → back to thinking → real question").
+        const youId = nextId();
+        const pendingId = nextId();
+        setTranscript((t) => [
+            ...t,
+            { id: youId, who: "you", text },
+            { id: pendingId, who: "interviewer", text: "", pending: true },
+        ]);
         setDraft("");
         let res;
         try {
             res = await submitAnswer({ interview_id: interviewId, text }).unwrap();
         } catch (e) {
-            // Surface the failure as an interviewer line rather than swallowing it, so a dropped turn
-            // isn't invisible. (A 409 here would mean the interview finished under us — rare, since we
-            // gate on `done`, but honest to show.)
+            // Surface the failure IN the pending bubble — don't leave it "thinking" forever, and don't
+            // add a second interviewer line. (A 409 here would mean the interview finished under us —
+            // rare, since we gate on `done`, but honest to show.)
             console.error(e);
-            setTranscript((t) => [
-                ...t,
-                { id: nextId(), who: "interviewer", text: "Sorry — I couldn't record that. Try again." },
-            ]);
+            revealLine(pendingId, "Sorry — I couldn't record that. Try again.");
             return;
         }
-        // "thinking…" placeholder, then reveal its text + start audio together via onReady.
-        const id = nextId();
-        setTranscript((t) => [...t, { id, who: "interviewer", text: "", pending: true }]);
-        speak(res.message, () => revealLine(id, res.message));
+        // Reveal the pending bubble's text in sync with the voice via onReady.
+        speak(res.message, () => revealLine(pendingId, res.message));
         if (res.done) setDone(true);
     }
 
