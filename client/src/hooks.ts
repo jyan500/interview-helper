@@ -2,7 +2,7 @@
  * Small, reusable React hooks shared across pages. (Distinct from helpers.ts, which is pure,
  * React-free functions — anything that calls useState/useEffect/etc. lives here.)
  */
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import hark from "hark";
 import { HARK_POLL_INTERVAL_MS, HARK_SPEAKING_THRESHOLD_DB } from "./constants";
 
@@ -57,4 +57,37 @@ export function useSpeaking(stream: MediaStream | null): boolean {
     }, [stream]);
 
     return speaking;
+}
+
+/**
+ * The available audio-input devices (microphones), for a device picker. Returns the list plus a
+ * `refresh` the caller invokes once mic permission is granted.
+ *
+ * THE PERMISSION CATCH: before the user grants mic access, enumerateDevices() still lists the devices
+ * but every `label` is BLANK (a privacy measure) — so the picker can only show generic "Microphone N"
+ * until then. After the first getUserMedia grant the labels populate, but no event necessarily fires,
+ * so the consumer calls refresh() when its stream opens to re-read them. We also listen for
+ * `devicechange` (mic plugged/unplugged) to keep the list live.
+ */
+export function useAudioInputDevices(): { devices: MediaDeviceInfo[]; refresh: () => void } {
+    const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+
+    const refresh = useCallback(async () => {
+        if (!navigator.mediaDevices?.enumerateDevices) return;
+        try {
+            const all = await navigator.mediaDevices.enumerateDevices();
+            setDevices(all.filter((d) => d.kind === "audioinput"));
+        } catch (e) {
+            console.error("Failed to enumerate audio input devices:", e);
+        }
+    }, []);
+
+    useEffect(() => {
+        refresh();
+        const md = navigator.mediaDevices;
+        md?.addEventListener?.("devicechange", refresh);
+        return () => md?.removeEventListener?.("devicechange", refresh);
+    }, [refresh]);
+
+    return { devices, refresh };
 }

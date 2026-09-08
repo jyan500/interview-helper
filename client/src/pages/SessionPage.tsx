@@ -32,7 +32,7 @@ import { useAuth } from "../auth/AuthProvider";
 import { useGetScorecardMutation, useSubmitAnswerMutation } from "../api";
 import { useSessionNav } from "./SessionLayout";
 import { initialsFrom } from "../helpers";
-import { useElapsedClock, useSpeaking } from "../hooks";
+import { useAudioInputDevices, useElapsedClock, useSpeaking } from "../hooks";
 import { nocturneSelectStyles } from "../selectStyles";
 import {
     pickPreferredVoice,
@@ -58,6 +58,12 @@ const TTS_ENGINE_OPTIONS: EngineOption[] = [
     { value: "openai", label: "OpenAI — neural (uses tokens)" },
     { value: "browser", label: "Browser — free (robotic)" },
 ];
+
+// The microphone picker options (react-select shape). value "" is the system-default sentinel; a
+// real value is a MediaDeviceInfo.deviceId. Labels are blank until mic permission is granted, so we
+// fall back to "Microphone N" until the first recording populates the real device names.
+type MicOption = { value: string; label: string };
+const DEFAULT_MIC_OPTION: MicOption = { value: "", label: "System default" };
 
 /* ══════════════════════════════════════════════════════════════════════════
    The running interview — all the state + loop lives here. A valid interview is
@@ -96,13 +102,26 @@ export default function SessionPage() {
     // auto-opens after the AI finishes speaking (the edge effect below). onFinalTranscript is the
     // COMBINED stop+send: the hook hands us the Whisper text and we submit it like a typed answer.
     const [voiceMode, setVoiceMode] = useState<TurnMode>("manual");
+
+    // Which microphone to capture from. "" = system default; a real deviceId pins that exact mic —
+    // the picker exists because a wrong default mic silently recorded nothing on Firefox. Threaded
+    // into useSmartVoiceTurn so BOTH the recorder and the smart-mode VAD open the same device.
+    const { devices: micDevices, refresh: refreshMics } = useAudioInputDevices();
+    const [micDeviceId, setMicDeviceId] = useState<string>("");
+
     const { supported, listening, confirming, countdownMs, transcribing, stream, start, stop, keepListening } =
-        useSmartVoiceTurn({ mode: voiceMode, onFinalTranscript: (text) => handleSend(text) });
+        useSmartVoiceTurn({ mode: voiceMode, deviceId: micDeviceId || null, onFinalTranscript: (text) => handleSend(text) });
 
     // Is the candidate actually making sound right now? hark watches the live mic stream (null when
     // not recording -> false). Drives the "You" cell's pulsing mic icon — the real "you're speaking"
     // signal, unlike `listening` which is just "the mic is armed". See useSpeaking.
     const userSpeaking = useSpeaking(stream);
+
+    // Device labels are blank until mic permission is granted; the first recording grants it, so
+    // re-enumerate when a stream opens to swap the generic "Microphone N" for real device names.
+    useEffect(() => {
+        if (stream) refreshMics();
+    }, [stream, refreshMics]);
 
     // Browser-voice auto-pick (only matters for the "browser" engine, harmless otherwise): grab the
     // best system voice the moment the async list loads and push it into speak()'s shared prefs.
@@ -227,6 +246,15 @@ export default function SessionPage() {
 
     const initials = initialsFrom(session?.user?.user_metadata?.display_name, session?.user?.email);
 
+    // System default first, then one option per detected mic (real label once permission lands).
+    const micOptions: MicOption[] = useMemo(
+        () => [
+            DEFAULT_MIC_OPTION,
+            ...micDevices.map((d, i) => ({ value: d.deviceId, label: d.label || `Microphone ${i + 1}` })),
+        ],
+        [micDevices],
+    );
+
     return (
         <div className="flex h-screen flex-col bg-bg text-ink">
             {/* ── Session header (shared) ─────────────────────────────────────── */}
@@ -291,6 +319,9 @@ export default function SessionPage() {
                     interviewerLines={interviewerLines}
                     ttsEngine={ttsEngine}
                     setTtsEngine={setTtsEngine}
+                    micOptions={micOptions}
+                    micDeviceId={micDeviceId}
+                    setMicDeviceId={setMicDeviceId}
                     scoring={scoring}
                 />
             </div>
@@ -629,12 +660,18 @@ function RightRail({
     interviewerLines,
     ttsEngine,
     setTtsEngine,
+    micOptions,
+    micDeviceId,
+    setMicDeviceId,
     scoring,
 }: {
     mode: Mode;
     interviewerLines: Line[];
     ttsEngine: TtsEngine;
     setTtsEngine: (e: TtsEngine) => void;
+    micOptions: MicOption[];
+    micDeviceId: string;
+    setMicDeviceId: (id: string) => void;
     scoring: boolean;
 }) {
     // A private, local-only scratchpad (not persisted — deliberately, it's throwaway thinking space).
@@ -680,16 +717,30 @@ function RightRail({
 
             {/* Mode-specific footer, pinned to the bottom */}
             {mode === "voice" ? (
-                <div className="mt-auto">
-                    <div className="kicker">Voice</div>
-                    <div className="mt-2">
-                        <Select<EngineOption>
-                            options={TTS_ENGINE_OPTIONS}
-                            value={TTS_ENGINE_OPTIONS.find((o) => o.value === ttsEngine)}
-                            onChange={(opt) => opt && setTtsEngine(opt.value)}
-                            isSearchable={false}
-                            styles={nocturneSelectStyles}
-                        />
+                <div className="mt-auto flex flex-col gap-4">
+                    <div>
+                        <div className="kicker">Voice</div>
+                        <div className="mt-2">
+                            <Select<EngineOption>
+                                options={TTS_ENGINE_OPTIONS}
+                                value={TTS_ENGINE_OPTIONS.find((o) => o.value === ttsEngine)}
+                                onChange={(opt) => opt && setTtsEngine(opt.value)}
+                                isSearchable={false}
+                                styles={nocturneSelectStyles}
+                            />
+                        </div>
+                    </div>
+                    <div>
+                        <div className="kicker">Microphone</div>
+                        <div className="mt-2">
+                            <Select<MicOption>
+                                options={micOptions}
+                                value={micOptions.find((o) => o.value === micDeviceId) ?? micOptions[0]}
+                                onChange={(opt) => opt && setMicDeviceId(opt.value)}
+                                isSearchable={false}
+                                styles={nocturneSelectStyles}
+                            />
+                        </div>
                     </div>
                 </div>
             ) : (
