@@ -13,6 +13,7 @@ import { AsyncPaginate } from "react-select-async-paginate";
 import type { LoadOptions } from "react-select-async-paginate";
 import type { GroupBase } from "react-select";
 import type { OptionPageQuery, Page } from "../api";
+import { nocturneSelectStyles } from "../selectStyles";
 
 // The Option shape react-select speaks natively: the value we send back (a slug) plus the label
 // we show. WHY Option and not a bare slug string: with async loading, the chosen option may not
@@ -72,12 +73,28 @@ export function AsyncPaginateSelect({
         additional,
     ) => {
         const page = additional?.page ?? 1;
-        const res = await fetchPage({ q: search, page }).unwrap();
-        return {
-            options: res.items.map((row) => ({ value: row.slug, label: row.name })),
-            hasMore: res.page * res.size < res.total,
-            additional: { page: page + 1 },
-        };
+        try {
+            const res = await fetchPage({ q: search, page }).unwrap();
+            return {
+                options: res.items.map((row) => ({ value: row.slug, label: row.name })),
+                hasMore: res.page * res.size < res.total,
+                additional: { page: page + 1 },
+            };
+        } catch (e) {
+            // loadOptions MUST NOT throw. react-select-async-paginate's error path (see its
+            // requestOptions) only flips `isLoading` back to false on a rejected load — it leaves
+            // `hasMore` at its previous value, which is `true` for a first load. That keeps the
+            // library's "may I request?" gate open, so every subsequent re-render re-fires the fetch.
+            // A token refresh makes this pathological: refreshSession() -> onAuthStateChange ->
+            // AuthProvider re-renders the tree -> gate is open -> fetch -> 401 -> refresh -> ... a
+            // tight retry loop against a failing endpoint (the bug seen intermittently on the pickers).
+            //
+            // Returning a TERMINAL page instead — no options, hasMore:false, cursor NOT advanced —
+            // records a completed load with nothing more to fetch, which closes that gate. The user
+            // can retry by changing the search text (a fresh cache key) or reopening the menu later.
+            console.error("Failed to load options", e);
+            return { options: [], hasMore: false, additional: { page } };
+        }
     };
 
     return (
@@ -93,6 +110,9 @@ export function AsyncPaginateSelect({
             placeholder={placeholder}
             isDisabled={isDisabled}
             cacheUniqs={cacheUniqs}
+            // Nocturne dark-theme styling (shared) — without it react-select's white menu + inherited
+            // near-white option text render the dropdown unreadable. See selectStyles.ts.
+            styles={nocturneSelectStyles}
         />
     );
 }

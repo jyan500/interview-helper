@@ -9,15 +9,23 @@
  * Fluid, not fixed: the mock's 1440px frame becomes a max-width container, and the
  * two-column body collapses to one column below ~1024px (lg:).
  */
-import { useState } from "react";
 import { useNavigate } from "react-router";
+import { useForm } from "react-hook-form";
 import { useAuth } from "../auth/AuthProvider"
+import { useLazyGetLevelsQuery, useLazyGetRolesQuery, useStartInterviewMutation } from "../api";
+import { ControlledAsyncPaginateSelect } from "../components/ControlledAsyncPaginateSelect";
+import type { SelectOption } from "../components/AsyncPaginateSelect";
 import AppNav from "../components/AppNav";
 import Sparkline from "../components/Sparkline";
 
-// The four seniority levels, in rank order (the active one takes the accent tint).
-const LEVELS = ["Entry", "Mid", "Senior", "Staff"] as const;
-type Level = (typeof LEVELS)[number];
+// The kickoff form's shape — the same one App.tsx's legacy flow uses. Each field holds react-select's
+// Option ({ value: slug, label: name }) or null until picked; onStart unwraps `.value` to the slug the
+// backend wants and `.label` for the session header. Kept as Option (not a bare slug) so the async
+// select can show the chosen label without re-fetching it.
+type StartFormValues = {
+    role: SelectOption | null;
+    level: SelectOption | null;
+};
 
 // Static history rows — the "Past interviews" table in the mock.
 const PAST = [
@@ -47,7 +55,34 @@ const WORK_ON_NEXT = [
 export default function DashboardPage() {
     const navigate = useNavigate();
     const { session } = useAuth();
-    const [level, setLevel] = useState<Level>("Mid");
+
+    // The kickoff form — RHF owns the role/level Options; mode "onChange" keeps formState.isValid live
+    // so the Start button enables the instant both required fields are picked. Same setup as App.tsx.
+    const { control, handleSubmit, formState } = useForm<StartFormValues>({
+        defaultValues: { role: null, level: null },
+        mode: "onChange",
+    });
+    // LAZY option triggers handed straight to the two async selects as their `fetchPage` — the select
+    // owns paginate/map, we only inject WHICH endpoint (see ControlledAsyncPaginateSelect).
+    const [triggerRoles] = useLazyGetRolesQuery();
+    const [triggerLevels] = useLazyGetLevelsQuery();
+
+    // The KICKOFF: POST /api/interview, then hand the fresh interview to /session via route state
+    // (SessionLayout guards on it; SessionPage seeds the first question + speaks it from firstMessage).
+    // We never navigate to /session without a real interview — that's the whole producer/consumer split.
+    const [startInterview, { isLoading: starting }] = useStartInterviewMutation();
+    async function onStart({ role, level }: StartFormValues) {
+        if (!role || !level) return; // narrows Option | null -> Option; `required` already guarantees it
+        const res = await startInterview({ role: role.value, seniority: level.value }).unwrap();
+        navigate("/session", {
+            state: {
+                interviewId: res.interview_id,
+                firstMessage: res.message,
+                role: role.label, // human-readable labels for the session header
+                level: level.label,
+            },
+        });
+    }
 
     return (
         <div className="min-h-screen bg-bg text-ink">
@@ -81,44 +116,50 @@ export default function DashboardPage() {
                             </div>
                         </div>
 
-                        {/* Start an interview */}
-                        <div className="rounded-md border border-divider px-[22px] pb-[22px] pt-5">
+                        {/* Start an interview — the searchable async role/level pickers (slugs), the same
+                            widgets the legacy flow used, wrapped in RHF so both are required before Start
+                            enables. handleSubmit(onStart) fires POST /api/interview then routes to /session. */}
+                        <form
+                            onSubmit={handleSubmit(onStart)}
+                            className="rounded-md border border-divider px-[22px] pb-[22px] pt-5"
+                        >
                             <h2 className="font-heading text-[23px] font-medium">Start an interview</h2>
 
                             <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
                                 <div className="field">
-                                    {/* TODO(wire): swap for the searchable role combobox (react-select async) */}
                                     <label>Role</label>
-                                    <input className="input" defaultValue="Backend Engineer" />
+                                    <ControlledAsyncPaginateSelect
+                                        control={control}
+                                        name="role"
+                                        rules={{ required: true }}
+                                        fetchPage={triggerRoles}
+                                        placeholder="Search roles…"
+                                    />
                                 </div>
                                 <div className="field">
                                     <label>Level</label>
-                                    <div className="seg">
-                                        {LEVELS.map((l) => (
-                                            <button
-                                                key={l}
-                                                type="button"
-                                                className={"seg-opt" + (level === l ? " is-active" : "")}
-                                                onClick={() => setLevel(l)}
-                                            >
-                                                {l}
-                                            </button>
-                                        ))}
-                                    </div>
+                                    <ControlledAsyncPaginateSelect
+                                        control={control}
+                                        name="level"
+                                        rules={{ required: true }}
+                                        fetchPage={triggerLevels}
+                                        placeholder="Search levels…"
+                                    />
                                 </div>
                             </div>
 
                             <div className="mt-[18px] flex justify-end">
-                                {/* TODO(wire): POST /api/interview then route to /session */}
                                 <button
-                                    className="btn btn-primary text-[15px]"
+                                    type="submit"
+                                    // disabled until BOTH required selects are valid, and while the POST is in flight
+                                    disabled={starting || !formState.isValid}
+                                    className="btn btn-primary text-[15px] disabled:opacity-50"
                                     style={{ padding: "11px 26px" }}
-                                    onClick={() => navigate("/session")}
                                 >
-                                    Start interview
+                                    {starting ? "Starting…" : "Start interview"}
                                 </button>
                             </div>
-                        </div>
+                        </form>
 
                         {/* Past interviews */}
                         <div className="rounded-md border border-divider px-[22px] pb-2 pt-[18px]">

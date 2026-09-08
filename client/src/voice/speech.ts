@@ -1,33 +1,8 @@
-/**
- * Browser voice adapters — Phase 4 (the last slice). The audio "edge adapters", in the browser.
- *
- * The whole thesis of the project, made concrete: audio is an EDGE ADAPTER, not part of the
- * loop. In Phase 3.5 the browser BECAME the loop (one fetch per turn). Phase 4 only bolts
- * audio onto the two ENDS of that loop:
- *
- *     speak(text)             -> TTS: say the interviewer's turn out loud    (OUTPUT seam)
- *     useSpeechRecognition()  -> STT: fill the answer box from the mic        (INPUT seam)
- *
- * Nothing in handleStart / handleSend, the RTK Query calls, or the transcript state changes.
- * You only (a) call speak() where interviewer text appears, and (b) add a mic button that
- * writes into `draft`. "The loop never learns whether the answer was typed or spoken" is the
- * headline lesson — the same seam as the server's voice/adapters.py listen()/speak(), now in
- * the browser via the free, built-in Web Speech API (no npm packages).
- *
- * Support: SpeechSynthesis (TTS) is broadly supported. SpeechRecognition (STT) is Chrome/Edge
- * only (webkit-prefixed), not Firefox, and prompts for mic permission on first use.
- *
- * --- How to wire into App.tsx (your fill-in) --------------------------------------------
- *   OUTPUT: after each `setTranscript(t => [...t, { who: "interviewer", text: msg }])`,
- *           also call `speak(msg)`.
- *   INPUT:  const { supported, listening, start, stop } = useSpeechRecognition(setDraft);
- *           render a 🎤 button (only when `supported`) that toggles start()/stop(); the hook
- *           writes the transcript into `draft`, and you Send it exactly as a typed answer.
- */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranscribeMutation, useTtsMutation } from "../api";
 import { MicVAD } from "@ricky0123/vad-web";
 import { VAD_SPEECH_THRESHOLD, VAD_REDEMPTION_MS, CONFIRM_COUNTDOWN_MS, VAD_ONNX_WASM_BASE } from "../constants";
+import { pickRecordingType, filenameFor, audioConstraints } from "./helpers";
 
 // ============================ TTS — the OUTPUT adapter ============================
 // SpeechSynthesis + SpeechSynthesisUtterance ARE in TypeScript's DOM lib, so no extra typing.
@@ -41,11 +16,6 @@ import { VAD_SPEECH_THRESHOLD, VAD_REDEMPTION_MS, CONFIRM_COUNTDOWN_MS, VAD_ONNX
 // The prefs live at MODULE scope (below) so the two speak() call sites don't have to thread them
 // through — the voice picker calls setVoicePrefs(), speak() reads them. Same seam, richer knobs.
 
-// NO LONGER DEAD (was flagged for removal): this block (VoicePrefs / voicePrefs / setVoicePrefs, plus
-// useVoices / pickPreferredVoice below) drives the browser SpeechSynthesis voice — now the FREE "browser"
-// TTS engine the user can pick to avoid spending OpenAI tokens while debugging. useSpeak(engine)
-// dispatches to it or to the neural /api/tts path; App's auto-pick effect still feeds voicePrefs so the
-// browser voice is the best system voice available.
 type VoicePrefs = { voiceURI: string | null; rate: number; pitch: number };
 
 // Sensible defaults: system-default voice until a preferred one is chosen; natural cadence.
@@ -83,6 +53,9 @@ export function useSpeak(engine: TtsEngine): { speak: (text: string, onReady?: (
     // self-clean via onended — pairing the url here (Option A) is what closes that leak. A ref (not
     // state) because nothing renders it.
     const currentRef = useRef<{ audio: HTMLAudioElement; url: string } | null>(null);
+    // Cancels a DEFERRED first browser utterance (one still waiting on `voiceschanged`, below) if a newer
+    // speak supersedes it before it starts — barge-in for that wait window. null when nothing is pending.
+    const pendingBrowserSpeakRef = useRef<(() => void) | null>(null);
 
     // --- Engine A: OpenAI neural TTS (spends tokens). The Phase F path, unchanged.
     // useCallback so the returned fn identity is stable across renders (safe to list in effect deps
@@ -150,16 +123,51 @@ export function useSpeak(engine: TtsEngine): { speak: (text: string, onReady?: (
     // "thinking…" gap is effectively instant. Reads the shared voicePrefs the auto-pick effect sets.
     const speakBrowser = useCallback((text: string, onReady?: () => void): void => {
         if (!("speechSynthesis" in window)) { onReady?.(); return } // unsupported -> just reveal the text
-        window.speechSynthesis.cancel() // barge-in: drop any utterance still queued/speaking
-        const utterance = new SpeechSynthesisUtterance(text)
-        const chosen = window.speechSynthesis.getVoices().find(v => v.voiceURI === voicePrefs.voiceURI)
-        if (chosen) utterance.voice = chosen
-        utterance.rate = voicePrefs.rate
-        utterance.pitch = voicePrefs.pitch
-        utterance.onstart = () => { setPlaying(true); onReady?.() } // reveal text as speech begins
-        utterance.onend = () => setPlaying(false)
-        utterance.onerror = () => { setPlaying(false); onReady?.() } // reveal even if it fails to speak
-        window.speechSynthesis.speak(utterance)
+        const synth = window.speechSynthesis
+        // Barge-in: drop any utterance still queued/speaking AND any first utterance still WAITING on
+        // voices (below), so a newer line supersedes cleanly.
+        pendingBrowserSpeakRef.current?.()
+        pendingBrowserSpeakRef.current = null
+        synth.cancel()
+
+        // Build + speak, resolving the voice off the LIVE list at the moment we actually speak. Prefer
+        // the explicitly-set voicePrefs (auto-pick effect / a picker); else fall back to the same
+        // pickPreferredVoice heuristic so we still get a good voice, not the OS default.
+        const speakNow = () => {
+            const utterance = new SpeechSynthesisUtterance(text)
+            const voices = synth.getVoices()
+            const chosen = voices.find(v => v.voiceURI === voicePrefs.voiceURI) ?? pickPreferredVoice(voices)
+            if (chosen) utterance.voice = chosen
+            utterance.rate = voicePrefs.rate
+            utterance.pitch = voicePrefs.pitch
+            utterance.onstart = () => { setPlaying(true); onReady?.() } // reveal text as speech begins
+            utterance.onend = () => setPlaying(false)
+            utterance.onerror = () => { setPlaying(false); onReady?.() } // reveal even if it fails to speak
+            synth.speak(utterance)
+        }
+
+        // getVoices() is populated ASYNCHRONOUSLY and is often [] for the very first call right after
+        // load — which is exactly the first interview question, so speaking then uses the OS default.
+        // If the list isn't ready, DEFER until `voiceschanged` actually reports voices (with a timeout
+        // fallback so we never hang if the event doesn't come), then speak with the preferred voice.
+        if (synth.getVoices().length > 0) {
+            speakNow()
+            return
+        }
+        let settled = false
+        const finish = (proceed: boolean) => {
+            if (settled) return
+            settled = true
+            synth.removeEventListener("voiceschanged", onVoices)
+            window.clearTimeout(timer)
+            pendingBrowserSpeakRef.current = null
+            if (proceed) speakNow()
+            else onReady?.() // superseded before speaking -> reveal the text so the bubble doesn't hang
+        }
+        const onVoices = () => { if (synth.getVoices().length > 0) finish(true) }
+        const timer = window.setTimeout(() => finish(true), 1500) // fallback: speak anyway, best-effort voice
+        synth.addEventListener("voiceschanged", onVoices)
+        pendingBrowserSpeakRef.current = () => finish(false) // barge-in canceller for the wait window
     }, []);
 
     // Dispatch on the chosen engine — SAME (text, onReady) contract either way, so App stays engine-blind
@@ -301,84 +309,6 @@ export function useSpeechRecognition(onResult: (text: string) => void) {
     return { supported, listening, start, stop };
 }
 
-// ============ STT #2 — the ROBUST INPUT adapter (Phase 5): capture here, transcribe on our server ============
-// SAME { supported, listening, start, stop } CONTRACT as useSpeechRecognition above — and THAT is
-// the whole lesson: App.tsx swaps ONE import and nothing else moves (handleSend, the transcript,
-// the agent, MCP all untouched). Only the GUTS differ. Instead of leasing Chrome's Web Speech API
-// (Chrome-only, no endpointing control, audio -> Google), we:
-//   1. capture raw mic audio in the browser via getUserMedia + MediaRecorder, then
-//   2. POST the recorded utterance to OUR /api/transcribe (OpenAI Whisper) and use the text back.
-// Cross-browser, more accurate, and the audio goes to a vendor WE chose. Endpointing is still
-// MANUAL (user clicks Stop) — same tradeoff as the Web Speech version; VAD auto-stop is a later add.
-
-export function useWhisperRecognition(onResult: (text: string) => void) {
-    const [listening, setListening] = useState(false);
-    // The transcribe POST now goes through RTK Query (the "one place HTTP lives"), so `isLoading`
-    // IS our "transcribing" flag — no hand-rolled useState/finally needed, RTK Query flips it back.
-    const [transcribe, { isLoading: transcribing }] = useTranscribeMutation();
-    const recorderRef = useRef<MediaRecorder | null>(null);
-    const chunksRef = useRef<Blob[]>([]); // audio chunks MediaRecorder emits as it records
-    const streamRef = useRef<MediaStream | null>(null); // the live mic stream, to release on stop
-
-    // getUserMedia + MediaRecorder are STANDARD and broadly supported (incl. Firefox/Safari),
-    // unlike webkitSpeechRecognition. Both need a secure context (https or localhost). Guard for
-    // ancient browsers where they're missing so the mic button hides instead of throwing.
-    const supported =
-        typeof navigator !== "undefined" &&
-        !!navigator.mediaDevices?.getUserMedia &&
-        typeof MediaRecorder !== "undefined";
-
-    async function start(): Promise<void> {
-        if (!supported || listening) return;
-        try {
-            // Prompts for mic permission the first time. Throws if denied -> we stay not-listening.
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            streamRef.current = stream;
-            chunksRef.current = [];
-            const recorder = new MediaRecorder(stream);
-            recorder.ondataavailable = (e) => {
-                if (e.data.size > 0) chunksRef.current.push(e.data);
-            };
-            recorder.onstop = async () => {
-                try {
-                    // release the mic so the browser's "recording" dot goes away
-                    streamRef.current?.getTracks().forEach((t) => t.stop());
-                    // glue the chunks into ONE utterance blob (webm/opus in Chrome; Whisper accepts it)
-                    const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
-                    // ship it through RTK Query, get text back, fill the draft — the SAME onResult the
-                    // Web Speech path calls, just sourced from Whisper instead of Chrome. .unwrap()
-                    // returns the payload OR throws — and it throws on HTTP errors too (413/500), so
-                    // the server's "file too large" guard lands in the catch below, not silently.
-                    const form = new FormData();
-                    form.append("audio", blob, "answer.webm");
-                    const data = await transcribe(form).unwrap();
-                    onResult((data.text ?? "").trim());
-                }
-                catch (e) {
-                    // TODO: need to add a toast notification in the future
-                    console.error("Failed to transcribe...", e);
-                }
-                // no finally — RTK Query flips `isLoading` (our `transcribing`) back on its own.
-            };
-            recorderRef.current = recorder;
-            recorder.start();
-            setListening(true);
-        } catch {
-            // denied mic / no device -> leave listening false so the button resets to "Record".
-            setListening(false);
-        }
-    }
-
-    function stop(): void {
-        recorderRef.current?.stop(); // fires onstop -> builds the blob, POSTs it, calls onResult
-        setListening(false);
-        // `transcribing` (set in onstop) covers the gap between here and the transcript arriving,
-        // so App can show a "Transcribing…" hint during the Whisper round-trip.
-    }
-
-    return { supported, listening, start, stop, transcribing };
-}
-
 // ============ VAD — the acoustic silence detector (smart-mode endpointing, layer 1) ============
 // The "notice when they've gone quiet" half of smart mode. Everything else (record -> Whisper ->
 // submit) is the useSmartVoiceTurn spine below; this hook only reports the acoustic edges.
@@ -397,7 +327,7 @@ type VoiceActivityHandlers = {
     onSpeech: () => void;  // speech (re)started -> cancel the countdown
 };
 
-export function useVoiceActivity(active: boolean, handlers: VoiceActivityHandlers) {
+export function useVoiceActivity(active: boolean, deviceId: string | null | undefined, handlers: VoiceActivityHandlers) {
     // Keep the latest handlers in a ref so the VAD's callbacks always call the CURRENT closures (which
     // capture fresh state) without us tearing down and rebuilding the model every render.
     const handlersRef = useRef(handlers);
@@ -418,6 +348,11 @@ export function useVoiceActivity(active: boolean, handlers: VoiceActivityHandler
                     // imported as JS modules (which is how ORT loads its wasm). See VAD_ONNX_WASM_BASE.
                     baseAssetPath: "/vad/",
                     onnxWASMBasePath: VAD_ONNX_WASM_BASE,
+                    // Steer the VAD's own mic to the SAME device the recorder uses, so smart-mode
+                    // silence detection listens to the mic that's actually being transcribed. Default
+                    // getStream() would grab the system-default device — a mismatch if the user picked
+                    // a specific mic. audioConstraints(null) reproduces the library's default behaviour.
+                    getStream: () => navigator.mediaDevices.getUserMedia({ audio: audioConstraints(deviceId) }),
                     positiveSpeechThreshold: VAD_SPEECH_THRESHOLD,
                     redemptionMs: VAD_REDEMPTION_MS,
                     onSpeechStart: () => handlersRef.current.onSpeech(),
@@ -439,11 +374,13 @@ export function useVoiceActivity(active: boolean, handlers: VoiceActivityHandler
             cancelled = true;
             vad?.destroy(); // releases MicVAD's mic + audio graph
         };
-    }, [active]);
+        // deviceId in deps: switching mics rebuilds the VAD so it re-opens on the newly chosen device.
+    }, [active, deviceId]);
 }
 
 // ============ Smart voice turn-taking — the layer-1 controller (both modes) ============
-// Evolves useWhisperRecognition for the turn-taking UX. SAME capture -> Whisper spine; what's new:
+// Capture raw mic audio -> POST to /api/transcribe (Whisper) -> use the text. On top of that spine
+// it adds the turn-taking UX:
 //   - it exposes the live `stream` in state so useVoiceActivity can watch it (smart mode),
 //   - "stop" now means STOP + TRANSCRIBE + SUBMIT in one go (onFinalTranscript), so the UI drops the
 //     separate "Send answer" click for the spoken path,
@@ -459,13 +396,23 @@ export type TurnMode = "manual" | "smart";
 export function useSmartVoiceTurn(opts: {
     mode: TurnMode;
     onFinalTranscript: (text: string) => void; // App passes handleSend — the COMBINED stop+send
+    deviceId?: string | null; // chosen mic; null/undefined = system default (see audioConstraints)
+    // Fires the instant the recorder stops — i.e. the moment the candidate's answer ENDS, BEFORE
+    // transcription starts. It's the one signal the consumer can't derive itself, because smart mode
+    // ends the turn internally (the countdown), not through a UI tap. Lets the page raise its single
+    // "interviewer is preparing" flag at the true start of the flow, spanning transcription too.
+    onCaptureStopped?: () => void;
 }) {
-    const { mode, onFinalTranscript } = opts;
+    const { mode, onFinalTranscript, deviceId, onCaptureStopped } = opts;
     const [transcribe, { isLoading: transcribing }] = useTranscribeMutation();
 
     const [listening, setListening] = useState(false);
     const [confirming, setConfirming] = useState(false); // in the "still there?" window
     const [countdownMs, setCountdownMs] = useState(0);   // remaining, for the UI number/ring
+    // The live mic stream while recording, exposed so a consumer (useMicLevel) can meter the input
+    // level — e.g. to light the candidate's waveform / mic border when actual sound comes in. null
+    // whenever we're not recording; the recorder still owns capture, this is just a read-only handle.
+    const [stream, setStream] = useState<MediaStream | null>(null);
 
     const recorderRef = useRef<MediaRecorder | null>(null);
     const chunksRef = useRef<Blob[]>([]);
@@ -475,38 +422,51 @@ export function useSmartVoiceTurn(opts: {
     // so `start` below doesn't need it in its dep list and never goes stale — same trick as handlersRef.
     const onFinalRef = useRef(onFinalTranscript);
     onFinalRef.current = onFinalTranscript;
+    // Same treatment for onCaptureStopped, so `start`'s recorder.onstop closure always calls the latest.
+    const onCaptureStoppedRef = useRef(onCaptureStopped);
+    onCaptureStoppedRef.current = onCaptureStopped;
 
-    // Same broad-support guard as useWhisperRecognition (getUserMedia + MediaRecorder, secure context).
+    // Broad-support guard: getUserMedia + MediaRecorder (both need a secure context: https or localhost).
     const supported =
         typeof navigator !== "undefined" &&
         !!navigator.mediaDevices?.getUserMedia &&
         typeof MediaRecorder !== "undefined";
 
-    // Start capture. Mirrors useWhisperRecognition.start; on stop it routes the final text to onFinalRef
-    // (submit) instead of setDraft — the combined stop+send. The VAD runs off its OWN mic (see
-    // useVoiceActivity), so we don't hand it this stream.
+    // Start capture. On stop it routes the final text to onFinalRef (submit), NOT setDraft — the
+    // combined stop+send. The VAD runs off its OWN mic (see useVoiceActivity), so we don't hand it
+    // this stream; both are steered to the same device via `deviceId`.
     const start = useCallback(async () => {
         if (!supported || listening) return;
         try {
-            const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+            // Pin the user-chosen mic (or system default). `exact` fails loudly if it's gone rather
+            // than silently recording the wrong device — the silent-capture bug we debugged.
+            const s = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints(deviceId) });
+            setStream(s); // publish the live stream for level-metering; cleared in onstop below
             chunksRef.current = [];
-            const recorder = new MediaRecorder(s);
+            // Cross-browser container pick (Chrome->webm, Firefox->ogg, Safari->mp4); see helpers.ts.
+            const { mimeType } = pickRecordingType();
+            const recorder = new MediaRecorder(s, mimeType ? { mimeType } : undefined);
             recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
             recorder.onstop = async () => {
                 s.getTracks().forEach((t) => t.stop()); // release the mic (the browser "recording" dot)
+                setStream(null); // stream is dead now (tracks stopped) -> tear down any meter watching it
+                onCaptureStoppedRef.current?.(); // answer ENDED, transcription about to begin -> flow start
                 try {
-                    const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
+                    // recorder.mimeType is the source of truth; filename extension must match it (else
+                    // Whisper mis-decodes -> "you" hallucination). See helpers.ts.
+                    const type = recorder.mimeType || mimeType || "audio/webm";
+                    const blob = new Blob(chunksRef.current, { type });
                     const form = new FormData();
-                    form.append("audio", blob, "answer.webm");
+                    form.append("audio", blob, filenameFor(type));
                     const data = await transcribe(form).unwrap();
-                    const text = (data.text ?? "").trim();
-                    // The COMBINED stop+send — but only if there's actually text. A pure-silence misfire
-                    // (countdown expired with nothing said) must not POST an empty answer; in smart mode
-                    // App's auto-restart effect just re-opens the mic.
-                    if (text) onFinalRef.current(text);
+                    onFinalRef.current((data.text ?? "").trim());
                 } catch (e) {
                     console.error("Failed to transcribe...", e);
+                    onFinalRef.current(""); // failed -> hand back empty so the consumer releases its flow flag
                 }
+                // ALWAYS hand the result back (even ""). The consumer guards empty (a pure-silence misfire
+                // must not POST) AND uses the call to end its "preparing" flag; swallowing empty here would
+                // strand that flag on. Keeping the no-empty-POST rule is the consumer's job now, not ours.
             };
             recorderRef.current = recorder;
             recorder.start();
@@ -514,7 +474,7 @@ export function useSmartVoiceTurn(opts: {
         } catch {
             setListening(false); // denied mic / no device -> button resets to "Record"
         }
-    }, [supported, listening, transcribe]);
+    }, [supported, listening, transcribe, deviceId]);
 
     // Clear the countdown timer + its UI if one is running. Shared by stop and keepListening.
     const clearCountdown = useCallback(() => {
@@ -559,10 +519,10 @@ export function useSmartVoiceTurn(opts: {
 
     // Wire the VAD to the countdown — only in smart mode, and only while actually listening, so it never
     // holds a mic during the AI's turn or in manual mode (where silence must never auto-end a turn).
-    useVoiceActivity(mode === "smart" && listening, {
+    useVoiceActivity(mode === "smart" && listening, deviceId, {
         onSilence: beginCountdown,
         onSpeech: keepListening,
     });
 
-    return { supported, listening, confirming, countdownMs, transcribing, start, stop, keepListening };
+    return { supported, listening, confirming, countdownMs, transcribing, stream, start, stop, keepListening };
 }

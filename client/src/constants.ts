@@ -52,8 +52,24 @@ export const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
  *                           thinking pause, layered on top of the model's short redemption window.
  */
 export const VAD_SPEECH_THRESHOLD = 0.5;
-export const VAD_REDEMPTION_MS = 800;
+export const VAD_REDEMPTION_MS = 5000;
 export const CONFIRM_COUNTDOWN_MS = 6000;
+
+/**
+ * Tunables for the candidate's "speaking" indicator (the pulsing mic icon), driven by `hark`
+ * watching the live mic stream — see useSpeaking (hooks.ts). This is a DISPLAY signal, unrelated to
+ * the Silero VAD above (which does turn-taking); hark just answers "is there speech right now?" with
+ * its own built-in hysteresis so the icon doesn't flicker.
+ *
+ *   HARK_SPEAKING_THRESHOLD_DB — loudness (dBFS, negative) above which hark counts audio as speech.
+ *                                hark's default is -50; RAISE toward 0 (e.g. -45) if room noise makes
+ *                                the icon pulse when you're silent, LOWER (e.g. -60) if quiet speech
+ *                                doesn't register.
+ *   HARK_POLL_INTERVAL_MS       — how often (ms) hark samples the level. 100ms is its default — snappy
+ *                                enough for an indicator without churning.
+ */
+export const HARK_SPEAKING_THRESHOLD_DB = -50;
+export const HARK_POLL_INTERVAL_MS = 100;
 
 /**
  * Where MicVAD loads the onnxruntime-web wasm from (its `onnxWASMBasePath`). ORT pulls its wasm glue
