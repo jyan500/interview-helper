@@ -397,8 +397,13 @@ export function useSmartVoiceTurn(opts: {
     mode: TurnMode;
     onFinalTranscript: (text: string) => void; // App passes handleSend — the COMBINED stop+send
     deviceId?: string | null; // chosen mic; null/undefined = system default (see audioConstraints)
+    // Fires the instant the recorder stops — i.e. the moment the candidate's answer ENDS, BEFORE
+    // transcription starts. It's the one signal the consumer can't derive itself, because smart mode
+    // ends the turn internally (the countdown), not through a UI tap. Lets the page raise its single
+    // "interviewer is preparing" flag at the true start of the flow, spanning transcription too.
+    onCaptureStopped?: () => void;
 }) {
-    const { mode, onFinalTranscript, deviceId } = opts;
+    const { mode, onFinalTranscript, deviceId, onCaptureStopped } = opts;
     const [transcribe, { isLoading: transcribing }] = useTranscribeMutation();
 
     const [listening, setListening] = useState(false);
@@ -417,6 +422,9 @@ export function useSmartVoiceTurn(opts: {
     // so `start` below doesn't need it in its dep list and never goes stale — same trick as handlersRef.
     const onFinalRef = useRef(onFinalTranscript);
     onFinalRef.current = onFinalTranscript;
+    // Same treatment for onCaptureStopped, so `start`'s recorder.onstop closure always calls the latest.
+    const onCaptureStoppedRef = useRef(onCaptureStopped);
+    onCaptureStoppedRef.current = onCaptureStopped;
 
     // Broad-support guard: getUserMedia + MediaRecorder (both need a secure context: https or localhost).
     const supported =
@@ -442,6 +450,7 @@ export function useSmartVoiceTurn(opts: {
             recorder.onstop = async () => {
                 s.getTracks().forEach((t) => t.stop()); // release the mic (the browser "recording" dot)
                 setStream(null); // stream is dead now (tracks stopped) -> tear down any meter watching it
+                onCaptureStoppedRef.current?.(); // answer ENDED, transcription about to begin -> flow start
                 try {
                     // recorder.mimeType is the source of truth; filename extension must match it (else
                     // Whisper mis-decodes -> "you" hallucination). See helpers.ts.
@@ -450,14 +459,14 @@ export function useSmartVoiceTurn(opts: {
                     const form = new FormData();
                     form.append("audio", blob, filenameFor(type));
                     const data = await transcribe(form).unwrap();
-                    const text = (data.text ?? "").trim();
-                    // The COMBINED stop+send — but only if there's actually text. A pure-silence misfire
-                    // (countdown expired with nothing said) must not POST an empty answer; in smart mode
-                    // App's auto-restart effect just re-opens the mic.
-                    if (text) onFinalRef.current(text);
+                    onFinalRef.current((data.text ?? "").trim());
                 } catch (e) {
                     console.error("Failed to transcribe...", e);
+                    onFinalRef.current(""); // failed -> hand back empty so the consumer releases its flow flag
                 }
+                // ALWAYS hand the result back (even ""). The consumer guards empty (a pure-silence misfire
+                // must not POST) AND uses the call to end its "preparing" flag; swallowing empty here would
+                // strand that flag on. Keeping the no-empty-POST rule is the consumer's job now, not ours.
             };
             recorderRef.current = recorder;
             recorder.start();

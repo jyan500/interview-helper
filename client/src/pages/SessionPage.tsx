@@ -28,6 +28,7 @@ import Select from "react-select";
 import { Gear, Microphone, PencilSimple, SpeakerHigh, Sparkle } from "@phosphor-icons/react";
 import type { Icon } from "@phosphor-icons/react";
 import MessageRow from "../components/MessageRow";
+import LoadingDots from "../components/LoadingDots";
 import { useAuth } from "../auth/AuthProvider";
 import { useGetScorecardMutation, useSubmitAnswerMutation } from "../api";
 import { useSessionNav } from "./SessionLayout";
@@ -86,6 +87,15 @@ export default function SessionPage() {
     const [done, setDone] = useState(false);
     const [ended, setEnded] = useState(false);
 
+    // THE ONE "interviewer is preparing the next turn" flag. It owns the WHOLE pipeline as a single
+    // span — set true at the start of a turn (the candidate finishing their answer, or the initial
+    // seed) and cleared exactly once when the next question is revealed (revealLine, from speak()'s
+    // onReady = the moment its TTS begins and the text shows). This deliberately REPLACES OR-ing
+    // transcribing/answering/pending together for the "thinking" indicator: those flags flip at
+    // different instants, leaving one-render gaps where all read false and the previous question
+    // flashed. A single latch set-at-start / cleared-at-reveal has no such gap by construction.
+    const [preparing, setPreparing] = useState(false);
+
     // The RTK Query mutations — the only two the in-session loop needs. startInterview already ran
     // on the producer; the scorecard is fetched once, on end.
     const [submitAnswer, { isLoading: answering }] = useSubmitAnswerMutation();
@@ -110,7 +120,14 @@ export default function SessionPage() {
     const [micDeviceId, setMicDeviceId] = useState<string>("");
 
     const { supported, listening, confirming, countdownMs, transcribing, stream, start, stop, keepListening } =
-        useSmartVoiceTurn({ mode: voiceMode, deviceId: micDeviceId || null, onFinalTranscript: (text) => handleSend(text) });
+        useSmartVoiceTurn({
+            mode: voiceMode,
+            deviceId: micDeviceId || null,
+            onFinalTranscript: (text) => handleSend(text),
+            // Answer ended (mic stopped) -> raise the flag NOW, before transcription, so the "…" holds
+            // through the whole voice pipeline. handleSend releases it (empty misfire) or the reveal does.
+            onCaptureStopped: () => setPreparing(true),
+        });
 
     // Is the candidate actually making sound right now? hark watches the live mic stream (null when
     // not recording -> false). Drives the "You" cell's pulsing mic icon — the real "you're speaking"
@@ -144,9 +161,12 @@ export default function SessionPage() {
         return lineIdRef.current;
     }
     // Swap a pending interviewer bubble's placeholder for the real text — called from speak()'s
-    // onReady, i.e. exactly when audio begins. Matches by id so it hits the right bubble.
+    // onReady, i.e. exactly when audio begins. Matches by id so it hits the right bubble. This is also
+    // the SINGLE place `preparing` is cleared on the happy path: the interviewer's turn is now on
+    // screen and audible, so the flow is over.
     function revealLine(id: number, text: string) {
         setTranscript((t) => t.map((l) => (l.id === id ? { ...l, text, pending: false } : l)));
+        setPreparing(false);
     }
 
     // Seed the first interviewer turn ONCE from the producer's firstMessage, and speak it. Mirrors
@@ -159,6 +179,7 @@ export default function SessionPage() {
         if (seededRef.current) return;
         seededRef.current = true;
         const id = nextId();
+        setPreparing(true); // hold "…" until the first question's TTS is ready (revealLine clears it)
         setTranscript([{ id, who: "interviewer", text: "", pending: true }]);
         speak(nav.firstMessage, () => revealLine(id, nav.firstMessage));
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -169,7 +190,13 @@ export default function SessionPage() {
     // have updated); typed answers call handleSend() with no arg and fall back to `draft`.
     async function handleSend(textOverride?: string) {
         const text = (textOverride ?? draft).trim();
-        if (!interviewId || !text || done || ended) return;
+        // Nothing to send: a pure-silence voice misfire (onCaptureStopped already raised `preparing`),
+        // or a terminal state. Release the flag so the "…" doesn't hang, and bail without POSTing.
+        if (!interviewId || !text || done || ended) {
+            setPreparing(false);
+            return;
+        }
+        setPreparing(true); // typed-answer path starts the flow here (voice already raised it on capture-stop)
         // Append the answer AND the interviewer's pending "thinking…" bubble in ONE update, UP FRONT
         // (not after submitAnswer resolves). Keeping the pending line present for the whole request means
         // there's never a render where `answering` has flipped false but the pending line isn't there yet
@@ -282,10 +309,10 @@ export default function SessionPage() {
                         listening={listening}
                         userSpeaking={userSpeaking}
                         speaking={speaking}
-                        // busy = the dead window between the user finishing (mic stop) and the next
-                        // interviewer turn arriving: transcription (Whisper) + the /api/answer round-trip.
-                        // Drives the "thinking" indicator and locks the mic so no new recording starts.
-                        busy={answering || transcribing}
+                        // The single flow flag (mic-stop -> transcribe -> answer -> the next question's
+                        // TTS begins). Drives the "thinking" indicator AND locks the mic so no new
+                        // recording starts mid-preparation. No OR of transcribing/answering -> no gap.
+                        preparing={preparing}
                         voiceMode={voiceMode}
                         supported={supported}
                         confirming={confirming}
@@ -303,7 +330,7 @@ export default function SessionPage() {
                         transcript={transcript}
                         draft={draft}
                         setDraft={setDraft}
-                        waiting={answering || !!transcript[transcript.length - 1]?.pending}
+                        waiting={preparing}
                         answering={answering}
                         transcribing={transcribing}
                         done={done}
@@ -338,7 +365,7 @@ function VoiceColumn({
     listening,
     userSpeaking,
     speaking,
-    busy,
+    preparing,
     voiceMode,
     supported,
     confirming,
@@ -356,7 +383,7 @@ function VoiceColumn({
     listening: boolean;
     userSpeaking: boolean;
     speaking: boolean;
-    busy: boolean;
+    preparing: boolean;
     voiceMode: TurnMode;
     supported: boolean;
     confirming: boolean;
@@ -369,17 +396,17 @@ function VoiceColumn({
     onSwitch: () => void;
     onEnd: () => void;
 }) {
-    // "thinking" covers the whole gap the candidate is waiting on the interviewer: transcription +
-    // the answer round-trip (busy), and then the pending bubble while its TTS synthesizes. We show
-    // the same indicator across all of it — indistinguishable to the user, which is fine here.
-    const thinking = busy || !!question?.pending;
+    // "thinking" is just the single flow flag now: it already spans transcription, the answer
+    // round-trip, and TTS synthesis, ending the instant the next question is revealed. One source of
+    // truth, so there's no frame where it reads false while a turn is still being prepared.
+    const thinking = preparing;
     return (
         <div className="flex flex-col items-center justify-center gap-[34px] px-[60px] py-8">
             {/* Current question — the latest interviewer turn, or "thinking…" while we wait on the next */}
             <div className="max-w-[680px] text-center">
                 <div className="kicker">{thinking ? "Interviewer is thinking" : "Interviewer asked"}</div>
                 <p className="mt-2 font-heading text-[31px] font-medium leading-[1.18] [text-wrap:pretty]">
-                    {thinking ? "…" : question?.text ?? "…"}
+                    {thinking || !question?.text ? <LoadingDots className="text-[26px]" /> : question.text}
                 </p>
             </div>
 
@@ -416,9 +443,9 @@ function VoiceColumn({
                             className="btn btn-primary flex items-center gap-[9px] text-[15px] disabled:opacity-50"
                             style={{ padding: "13px 30px" }}
                             onClick={onToggleMic}
-                            // Locked while the AI is speaking, while we're mid-transcription/answer
-                            // (busy), or once ended — so no new recording starts over any of those.
-                            disabled={speaking || busy || ended}
+                            // Locked while the AI is speaking, while a turn is being prepared
+                            // (transcribe/answer/TTS), or once ended — so no new recording starts over any of those.
+                            disabled={speaking || preparing || ended}
                         >
                             <Microphone size={17} weight="regular" />
                             {micLabel(listening, voiceMode)}
@@ -427,7 +454,7 @@ function VoiceColumn({
                             className="btn btn-ghost flex items-center gap-2 border-l border-divider disabled:opacity-50"
                             style={{ padding: "13px 18px" }}
                             onClick={onToggleVoiceMode}
-                            disabled={listening || confirming || busy}
+                            disabled={listening || confirming || preparing}
                         >
                             Mode: {voiceMode}
                         </button>
@@ -577,9 +604,7 @@ function TextColumn({
                     {/* Typing indicator — while the answer is in flight or the interviewer's audio loads */}
                     {waiting && (
                         <div className="flex items-center gap-3 text-[13px] text-neutral-400">
-                            <span className="h-[5px] w-[5px] bg-accent" />
-                            <span className="h-[5px] w-[5px] bg-accent-400" />
-                            <span className="h-[5px] w-[5px] bg-accent-300" />
+                            <LoadingDots />
                             <span>Interviewer is typing</span>
                         </div>
                     )}
@@ -695,7 +720,7 @@ function RightRail({
                                         {String(i + 1).padStart(2, "0")}
                                     </span>
                                     <span className={isCurrent ? "[text-wrap:pretty]" : "text-neutral-400 [text-wrap:pretty]"}>
-                                        {q.pending ? "…" : q.text}
+                                        {q.pending ? <LoadingDots/> : q.text}
                                     </span>
                                 </div>
                             );
