@@ -4,7 +4,15 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import hark from "hark";
-import { HARK_POLL_INTERVAL_MS, HARK_SPEAKING_THRESHOLD_DB } from "./constants";
+import { audioConstraints } from "./voice/helpers";
+import {
+    HARK_POLL_INTERVAL_MS,
+    HARK_SPEAKING_THRESHOLD_DB,
+    MIC_LEVEL_FLOOR_DB,
+    MIC_LEVEL_CEIL_DB,
+    MIC_SILENCE_LEVEL,
+    MIC_SILENCE_MS,
+} from "./constants";
 
 /**
  * A running "mm:ss" clock that starts when the hook mounts and ticks every second. Used by the
@@ -90,4 +98,98 @@ export function useAudioInputDevices(): { devices: MediaDeviceInfo[]; refresh: (
     }, [refresh]);
 
     return { devices, refresh };
+}
+
+/**
+ * Turn a getUserMedia rejection into one line a candidate can act on. The DOMException `name` is the
+ * stable signal (the human message is browser-specific); the two we actually hit are a denied permission
+ * prompt and a chosen device that's since been unplugged (our `exact` deviceId constraint makes that
+ * fail loudly by design — see audioConstraints).
+ */
+function micErrorMessage(e: unknown): string {
+    const name = (e as { name?: string })?.name;
+    if (name === "NotAllowedError" || name === "SecurityError")
+        return "Microphone access is blocked. Allow it in your browser settings.";
+    if (name === "NotFoundError" || name === "OverconstrainedError")
+        return "That microphone isn't available. Pick another.";
+    return "Couldn't open the microphone.";
+}
+
+/**
+ * A live microphone INPUT-LEVEL meter for the Settings modal's "test your mic" bar. While `active`, it
+ * opens its OWN getUserMedia stream on `deviceId` (independent of the recorder — a mic can back several
+ * readers at once) and hands it to `hark`, the same loudness library useSpeaking uses. hark's
+ * volume_change reports the input level in dBFS; we map it to a 0..1 bar and watch for sustained quiet:
+ *
+ *   level  — 0..1, hark's dB mapped onto [MIC_LEVEL_FLOOR_DB, MIC_LEVEL_CEIL_DB]. ~0 when quiet, climbs
+ *            toward 1 as you talk: the bar that "shoots to the right" when speaking.
+ *   silent — true once the level has stayed below MIC_SILENCE_LEVEL for MIC_SILENCE_MS: drives the
+ *            "no audio detected" warning (wrong mic, muted hardware, a permission that opened a dead
+ *            track). Starts false so a freshly-opened meter isn't accusatory before you've spoken.
+ *   ready  — true once the stream is live. The consumer re-reads its device list on this edge, because
+ *            enumerateDevices() only returns real mic LABELS after a getUserMedia grant.
+ *   error  — a human-readable reason the meter couldn't open (denied permission, device gone), else null.
+ *
+ * Everything is torn down when `active` goes false, `deviceId` changes, or the component unmounts —
+ * hark releases its AudioContext and we stop the stream's tracks, so the browser's "recording" dot
+ * clears when the modal closes.
+ */
+export function useMicLevel(
+    deviceId: string,
+    active: boolean,
+): { level: number; silent: boolean; ready: boolean; error: string | null } {
+    const [level, setLevel] = useState(0);
+    const [silent, setSilent] = useState(false);
+    const [ready, setReady] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (!active) {
+            setLevel(0);
+            setSilent(false);
+            setReady(false);
+            setError(null);
+            return;
+        }
+
+        let cancelled = false; // guards the async getUserMedia gap: the effect can tear down mid-open
+        let stream: MediaStream | null = null;
+        let harker: ReturnType<typeof hark> | null = null;
+        let lastLoud = Date.now(); // last moment the input rose above the silence floor
+
+        (async () => {
+            try {
+                // `exact` deviceId (falsy -> system default) matches the recorder/VAD, so the meter tests
+                // the SAME mic the interview will capture from.
+                stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints(deviceId || null) });
+                if (cancelled) {
+                    stream.getTracks().forEach((t) => t.stop());
+                    return;
+                }
+                setReady(true); // stream is live -> caller can now re-read real device labels
+
+                harker = hark(stream, { interval: HARK_POLL_INTERVAL_MS, play: false });
+                harker.on("volume_change", (dB: number) => {
+                    // Map hark's dBFS onto the bar's 0..1 width; below the floor / above the ceiling clamp.
+                    const mapped = (dB - MIC_LEVEL_FLOOR_DB) / (MIC_LEVEL_CEIL_DB - MIC_LEVEL_FLOOR_DB);
+                    const clamped = Math.max(0, Math.min(1, mapped));
+                    setLevel(clamped);
+
+                    const now = Date.now();
+                    if (clamped > MIC_SILENCE_LEVEL) lastLoud = now;
+                    setSilent(now - lastLoud > MIC_SILENCE_MS);
+                });
+            } catch (e) {
+                if (!cancelled) setError(micErrorMessage(e));
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+            harker?.stop(); // tears down hark's listeners + its AudioContext
+            stream?.getTracks().forEach((t) => t.stop()); // release the mic (hark doesn't own the stream)
+        };
+    }, [deviceId, active]);
+
+    return { level, silent, ready, error };
 }

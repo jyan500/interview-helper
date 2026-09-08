@@ -24,17 +24,16 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
-import Select from "react-select";
 import { Gear, Microphone, PencilSimple, SpeakerHigh, Sparkle } from "@phosphor-icons/react";
 import type { Icon } from "@phosphor-icons/react";
 import MessageRow from "../components/MessageRow";
 import LoadingDots from "../components/LoadingDots";
+import SettingsModal from "../components/SettingsModal";
 import { useAuth } from "../auth/AuthProvider";
 import { useGetScorecardMutation, useSubmitAnswerMutation } from "../api";
 import { useSessionNav } from "./SessionLayout";
-import { initialsFrom } from "../helpers";
+import { initialsFrom, loadStoredMicDeviceId, saveStoredMicDeviceId } from "../helpers";
 import { useAudioInputDevices, useElapsedClock, useSpeaking } from "../hooks";
-import { nocturneSelectStyles } from "../selectStyles";
 import {
     pickPreferredVoice,
     setVoicePrefs,
@@ -53,16 +52,9 @@ type Mode = "voice" | "text";
 // so text + voice land together. Same shape App.tsx used.
 type Line = { id: number; who: "interviewer" | "you"; text: string; pending?: boolean };
 
-// The TTS engine picker options (react-select shape), same static list App.tsx used.
-type EngineOption = { value: TtsEngine; label: string };
-const TTS_ENGINE_OPTIONS: EngineOption[] = [
-    { value: "openai", label: "OpenAI — neural (uses tokens)" },
-    { value: "browser", label: "Browser — free (robotic)" },
-];
-
 // The microphone picker options (react-select shape). value "" is the system-default sentinel; a
 // real value is a MediaDeviceInfo.deviceId. Labels are blank until mic permission is granted, so we
-// fall back to "Microphone N" until the first recording populates the real device names.
+// fall back to "Microphone N" until the meter/first recording populates the real device names.
 type MicOption = { value: string; label: string };
 const DEFAULT_MIC_OPTION: MicOption = { value: "", label: "System default" };
 
@@ -116,8 +108,19 @@ export default function SessionPage() {
     // Which microphone to capture from. "" = system default; a real deviceId pins that exact mic —
     // the picker exists because a wrong default mic silently recorded nothing on Firefox. Threaded
     // into useSmartVoiceTurn so BOTH the recorder and the smart-mode VAD open the same device.
+    //
+    // SEEDED FROM localStorage so a mic chosen in a previous session is the DEFAULT this one opens with,
+    // rather than only taking effect after a turn passes. handleChangeMic writes every change back.
     const { devices: micDevices, refresh: refreshMics } = useAudioInputDevices();
-    const [micDeviceId, setMicDeviceId] = useState<string>("");
+    const [micDeviceId, setMicDeviceId] = useState<string>(loadStoredMicDeviceId);
+    function handleChangeMic(id: string) {
+        setMicDeviceId(id);
+        saveStoredMicDeviceId(id); // persist so it's the default next session too
+    }
+
+    // The in-session Settings modal (behind the header gear): mic + live test meter, TTS engine, and
+    // the voice/text mode toggle. Open state only — the settings themselves live in the state above.
+    const [settingsOpen, setSettingsOpen] = useState(false);
 
     const { supported, listening, confirming, countdownMs, transcribing, stream, start, stop, keepListening } =
         useSmartVoiceTurn({
@@ -294,7 +297,11 @@ export default function SessionPage() {
                 </div>
                 <div className="flex items-center gap-[18px] text-[13px] text-neutral-300">
                     <span className="font-heading text-[18px] text-ink">{clock}</span>
-                    <button className="btn btn-ghost btn-icon" aria-label="Settings">
+                    <button
+                        className="btn btn-ghost btn-icon"
+                        aria-label="Settings"
+                        onClick={() => setSettingsOpen(true)}
+                    >
                         <Gear size={17} weight="regular" />
                     </button>
                 </div>
@@ -341,17 +348,24 @@ export default function SessionPage() {
                     />
                 )}
 
-                <RightRail
-                    mode={mode}
-                    interviewerLines={interviewerLines}
-                    ttsEngine={ttsEngine}
-                    setTtsEngine={setTtsEngine}
-                    micOptions={micOptions}
-                    micDeviceId={micDeviceId}
-                    setMicDeviceId={setMicDeviceId}
-                    scoring={scoring}
-                />
+                <RightRail mode={mode} interviewerLines={interviewerLines} scoring={scoring} />
             </div>
+
+            {/* In-session settings (mic + live test meter, TTS engine, voice/text mode), behind the
+                header gear. Mic changes persist via handleChangeMic; onMicReady re-reads device labels
+                once the test meter grants mic permission. */}
+            <SettingsModal
+                open={settingsOpen}
+                onClose={() => setSettingsOpen(false)}
+                mode={mode}
+                onChangeMode={setMode}
+                ttsEngine={ttsEngine}
+                onChangeTtsEngine={setTtsEngine}
+                micOptions={micOptions}
+                micDeviceId={micDeviceId}
+                onChangeMic={handleChangeMic}
+                onMicReady={refreshMics}
+            />
         </div>
     );
 }
@@ -683,20 +697,10 @@ function TextColumn({
 function RightRail({
     mode,
     interviewerLines,
-    ttsEngine,
-    setTtsEngine,
-    micOptions,
-    micDeviceId,
-    setMicDeviceId,
     scoring,
 }: {
     mode: Mode;
     interviewerLines: Line[];
-    ttsEngine: TtsEngine;
-    setTtsEngine: (e: TtsEngine) => void;
-    micOptions: MicOption[];
-    micDeviceId: string;
-    setMicDeviceId: (id: string) => void;
     scoring: boolean;
 }) {
     // A private, local-only scratchpad (not persisted — deliberately, it's throwaway thinking space).
@@ -740,35 +744,9 @@ function RightRail({
                 />
             </div>
 
-            {/* Mode-specific footer, pinned to the bottom */}
-            {mode === "voice" ? (
-                <div className="mt-auto flex flex-col gap-4">
-                    <div>
-                        <div className="kicker">Voice</div>
-                        <div className="mt-2">
-                            <Select<EngineOption>
-                                options={TTS_ENGINE_OPTIONS}
-                                value={TTS_ENGINE_OPTIONS.find((o) => o.value === ttsEngine)}
-                                onChange={(opt) => opt && setTtsEngine(opt.value)}
-                                isSearchable={false}
-                                styles={nocturneSelectStyles}
-                            />
-                        </div>
-                    </div>
-                    <div>
-                        <div className="kicker">Microphone</div>
-                        <div className="mt-2">
-                            <Select<MicOption>
-                                options={micOptions}
-                                value={micOptions.find((o) => o.value === micDeviceId) ?? micOptions[0]}
-                                onChange={(opt) => opt && setMicDeviceId(opt.value)}
-                                isSearchable={false}
-                                styles={nocturneSelectStyles}
-                            />
-                        </div>
-                    </div>
-                </div>
-            ) : (
+            {/* Voice controls (mic + test meter, TTS engine, mode) now live in the header-gear Settings
+                modal, so the rail's footer is just the text-mode grading note. */}
+            {mode === "text" && (
                 <div className="mt-auto text-[12.5px] leading-[1.5] text-neutral-400">
                     {scoring
                         ? "Grading your answers…"
