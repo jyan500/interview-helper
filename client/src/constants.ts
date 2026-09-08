@@ -52,7 +52,7 @@ export const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
  *                           thinking pause, layered on top of the model's short redemption window.
  */
 export const VAD_SPEECH_THRESHOLD = 0.5;
-export const VAD_REDEMPTION_MS = 5000;
+export const VAD_REDEMPTION_MS = 800;
 export const CONFIRM_COUNTDOWN_MS = 6000;
 
 /**
@@ -85,3 +85,33 @@ export const HARK_POLL_INTERVAL_MS = 100;
 export const VAD_ONNX_WASM_BASE = import.meta.env.DEV
     ? "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.29.0/dist/"
     : "/vad/";
+
+/**
+ * The chosen microphone persists across sessions in localStorage under this key, so a mic picked once
+ * (in the in-session Settings modal) becomes the DEFAULT the next interview opens with — the fix for
+ * "the mic doesn't take effect until a turn passes". SessionPage seeds micDeviceId from it and writes it
+ * back on change; the stored value is a MediaDeviceInfo.deviceId, or "" for the system default.
+ */
+export const MIC_DEVICE_STORAGE_KEY = "ih.micDeviceId";
+
+/**
+ * Tunables for the Settings modal's live mic-test meter (useMicLevel). The meter is driven by `hark`
+ * (the same loudness library useSpeaking uses), whose volume_change reports the input level in dBFS
+ * (~-100 silent .. 0 loud). We map that dB range onto the bar's 0..1 width, so it sits left when you're
+ * quiet and "shoots right" as you talk. They live here, not inline, so the meter's feel is adjustable in
+ * ONE place (same rule as the VAD/hark tunables above). The bar's motion is smoothed by a CSS width
+ * transition, so there's no JS smoothing factor to tune.
+ *
+ *   MIC_LEVEL_FLOOR_DB — dB mapped to an EMPTY bar (0%). At/below this reads as silence. RAISE toward 0
+ *                        (e.g. -55) if room noise keeps the bar off the floor when you're not talking.
+ *   MIC_LEVEL_CEIL_DB  — dB mapped to a FULL bar (100%). LOWER toward the floor if a normal speaking
+ *                        volume never fills the bar; RAISE toward 0 if it pins to the right too easily.
+ *   MIC_SILENCE_LEVEL  — mapped level (0..1) below which the input counts as "quiet". Sustained quiet
+ *                        flips the "no audio detected" warning.
+ *   MIC_SILENCE_MS     — how long (ms) the level must stay below MIC_SILENCE_LEVEL before we show
+ *                        "no audio detected" — long enough not to fire in the gaps between words.
+ */
+export const MIC_LEVEL_FLOOR_DB = -60;
+export const MIC_LEVEL_CEIL_DB = -10;
+export const MIC_SILENCE_LEVEL = 0.05;
+export const MIC_SILENCE_MS = 2500;
