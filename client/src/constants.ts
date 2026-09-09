@@ -52,7 +52,7 @@ export const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
  *                           thinking pause, layered on top of the model's short redemption window.
  */
 export const VAD_SPEECH_THRESHOLD = 0.5;
-export const VAD_REDEMPTION_MS = 800;
+export const VAD_REDEMPTION_MS = 3000;
 export const CONFIRM_COUNTDOWN_MS = 6000;
 
 /**

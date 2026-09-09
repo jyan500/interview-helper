@@ -534,6 +534,25 @@ export function useSmartVoiceTurn(opts: {
         setListening(false);
     }, [clearCountdown]);
 
+    // cancel = abandon the in-progress recording WITHOUT transcribing or submitting. This is the "pause
+    // the mic" the candidate wants when switching from voice to text mid-recording: stop() would fire the
+    // transcribe+submit tail (posting a half-answer while they're typing), so instead we DETACH that tail
+    // — the same onstop-nulling trick restartCapture uses to throw away pre-fix audio — and end at idle
+    // rather than re-opening. Releasing `listening` also drops the VAD (its `active` gate), so nothing
+    // keeps listening while they type. Switching back to voice re-arms via start() (see SessionPage).
+    const cancel = useCallback(() => {
+        clearCountdown();
+        const rec = recorderRef.current;
+        if (rec && rec.state !== "inactive") {
+            rec.onstop = null; // bypass transcribe+submit — this audio is discarded, not sent
+            rec.stop();
+            rec.stream.getTracks().forEach((t) => t.stop()); // release the mic (onstop normally does this)
+        }
+        recorderRef.current = null;
+        setStream(null); // no live stream to meter while paused
+        setListening(false);
+    }, [clearCountdown]);
+
     // onSilence (from the VAD) opens the "still there?" countdown; expiry submits via stop().
     const beginCountdown = useCallback(() => {
         if (countdownRef.current !== null) return; // already counting
@@ -563,5 +582,5 @@ export function useSmartVoiceTurn(opts: {
         onSpeech: keepListening,
     });
 
-    return { supported, listening, confirming, countdownMs, transcribing, stream, start, stop, keepListening };
+    return { supported, listening, confirming, countdownMs, transcribing, stream, start, stop, cancel, keepListening };
 }
