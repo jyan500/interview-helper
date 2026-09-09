@@ -2,7 +2,7 @@
  * Small, reusable React hooks shared across pages. (Distinct from helpers.ts, which is pure,
  * React-free functions — anything that calls useState/useEffect/etc. lives here.)
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import hark from "hark";
 import { audioConstraints } from "./voice/helpers";
 import {
@@ -12,6 +12,7 @@ import {
     MIC_LEVEL_CEIL_DB,
     MIC_SILENCE_LEVEL,
     MIC_SILENCE_MS,
+    NO_INPUT_TIMEOUT_MS,
 } from "./constants";
 
 /**
@@ -65,6 +66,52 @@ export function useSpeaking(stream: MediaStream | null): boolean {
     }, [stream]);
 
     return speaking;
+}
+
+/**
+ * The "check your mic" watch. While the mic is armed (`listening`) but NO sound is heard through it
+ * within NO_INPUT_TIMEOUT_MS, raise `noInput` — the candidate never started, or (the case this really
+ * catches) the wrong/dead mic is selected and their voice isn't being picked up at all.
+ *
+ * `speaking` is hark's "is any sound coming through THIS mic right now" (useSpeaking) — deliberately
+ * hark, NOT the Silero turn-taking VAD: "is the mic hearing anything" is exactly the wrong-mic
+ * question, and we must never accuse a working-but-quiet mic. The moment sound is heard the watch is
+ * DISARMED for the rest of the recording, so a later thinking-pause can't re-trigger it — smart mode's
+ * post-speech silence is the countdown's job, and manual mode's is deliberately nothing. It re-arms
+ * from scratch each time the mic re-opens (the next `listening` edge).
+ *
+ * `dismiss` hides the prompt without waiting for speech — wired to its "check mic settings" button, so
+ * opening Settings clears it. It stays dismissed for this recording (the timer has already fired once).
+ */
+export function useNoInputPrompt(listening: boolean, speaking: boolean): { noInput: boolean; dismiss: () => void } {
+    const [noInput, setNoInput] = useState(false);
+    const spokeRef = useRef(false); // has any sound been heard since the mic last armed?
+
+    // Sound heard -> disarm for this recording and clear a prompt already showing.
+    useEffect(() => {
+        if (speaking) {
+            spokeRef.current = true;
+            setNoInput(false);
+        }
+    }, [speaking]);
+
+    // Arm on the listening edge: reset, then fire ONCE if still silent after the timeout. The cleanup
+    // (mic stopped -> listening false) clears the pending timer AND the prompt so the next turn is clean.
+    useEffect(() => {
+        if (!listening) {
+            setNoInput(false);
+            spokeRef.current = false;
+            return;
+        }
+        spokeRef.current = false;
+        const timer = window.setTimeout(() => {
+            if (!spokeRef.current) setNoInput(true);
+        }, NO_INPUT_TIMEOUT_MS);
+        return () => window.clearTimeout(timer);
+    }, [listening]);
+
+    const dismiss = useCallback(() => setNoInput(false), []);
+    return { noInput, dismiss };
 }
 
 /**

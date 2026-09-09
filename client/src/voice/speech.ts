@@ -432,49 +432,88 @@ export function useSmartVoiceTurn(opts: {
         !!navigator.mediaDevices?.getUserMedia &&
         typeof MediaRecorder !== "undefined";
 
-    // Start capture. On stop it routes the final text to onFinalRef (submit), NOT setDraft — the
-    // combined stop+send. The VAD runs off its OWN mic (see useVoiceActivity), so we don't hand it
-    // this stream; both are steered to the same device via `deviceId`.
+    // Open the mic + MediaRecorder on the CURRENT deviceId and wire its stop -> transcribe -> submit
+    // tail. Extracted from start() so restartCapture (mic swapped mid-turn) can re-open WITHOUT
+    // re-tripping the `listening` guard. Throws on a getUserMedia failure so the caller resets the button.
+    // On stop it routes the final text to onFinalRef (submit), NOT setDraft — the combined stop+send. The
+    // VAD runs off its OWN mic (see useVoiceActivity), so we don't hand it this stream; both are steered
+    // to the same device via `deviceId`.
+    const beginCapture = useCallback(async () => {
+        // Pin the user-chosen mic (or system default). `exact` fails loudly if it's gone rather
+        // than silently recording the wrong device — the silent-capture bug we debugged.
+        const s = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints(deviceId) });
+        setStream(s); // publish the live stream for level-metering; cleared in onstop below
+        chunksRef.current = [];
+        // Cross-browser container pick (Chrome->webm, Firefox->ogg, Safari->mp4); see helpers.ts.
+        const { mimeType } = pickRecordingType();
+        const recorder = new MediaRecorder(s, mimeType ? { mimeType } : undefined);
+        recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+        recorder.onstop = async () => {
+            s.getTracks().forEach((t) => t.stop()); // release the mic (the browser "recording" dot)
+            // Clear the stream ONLY if a restart hasn't already swapped a fresh one in (guarding against a
+            // late onstop nulling the new capture's stream); a normal stop always matches -> null.
+            setStream((prev) => (prev === s ? null : prev));
+            onCaptureStoppedRef.current?.(); // answer ENDED, transcription about to begin -> flow start
+            try {
+                // recorder.mimeType is the source of truth; filename extension must match it (else
+                // Whisper mis-decodes -> "you" hallucination). See helpers.ts.
+                const type = recorder.mimeType || mimeType || "audio/webm";
+                const blob = new Blob(chunksRef.current, { type });
+                const form = new FormData();
+                form.append("audio", blob, filenameFor(type));
+                const data = await transcribe(form).unwrap();
+                onFinalRef.current((data.text ?? "").trim());
+            } catch (e) {
+                console.error("Failed to transcribe...", e);
+                onFinalRef.current(""); // failed -> hand back empty so the consumer releases its flow flag
+            }
+            // ALWAYS hand the result back (even ""). The consumer guards empty (a pure-silence misfire
+            // must not POST) AND uses the call to end its "preparing" flag; swallowing empty here would
+            // strand that flag on. Keeping the no-empty-POST rule is the consumer's job now, not ours.
+        };
+        recorderRef.current = recorder;
+        recorder.start();
+    }, [deviceId, transcribe]);
+
     const start = useCallback(async () => {
         if (!supported || listening) return;
         try {
-            // Pin the user-chosen mic (or system default). `exact` fails loudly if it's gone rather
-            // than silently recording the wrong device — the silent-capture bug we debugged.
-            const s = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints(deviceId) });
-            setStream(s); // publish the live stream for level-metering; cleared in onstop below
-            chunksRef.current = [];
-            // Cross-browser container pick (Chrome->webm, Firefox->ogg, Safari->mp4); see helpers.ts.
-            const { mimeType } = pickRecordingType();
-            const recorder = new MediaRecorder(s, mimeType ? { mimeType } : undefined);
-            recorder.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
-            recorder.onstop = async () => {
-                s.getTracks().forEach((t) => t.stop()); // release the mic (the browser "recording" dot)
-                setStream(null); // stream is dead now (tracks stopped) -> tear down any meter watching it
-                onCaptureStoppedRef.current?.(); // answer ENDED, transcription about to begin -> flow start
-                try {
-                    // recorder.mimeType is the source of truth; filename extension must match it (else
-                    // Whisper mis-decodes -> "you" hallucination). See helpers.ts.
-                    const type = recorder.mimeType || mimeType || "audio/webm";
-                    const blob = new Blob(chunksRef.current, { type });
-                    const form = new FormData();
-                    form.append("audio", blob, filenameFor(type));
-                    const data = await transcribe(form).unwrap();
-                    onFinalRef.current((data.text ?? "").trim());
-                } catch (e) {
-                    console.error("Failed to transcribe...", e);
-                    onFinalRef.current(""); // failed -> hand back empty so the consumer releases its flow flag
-                }
-                // ALWAYS hand the result back (even ""). The consumer guards empty (a pure-silence misfire
-                // must not POST) AND uses the call to end its "preparing" flag; swallowing empty here would
-                // strand that flag on. Keeping the no-empty-POST rule is the consumer's job now, not ours.
-            };
-            recorderRef.current = recorder;
-            recorder.start();
+            await beginCapture();
             setListening(true);
         } catch {
             setListening(false); // denied mic / no device -> button resets to "Record"
         }
-    }, [supported, listening, transcribe, deviceId]);
+    }, [supported, listening, beginCapture]);
+
+    // Swap the recording onto a newly-chosen mic mid-turn WITHOUT submitting what was captured so far —
+    // the candidate is fixing a wrong/silent mic (the "check your mic" prompt sent them to Settings), so
+    // the audio up to now is unusable. A MediaRecorder is bound to the stream it opened with, so a mic
+    // change is otherwise ignored until the next turn. We DETACH the old recorder's onstop (its
+    // transcribe+submit tail) and release its mic by hand, then re-open on the new device. `listening`
+    // never drops, so the mic UI stays "recording" across the swap.
+    const restartCapture = useCallback(async () => {
+        const old = recorderRef.current;
+        if (old && old.state !== "inactive") {
+            old.onstop = null; // bypass transcribe+submit — this clip is pre-fix silence, throw it away
+            old.stop();
+            old.stream.getTracks().forEach((t) => t.stop()); // release the old mic (onstop normally does this)
+        }
+        try {
+            await beginCapture();
+        } catch {
+            setListening(false); // the new device failed to open -> drop to idle
+        }
+    }, [beginCapture]);
+
+    // Re-open capture when the mic device changes WHILE recording — only case: a swap made in Settings,
+    // typically to fix a wrong mic the "check your mic" prompt flagged. The first render just records the
+    // initial device; a change while idle is picked up by the next start() (beginCapture reads deviceId).
+    const prevDeviceRef = useRef(deviceId);
+    useEffect(() => {
+        const changed = prevDeviceRef.current !== deviceId;
+        prevDeviceRef.current = deviceId;
+        if (changed && listening) restartCapture();
+    }, [deviceId, listening, restartCapture]);
 
     // Clear the countdown timer + its UI if one is running. Shared by stop and keepListening.
     const clearCountdown = useCallback(() => {

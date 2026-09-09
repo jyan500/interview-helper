@@ -22,7 +22,7 @@
  * with follow-ups (or not) depending on the answer, so "question N of M" isn't knowable ahead of
  * time. The header shows elapsed time only; the right rail lists the turns actually asked so far.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router";
 import { Gear, Microphone, PencilSimple, SpeakerHigh, Sparkle } from "@phosphor-icons/react";
 import type { Icon } from "@phosphor-icons/react";
@@ -33,7 +33,7 @@ import { useAuth } from "../auth/AuthProvider";
 import { useGetScorecardMutation, useSubmitAnswerMutation } from "../api";
 import { useSessionNav } from "./SessionLayout";
 import { initialsFrom, loadStoredMicDeviceId, saveStoredMicDeviceId } from "../helpers";
-import { useAudioInputDevices, useElapsedClock, useSpeaking } from "../hooks";
+import { useAudioInputDevices, useElapsedClock, useNoInputPrompt, useSpeaking } from "../hooks";
 import {
     pickPreferredVoice,
     setVoicePrefs,
@@ -136,6 +136,20 @@ export default function SessionPage() {
     // not recording -> false). Drives the "You" cell's pulsing mic icon — the real "you're speaking"
     // signal, unlike `listening` which is just "the mic is armed". See useSpeaking.
     const userSpeaking = useSpeaking(stream);
+
+    // The "check your mic" watch: the mic is armed but NO sound is coming through it (a wrong/dead mic,
+    // or the candidate never started). Drives a distinct prompt from the smart-mode "still there?"
+    // countdown — that one ends a turn AFTER speech; this one fires when nothing was ever heard, in BOTH
+    // modes. It disarms the instant any sound registers (userSpeaking), so a thinking pause never trips
+    // it and, once the candidate has spoken, it stays quiet for the rest of the recording. See
+    // useNoInputPrompt. `dismissNoInput` hides it when they head to Settings via the prompt's button.
+    const { noInput, dismiss: dismissNoInput } = useNoInputPrompt(listening, userSpeaking);
+    // The prompt's action: clear it and open Settings (mic picker + live test meter) so they can fix the
+    // input. Changing the mic there re-opens capture on the new device mid-turn (see useSmartVoiceTurn).
+    function handleCheckMic() {
+        dismissNoInput();
+        setSettingsOpen(true);
+    }
 
     // Device labels are blank until mic permission is granted; the first recording grants it, so
     // re-enumerate when a stream opens to swap the generic "Microphone N" for real device names.
@@ -324,9 +338,11 @@ export default function SessionPage() {
                         supported={supported}
                         confirming={confirming}
                         countdownMs={countdownMs}
+                        noInput={noInput}
                         done={done}
                         ended={ended}
                         onToggleMic={() => (listening ? stop() : start())}
+                        onCheckMic={handleCheckMic}
                         onToggleVoiceMode={() => setVoiceMode((m) => (m === "manual" ? "smart" : "manual"))}
                         onKeepListening={keepListening}
                         onSwitch={() => setMode("text")}
@@ -384,9 +400,11 @@ function VoiceColumn({
     supported,
     confirming,
     countdownMs,
+    noInput,
     done,
     ended,
     onToggleMic,
+    onCheckMic,
     onToggleVoiceMode,
     onKeepListening,
     onSwitch,
@@ -402,9 +420,11 @@ function VoiceColumn({
     supported: boolean;
     confirming: boolean;
     countdownMs: number;
+    noInput: boolean;
     done: boolean;
     ended: boolean;
     onToggleMic: () => void;
+    onCheckMic: () => void;
     onToggleVoiceMode: () => void;
     onKeepListening: () => void;
     onSwitch: () => void;
@@ -426,27 +446,44 @@ function VoiceColumn({
 
             {/* Two participant cells — each pulses its icon while that participant is actually making
                 sound: "You" on real mic input (hark), the interviewer while its TTS plays. */}
-            <div className="grid w-[600px] max-w-full grid-cols-2 rounded-md border border-divider">
+            <div className="grid w-[640px] max-w-full grid-cols-2 rounded-md border border-divider">
                 <ParticipantCell
                     initials={initials}
                     name="You"
                     role="Candidate"
                     speaking={userSpeaking}
                     className="border-r border-divider"
+                    // The "You" cell's reserved footer slot (below the Speaking/Listening tag) holds one of
+                    // two mutually-exclusive prompts — see ParticipantCell. The slot is ALWAYS present in
+                    // BOTH cells, so a prompt appearing/disappearing changes no height and triggers no
+                    // page-scrollbar layout shift.
+                    //   1. confirming — the smart-mode "still there?" countdown, AFTER speech: a tap, any key
+                    //      (the effect in SessionPage), or this button keeps the turn open.
+                    //   2. noInput — the "check your mic" prompt, when NO sound was ever heard (wrong/dead
+                    //      mic, or never started). Amber (gap tokens) to read as attention, not the accent
+                    //      countdown; its button opens Settings to fix the input.
+                    // They can't both be true (a countdown needs prior speech, noInput needs none), but
+                    // confirming is checked first defensively.
+                    footer={
+                        confirming ? (
+                            <div className="flex items-center gap-2.5 rounded-md border border-accent px-3 py-1.5 text-[12.5px] text-accent-300">
+                                <span>Still there? {Math.ceil(countdownMs / 1000)}s</span>
+                                <button className="btn btn-ghost text-[12.5px]" onClick={onKeepListening}>
+                                    Keep talking
+                                </button>
+                            </div>
+                        ) : noInput ? (
+                            <div className="flex items-center gap-2.5 whitespace-nowrap rounded-md border border-gap-border bg-gap-bg px-3 py-1.5 text-[12.5px] text-gap">
+                                <span>Still there?</span>
+                                <button className="btn btn-ghost text-[12.5px] text-gap" onClick={onCheckMic}>
+                                    Check your mic
+                                </button>
+                            </div>
+                        ) : null
+                    }
                 />
                 <ParticipantCell ai name="Interviewer" role="AI · Staff engineer" speaking={speaking} />
             </div>
-
-            {/* "Still there?" countdown — smart mode only, shown while confirming. Any key (the effect in
-                SessionPage) or this button keeps the turn open. */}
-            {confirming && (
-                <div className="flex items-center gap-3 rounded-md border border-accent px-4 py-2.5 text-[13px] text-accent-300">
-                    <span>Still there? Submitting in {Math.ceil(countdownMs / 1000)}s.</span>
-                    <button className="btn btn-ghost text-[13px]" onClick={onKeepListening}>
-                        Keep talking
-                    </button>
-                </div>
-            )}
 
             {/* Control cluster — one bordered row, no gaps. Once the bank is exhausted (done) the mic is
                 retired and only "End session" remains. */}
@@ -519,6 +556,7 @@ function ParticipantCell({
     role,
     speaking,
     className = "",
+    footer = null,
 }: {
     initials?: string;
     ai?: boolean;
@@ -526,6 +564,10 @@ function ParticipantCell({
     role: string;
     speaking: boolean;
     className?: string;
+    // Content for the reserved slot below the Speaking/Listening tag (the "You" cell's "Still there?"
+    // countdown). The slot's height is reserved unconditionally in BOTH cells regardless of `footer`,
+    // so toggling its content never reflows the box — that's what kills the layout shift.
+    footer?: ReactNode;
 }) {
     // Zoom-style status icon — a mic for the candidate, a speaker for the interviewer — that pulses
     // (accent + filled) while that participant is making sound, idle/neutral otherwise. Fixed-height
@@ -557,6 +599,9 @@ function ParticipantCell({
             ) : (
                 <span className="tag tag-neutral">Listening</span>
             )}
+            {/* Reserved footer slot — fixed height in BOTH cells so the "Still there?" badge can appear
+                and disappear inside the "You" cell without changing the box's height (no scrollbar flash). */}
+            <div className="mt-4 flex h-[38px] items-center justify-center">{footer}</div>
         </div>
     );
 }
