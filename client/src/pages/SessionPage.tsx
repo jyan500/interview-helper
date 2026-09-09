@@ -122,7 +122,7 @@ export default function SessionPage() {
     // the voice/text mode toggle. Open state only — the settings themselves live in the state above.
     const [settingsOpen, setSettingsOpen] = useState(false);
 
-    const { supported, listening, confirming, countdownMs, transcribing, stream, start, stop, keepListening } =
+    const { supported, listening, confirming, countdownMs, transcribing, stream, start, stop, cancel, keepListening } =
         useSmartVoiceTurn({
             mode: voiceMode,
             deviceId: micDeviceId || null,
@@ -265,11 +265,42 @@ export default function SessionPage() {
     useEffect(() => {
         const wasSpeaking = prevSpeakingRef.current;
         prevSpeakingRef.current = speaking;
-        if (voiceMode !== "smart" || !interviewId || done || ended) return;
-        if (wasSpeaking && !speaking && !listening && !confirming && !transcribing && !answering) {
+        // `mode === "voice"` gate: a text-mode answer's TTS also runs through `speaking`, and without
+        // this it would silently re-open the mic behind the composer — the same auto-submit-while-typing
+        // path, just re-armed a turn later. The mic auto-arms only when the voice screen is showing.
+        if (voiceMode !== "smart" || mode !== "voice" || !interviewId || done || ended) return;
+        // `!preparing` is the single flow flag standing in for `!transcribing && !answering` (both run
+        // inside its span); `!speaking` still guards the playback half that runs after preparing clears.
+        if (wasSpeaking && !speaking && !preparing && !listening && !confirming) {
             start();
         }
-    }, [voiceMode, speaking, interviewId, done, ended, listening, confirming, transcribing, answering, start]);
+    }, [voiceMode, mode, speaking, preparing, interviewId, done, ended, listening, confirming, start]);
+
+    // ── Pause the mic on voice->text, resume it on text->voice ───────────────────────────────────
+    // The voice turn-taking (auto-arm + VAD countdown -> stop+submit) must not run while the candidate
+    // is typing: a still-armed smart-mode mic hits its silence threshold and submits the draft
+    // mid-sentence (the bug this fixes). So LEAVING voice abandons any in-progress recording via
+    // cancel() — stop WITHOUT transcribing/submitting, so the half-answer is discarded, not posted —
+    // which also drops the VAD (its `active` gate is `listening`). RETURNING to voice re-arms the mic,
+    // but only in smart mode (manual always waits for a tap) and only when we're idle mid-interview;
+    // if the AI is mid-utterance the edge effect above arms it once speaking ends. The idle check reuses
+    // the single flow flag (`!preparing`) rather than re-OR-ing transcribing/answering. prevModeRef makes
+    // the body act on the actual voice<->text transition, not every state change that re-runs the effect.
+    const prevModeRef = useRef(mode);
+    useEffect(() => {
+        const prev = prevModeRef.current;
+        prevModeRef.current = mode;
+        if (prev === mode) return;
+        if (mode === "text") {
+            if (listening) cancel();
+        } else if (
+            voiceMode === "smart" &&
+            interviewId && !done && !ended &&
+            !speaking && !preparing && !listening && !confirming
+        ) {
+            start();
+        }
+    }, [mode, voiceMode, interviewId, done, ended, speaking, preparing, listening, confirming, cancel, start]);
 
     // ── "Still there?" — any keypress keeps the turn open during the countdown ───────────────────
     useEffect(() => {
