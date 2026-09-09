@@ -56,6 +56,16 @@ export const VAD_REDEMPTION_MS = 800;
 export const CONFIRM_COUNTDOWN_MS = 6000;
 
 /**
+ * The "check your mic" watchdog. When the mic is armed but NO sound at all comes through it for this
+ * long, we raise the "Still there? — check your mic" prompt (useNoInputPrompt). This is a DIFFERENT
+ * failure from CONFIRM_COUNTDOWN_MS above: that one ends a turn after the candidate has spoken and then
+ * gone quiet; THIS one fires when nothing was ever heard — a candidate who never started, or (the case
+ * it really catches) a wrong/dead mic that isn't picking their voice up at all. Keep it generously
+ * longer than the countdown so a candidate simply composing their first sentence isn't nagged.
+ */
+export const NO_INPUT_TIMEOUT_MS = 10000;
+
+/**
  * Tunables for the candidate's "speaking" indicator (the pulsing mic icon), driven by `hark`
  * watching the live mic stream — see useSpeaking (hooks.ts). This is a DISPLAY signal, unrelated to
  * the Silero VAD above (which does turn-taking); hark just answers "is there speech right now?" with
