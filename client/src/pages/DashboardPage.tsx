@@ -9,14 +9,15 @@
  * Fluid, not fixed: the mock's 1440px frame becomes a max-width container, and the
  * two-column body collapses to one column below ~1024px (lg:).
  */
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { useForm } from "react-hook-form";
 import { useAuth } from "../auth/AuthProvider"
-import { useLazyGetLevelsQuery, useLazyGetRolesQuery, useStartInterviewMutation } from "../api";
+import { useGetMyInterviewsQuery, useLazyGetLevelsQuery, useLazyGetRolesQuery, useStartInterviewMutation } from "../api";
 import { ControlledAsyncPaginateSelect } from "../components/ControlledAsyncPaginateSelect";
 import type { SelectOption } from "../components/AsyncPaginateSelect";
 import AppNav from "../components/AppNav";
 import ResumeBanner from "../components/ResumeBanner";
+import InterviewsTable from "../components/InterviewsTable";
 import Sparkline from "../components/Sparkline";
 
 // The kickoff form's shape — the same one App.tsx's legacy flow uses. Each field holds react-select's
@@ -28,13 +29,8 @@ type StartFormValues = {
     level: SelectOption | null;
 };
 
-// Static history rows — the "Past interviews" table in the mock.
-const PAST = [
-    { role: "Backend Engineer · Mid", date: "1 Sep", score: 78, takeaway: "Strong on schema design, thin on tradeoffs" },
-    { role: "Backend Engineer · Mid", date: "28 Aug", score: 71, takeaway: "Answers ran long; missed the ask twice" },
-    { role: "Platform Engineer · Senior", date: "24 Aug", score: 65, takeaway: "Needs sharper failure-mode reasoning" },
-    { role: "Backend Engineer · Mid", date: "19 Aug", score: 62, takeaway: "Good structure, shallow on caching" },
-];
+// How many recent interviews the dashboard card shows before "View all" takes over.
+const DASHBOARD_ROWS = 5;
 
 // Static skill bars. The weakest one uses accent-300 so it reads as the low bar.
 const SKILLS = [
@@ -67,6 +63,14 @@ export default function DashboardPage() {
     // owns paginate/map, we only inject WHICH endpoint (see ControlledAsyncPaginateSelect).
     const [triggerRoles] = useLazyGetRolesQuery();
     const [triggerLevels] = useLazyGetLevelsQuery();
+
+    // Past interviews — the full history (for the count + the newest few rows) and, separately, the
+    // one resumable interview so the table can show its Resume button. Both come back in the same
+    // {interviews:[...]} shape; the resumable query narrows server-side to a 0-or-1-element list.
+    const { data: interviewsData } = useGetMyInterviewsQuery();
+    const { data: resumableData } = useGetMyInterviewsQuery({ resumable: true });
+    const interviews = interviewsData?.interviews ?? [];
+    const resumableId = resumableData?.interviews[0]?.interview_id ?? null;
 
     // The KICKOFF: POST /api/interview, then hand the fresh interview to /session via route state
     // (SessionLayout guards on it; SessionPage seeds the first question + speaks it from firstMessage).
@@ -151,48 +155,19 @@ export default function DashboardPage() {
                             </div>
                         </form>
 
-                        {/* Past interviews */}
+                        {/* Past interviews — the newest few, sharing InterviewsTable with the full
+                            Interviews page. "View all" routes to that page. */}
                         <div className="rounded-md border border-divider px-[22px] pb-2 pt-[18px]">
                             <div className="mb-2 flex items-baseline justify-between">
                                 <h2 className="font-heading text-[23px] font-medium">Past interviews</h2>
-                                <div className="flex items-center gap-2 text-[13px] text-neutral-400">
-                                    <span className="tag tag-outline">All roles</span>
-                                    <span>View all (14)</span>
-                                </div>
+                                <Link to="/interviews" className="text-[13px] text-accent-300">
+                                    View all
+                                </Link>
                             </div>
-                            <div className="overflow-x-auto">
-                                <table className="table">
-                                    <thead>
-                                        <tr>
-                                            <th>Interview</th>
-                                            <th>Date</th>
-                                            <th>Score</th>
-                                            <th>Takeaway</th>
-                                            <th></th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {PAST.map((row, i) => (
-                                            <tr key={i}>
-                                                <td className="whitespace-nowrap">{row.role}</td>
-                                                <td className="whitespace-nowrap">{row.date}</td>
-                                                <td>
-                                                    <strong>{row.score}</strong>
-                                                </td>
-                                                <td className="text-neutral-300">{row.takeaway}</td>
-                                                <td className="text-right">
-                                                    <button
-                                                        className="text-accent-300"
-                                                        onClick={() => navigate("/interviews/1")}
-                                                    >
-                                                        Transcript
-                                                    </button>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
+                            <InterviewsTable
+                                interviews={interviews.slice(0, DASHBOARD_ROWS)}
+                                resumableId={resumableId}
+                            />
                         </div>
                     </div>
 

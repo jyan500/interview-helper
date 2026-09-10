@@ -49,3 +49,20 @@ export function addIgnoredInterviewId(interviewId: string): void {
     if (ids.includes(interviewId)) return;
     localStorage.setItem(IGNORED_INTERVIEWS_STORAGE_KEY, JSON.stringify([...ids, interviewId]));
 }
+
+/**
+ * A compact "09/10/2026" date for the interview tables, from an ISO timestamp
+ * (InterviewSummary.created_at). en-US fixes the mm/dd/yyyy ordering regardless of the viewer's locale.
+ */
+export function formatShortDate(iso: string): string {
+    return new Date(iso).toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" });
+}
+
+/**
+ * A scorecard's overall (already round(,2) server-side) as a table cell reads it: always at least one
+ * decimal so a whole number shows as "4.0" not "4", but keeping the second decimal when there is one
+ * ("4.25"). Matches how the mocks render scores.
+ */
+export function formatScore(overall: number): string {
+    return Number.isInteger(overall) ? overall.toFixed(1) : String(overall);
+}
