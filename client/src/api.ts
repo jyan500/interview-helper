@@ -59,6 +59,10 @@ export interface OptionPageQuery {
     q?: string;
     page?: number;
 }
+// A generic bag of URL query params, handed to fetchBaseQuery's `params` (which serializes it into
+// the query string). Kept generic rather than per-endpoint fields so adding a filter is just another
+// key — no signature change. `undefined` values are dropped by the serializer.
+export type QueryParams = Record<string, string | number | boolean | undefined>;
 export interface AnswerResponse {
     message: string; // feedback + the next question
     done?: boolean; // true once the client-driven loop exhausts the question bank
@@ -109,12 +113,17 @@ export interface InterviewSummary {
 export interface MyInterviewsResponse {
     interviews: InterviewSummary[];
 }
-// One recorded answer, as get_interview returns it (slug under "question_id", exactly as stored).
-export interface InterviewTurn {
-    question_id: string;
+// The fields every turn carries regardless of who's reading it — the exchange minus its answer.
+// InterviewTurn and ResumeTurn share these and differ ONLY in the `answer` type (see each).
+export interface TurnBase {
+    question_id: string; // slug under "question_id", exactly as stored
     question_text: string; // the exact prompt shown (bank question or follow-up probe)
-    answer: string | null; // null = the open turn (presented, not yet answered)
     at: string; // ISO timestamp
+}
+// One recorded answer, as get_interview returns it. `answer` is nullable here because this
+// transcript INCLUDES the open turn (presented, not yet answered) — null marks it.
+export interface InterviewTurn extends TurnBase {
+    answer: string | null; // null = the open turn (presented, not yet answered)
 }
 // The detail view's payload: transcript + the persisted grade (null until graded, or until the
 // backend's get_scorecard read-back is implemented). The scorecard is the SAME `Scorecard` shape
@@ -124,6 +133,24 @@ export interface InterviewDetail {
     turns: InterviewTurn[];
     summary: string | null;
     scorecard: Scorecard | null;
+}
+
+// Resume — GET /api/interviews/{id}/resume (mirrors load_resume_payload in tools/interview.py).
+// Same shared fields as InterviewTurn, but `answer` is a plain string, NOT nullable: the resume
+// payload lists only COMPLETED exchanges and splits the open turn out into `current_question`.
+export interface ResumeTurn extends TurnBase {
+    answer: string;
+}
+// What SessionPage needs to redraw an in-progress interview and keep answering: the transcript so
+// far (`turns`), the question currently on the table (`current_question` = the open turn's prompt),
+// and human-readable role/level for the header. The backend only returns this for the SINGLE most
+// recent unfinished interview (else 409) — the "only the most recent is resumable" rule.
+export interface ResumePayload {
+    interview_id: string;
+    role: string; // human-readable name ("Backend Engineer")
+    level: string; // human-readable name ("Mid level")
+    turns: ResumeTurn[];
+    current_question: string | null;
 }
 
 // Phase 5 robust STT — the /api/transcribe response. The REQUEST is a FormData (the recorded
@@ -243,6 +270,11 @@ const baseQueryWithReauth: BaseQueryFn<
 export const interviewApi = createApi({
     reducerPath: "interviewApi",
     baseQuery: baseQueryWithReauth,
+    // One cache tag: the user's interview LIST. The resume banner reads it to find the most-recent
+    // unfinished interview, so the writes that change which interview that is — starting a new one,
+    // answering (bumps updated_at / can finish it), grading — invalidate it so the banner recomputes
+    // without a manual refresh.
+    tagTypes: ["Interviews"],
     endpoints: (builder) => ({
         // WORKED EXAMPLE — start an interview.
         // It's a MUTATION, not a query. Even though it "gets" the first question, the POST
@@ -254,14 +286,21 @@ export const interviewApi = createApi({
         // trigger is called `startInterview({ role, seniority })` instead of `startInterview()`.
         startInterview: builder.mutation<InterviewResponse, StartInterviewRequest>({
             query: (body) => ({ url: "/interview", method: "POST", body }),
+            // a new interview becomes the most recent unfinished one — the old resumable one is
+            // demoted, so the banner must recompute.
+            invalidatesTags: ["Interviews"],
         }),
         submitAnswer: builder.mutation<AnswerResponse, AnswerRequest>({
             query: (body) => ({ url: "/answer", method: "POST", body }),
+            // each answer bumps updated_at (list order) and the final one flips `done` — both change
+            // what the banner surfaces.
+            invalidatesTags: ["Interviews"],
         }),
         // Phase 5 — grade the whole interview. A mutation (not a query): it's a POST that
         // kicks off server-side grading work, same instinct as startInterview/submitAnswer.
         getScorecard: builder.mutation<Scorecard, ScorecardRequest>({
             query: (body) => ({ url: "/scorecard", method: "POST", body }),
+            invalidatesTags: ["Interviews"],
         }),
         // Phase 5 robust STT — transcribe one recorded utterance via /api/transcribe (OpenAI
         // Whisper). A mutation: it's a POST with a side effect (an API call), same instinct as the
@@ -287,13 +326,27 @@ export const interviewApi = createApi({
         // rows (no side effect), the frontend mirror of the read-vs-write split the backend draws
         // between /api/interviews and /api/interview. RTK Query caches it and re-fetches on mount,
         // so finishing an interview and clicking History shows it without a manual refresh.
-        getMyInterviews: builder.query<MyInterviewsResponse, void>({
-            query: () => "/interviews",
+        // Phase C — the History LIST, and (with { resumable: true }) the resume banner's single
+        // question. The arg is an optional generic params bag: no arg = the full history; passing
+        // e.g. { resumable: true } narrows it server-side to the one resumable interview, returned
+        // in the SAME {interviews:[...]} shape as a 0-or-1-element list, so the banner reads
+        // `interviews[0]`. Both variants provide the "Interviews" tag, so starting/answering/grading
+        // invalidates both.
+        getMyInterviews: builder.query<MyInterviewsResponse, QueryParams | void>({
+            query: (params) => ({ url: "/interviews", params: params || {} }),
+            providesTags: ["Interviews"],
         }),
         // Phase C — the History DETAIL: one interview by id. Also a query; the arg is the slug,
         // interpolated into the path. Backs the drill-in transcript + remembered scorecard.
         getInterviewDetail: builder.query<InterviewDetail, string>({
             query: (interviewId) => `/interviews/${interviewId}`,
+        }),
+        // Resume — hydrate an in-progress interview: transcript so far + the question on the table.
+        // A QUERY (cacheable GET, no side effect); the arg is the slug. LAZY-triggered from
+        // SessionPage's seed effect (like the fresh-start path, it fires imperatively, not on mount).
+        // The backend 409s unless this is the most recent unfinished interview — see resume_interview.
+        getResume: builder.query<ResumePayload, string>({
+            query: (interviewId) => `/interviews/${interviewId}/resume`,
         }),
         // Phase D — the picker's option lists, now PAGINATED + SEARCHABLE. Still queries
         // (cacheable GETs of slow-changing vocab), but the arg is { q, page }: the AsyncPaginate
@@ -318,6 +371,9 @@ export const {
     useTtsMutation,
     useGetMyInterviewsQuery,
     useGetInterviewDetailQuery,
+    // Resume is lazy: SessionPage triggers it from its seed effect only when entering in resume
+    // mode, then rebuilds the transcript from the payload.
+    useLazyGetResumeQuery,
     // LAZY variants: the picker triggers these imperatively inside loadOptions (see App.tsx),
     // not on mount. useLazy* returns [trigger, result] where trigger(arg) returns a promise you
     // can .unwrap() — exactly what an async loadOptions needs.

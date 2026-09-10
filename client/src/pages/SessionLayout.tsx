@@ -13,34 +13,59 @@
  *   - It's the natural home for an "invalid interview" page later (see the TODO): swap the redirect
  *     for <InvalidInterview /> and nothing else in the tree changes.
  */
-import { Navigate, Outlet, useLocation, useOutletContext } from "react-router";
+import { useEffect, useState } from "react";
+import { Navigate, Outlet, useLocation, useNavigate, useOutletContext } from "react-router";
 
-// What the producer hands over via navigate("/session", { state }).
+// What the producer hands over via navigate("/session", { state }). TWO producers, two shapes that
+// share the same guard (interviewId + labels):
 //   interviewId  — the slug the client holds; every /api/answer + /api/scorecard call is keyed to it.
-//   firstMessage — the OPENING question, i.e. the `message` field POST /api/interview returned. Carried
-//                  here (not re-fetched) because /api/interview is a mutation — calling it again would
-//                  start a second interview; the first question comes back exactly once.
-//   role / level — human-readable LABELS for the header; the slugs already did their job in the
-//                  /api/interview call that minted `interviewId` + `firstMessage`.
+//   firstMessage — FRESH START only: the OPENING question, i.e. the `message` field POST /api/interview
+//                  returned. Carried here (not re-fetched) because /api/interview is a mutation —
+//                  calling it again would start a second interview; the first question comes back once.
+//   resume       — RESUME only: true when re-opening an in-progress interview (the ResumeBanner
+//                  producer). There's no firstMessage then — SessionPage fetches the transcript +
+//                  current question from GET /api/interviews/{id}/resume and redraws instead of seeding.
+//   role / level — human-readable LABELS for the header (both flows carry them).
 export type SessionNavState = {
     interviewId: string;
-    firstMessage: string;
+    firstMessage?: string;
+    resume?: boolean;
     role: string;
     level: string;
 };
 
 export default function SessionLayout() {
     const location = useLocation();
-    const nav = location.state as SessionNavState | null;
+    const navigate = useNavigate();
 
-    // No interview in state -> nothing to run. For now we bounce home; this is the one line to swap
-    // for a dedicated <InvalidInterview /> page ("this interview link is no longer valid") when we
-    // want to explain the redirect instead of silently performing it. `replace` so the bad entry
-    // doesn't linger in history.
+    // SNAPSHOT the handed-over interview ONCE, on mount. Everything below — and SessionPage, via
+    // useOutletContext — reads this snapshot, NOT live location.state. That's what lets us strip the
+    // state out of history immediately (below) without pulling the rug out from under the running
+    // session. (The useState initializer runs once per mount, so a later render sees the same snapshot.)
+    const [nav] = useState<SessionNavState | null>(
+        () => (location.state as SessionNavState | null) ?? null,
+    );
+
+    // THE REFRESH GUARD. React Router keeps location.state in window.history.state, which the browser
+    // PRESERVES across a hard refresh — so without this, refreshing mid-interview would remount
+    // SessionPage against the SAME stale nav (re-seeding question 1 while the server is several turns
+    // ahead, desyncing the open-turn bookkeeping). Having snapshotted the nav above, we now CLEAR it
+    // from this history entry: the live session keeps running off the snapshot, but a refresh reloads
+    // an entry with NO state -> the guard below bounces home, where the resume banner reattaches the
+    // candidate to server truth. Replacing the SAME path keeps SessionPage mounted (no remount, no
+    // lost transcript); it runs once on mount.
+    useEffect(() => {
+        if (nav?.interviewId) navigate(location.pathname, { replace: true, state: null });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // No interview in the snapshot -> nothing to run: a typed URL, a stale bookmark, or (now) a
+    // refresh whose state we cleared. Bounce home; this is the one line to swap for a dedicated
+    // <InvalidInterview /> page later. `replace` so the bad entry doesn't linger in history.
     if (!nav?.interviewId) return <Navigate to="/" replace />;
 
-    // Valid — render the nested session route, handing the validated interview down as outlet
-    // context so SessionPage doesn't re-read or re-validate location.state.
+    // Valid — render the nested session route, handing the snapshot down as outlet context so
+    // SessionPage doesn't re-read or re-validate location.state.
     return <Outlet context={nav} />;
 }
 

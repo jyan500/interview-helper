@@ -16,6 +16,7 @@ import { useLazyGetLevelsQuery, useLazyGetRolesQuery, useStartInterviewMutation 
 import { ControlledAsyncPaginateSelect } from "../components/ControlledAsyncPaginateSelect";
 import type { SelectOption } from "../components/AsyncPaginateSelect";
 import AppNav from "../components/AppNav";
+import ResumeBanner from "../components/ResumeBanner";
 import Sparkline from "../components/Sparkline";
 
 // The kickoff form's shape — the same one App.tsx's legacy flow uses. Each field holds react-select's
@@ -101,20 +102,9 @@ export default function DashboardPage() {
                 <div className="grid grid-cols-1 gap-6 px-7 pb-[30px] pt-[22px] lg:grid-cols-[1fr_372px]">
                     {/* ── Left column ─────────────────────────────────────────── */}
                     <div className="flex flex-col gap-5">
-                        {/* Unfinished session banner — render only when one exists */}
-                        <div className="flex items-center justify-between gap-4 rounded-md border border-accent-600 bg-accent-900 px-[18px] py-4">
-                            <div>
-                                <div className="kicker text-accent-300">Unfinished session</div>
-                                <div className="mt-0.5 font-heading text-[20px]">Mid-level Backend Engineer</div>
-                            </div>
-                            <div className="flex gap-2">
-                                <button className="btn btn-ghost">Discard</button>
-                                {/* TODO(wire): resume the in-progress interview */}
-                                <button className="btn btn-primary" onClick={() => navigate("/session")}>
-                                    Resume
-                                </button>
-                            </div>
-                        </div>
+                        {/* Unfinished session banner — self-contained: renders only when the user has
+                            a resumable interview (the most-recent unfinished one), else nothing. */}
+                        <ResumeBanner />
 
                         {/* Start an interview — the searchable async role/level pickers (slugs), the same
                             widgets the legacy flow used, wrapped in RHF so both are required before Start

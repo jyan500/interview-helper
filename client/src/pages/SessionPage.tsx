@@ -30,7 +30,7 @@ import MessageRow from "../components/MessageRow";
 import LoadingDots from "../components/LoadingDots";
 import SettingsModal from "../components/SettingsModal";
 import { useAuth } from "../auth/AuthProvider";
-import { useGetScorecardMutation, useSubmitAnswerMutation } from "../api";
+import { useGetScorecardMutation, useLazyGetResumeQuery, useSubmitAnswerMutation } from "../api";
 import { useSessionNav } from "./SessionLayout";
 import { initialsFrom, loadStoredMicDeviceId, saveStoredMicDeviceId } from "../helpers";
 import { useAudioInputDevices, useElapsedClock, useNoInputPrompt, useSpeaking } from "../hooks";
@@ -92,6 +92,9 @@ export default function SessionPage() {
     // on the producer; the scorecard is fetched once, on end.
     const [submitAnswer, { isLoading: answering }] = useSubmitAnswerMutation();
     const [getScorecard, { isLoading: scoring }] = useGetScorecardMutation();
+    // Resume — lazy so it fires only when entering in resume mode (see the seed effect below),
+    // not on every mount. The backend 409s unless this is the most recent unfinished interview.
+    const [triggerResume] = useLazyGetResumeQuery();
 
     // Which TTS engine speaks the interviewer's turns. "openai" = neural (spends tokens),
     // "browser" = free/robotic (handy for debugging without burning credit). useSpeak(engine)
@@ -186,19 +189,60 @@ export default function SessionPage() {
         setPreparing(false);
     }
 
-    // Seed the first interviewer turn ONCE from the producer's firstMessage, and speak it. Mirrors
-    // App.onStart's tail: a "thinking…" bubble now, revealed the instant the voice is ready. (Autoplay
-    // may be blocked because the click that allowed it happened before the route change; if so onReady
-    // still fires immediately and the text just reveals without sound — same graceful path as a synth
-    // failure.) A ref guards against StrictMode's double-invoke in dev.
+    // Seed the session ONCE. Two entry paths (see SessionNavState): a FRESH start seeds the first
+    // question from the producer's firstMessage; a RESUME rebuilds the transcript from the server and
+    // continues on the question that was on the table. A ref guards StrictMode's double-invoke in dev.
     const seededRef = useRef(false);
     useEffect(() => {
         if (seededRef.current) return;
         seededRef.current = true;
+
+        // ── RESUME: redraw an in-progress interview from GET /api/interviews/{id}/resume ──────────
+        if (nav.resume) {
+            (async () => {
+                let payload;
+                try {
+                    payload = await triggerResume(interviewId).unwrap();
+                } catch (e) {
+                    // 409 (no longer the most recent unfinished) / 403 / 404 — not resumable. Drop
+                    // back to the dashboard rather than show an empty or wrong session.
+                    console.error(e);
+                    navigate("/", { replace: true });
+                    return;
+                }
+                // Rebuild the visible transcript from the COMPLETED exchanges, oldest-first: each is an
+                // interviewer prompt + your answer. Fresh line ids keep later reveals race-safe. (The
+                // model's own memory — reactions, clarifications — is already in message_history on the
+                // server; this is just the human transcript, same as the History detail view.)
+                const lines: Line[] = [];
+                for (const turn of payload.turns) {
+                    lines.push({ id: nextId(), who: "interviewer", text: turn.question_text });
+                    lines.push({ id: nextId(), who: "you", text: turn.answer });
+                }
+                // The open turn — the question awaiting an answer — is the current interviewer line.
+                // A not-done interview always has one; guard anyway. Speak it (text is already on
+                // screen, so no reveal callback) so a voice user can just answer.
+                if (payload.current_question) {
+                    lines.push({ id: nextId(), who: "interviewer", text: payload.current_question });
+                    setTranscript(lines);
+                    speak(payload.current_question);
+                } else {
+                    setTranscript(lines);
+                }
+            })();
+            return;
+        }
+
+        // ── FRESH START: seed the first question from firstMessage and speak it ───────────────────
+        // A "thinking…" bubble now, revealed the instant the voice is ready. (Autoplay may be blocked
+        // because the click that allowed it happened before the route change; if so onReady still
+        // fires immediately and the text just reveals without sound — same graceful path as a synth
+        // failure.)
+        const first = nav.firstMessage ?? "";
         const id = nextId();
         setPreparing(true); // hold "…" until the first question's TTS is ready (revealLine clears it)
         setTranscript([{ id, who: "interviewer", text: "", pending: true }]);
-        speak(nav.firstMessage, () => revealLine(id, nav.firstMessage));
+        speak(first, () => revealLine(id, first));
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
@@ -395,7 +439,7 @@ export default function SessionPage() {
                     />
                 )}
 
-                <RightRail mode={mode} interviewerLines={interviewerLines} scoring={scoring} />
+                <RightRail isResume={nav?.resume ?? false} mode={mode} interviewerLines={interviewerLines} scoring={scoring} />
             </div>
 
             {/* In-session settings (mic + live test meter, TTS engine, voice/text mode), behind the
@@ -772,10 +816,12 @@ function TextColumn({
    ══════════════════════════════════════════════════════════════════════ */
 function RightRail({
     mode,
+    isResume,
     interviewerLines,
     scoring,
 }: {
     mode: Mode;
+    isResume: boolean;
     interviewerLines: Line[];
     scoring: boolean;
 }) {
@@ -790,7 +836,7 @@ function RightRail({
                 <div className="kicker">This session</div>
                 <div className="mt-2.5 flex flex-col gap-[9px] text-[13px]">
                     {interviewerLines.length === 0 ? (
-                        <span className="text-neutral-400">Waiting for the first question…</span>
+                        <span className="text-neutral-400">{isResume ? "Resuming..." : "Waiting for the first question…"}</span>
                     ) : (
                         interviewerLines.map((q, i) => {
                             const isCurrent = i === interviewerLines.length - 1;

@@ -105,6 +105,15 @@ export const VAD_ONNX_WASM_BASE = import.meta.env.DEV
 export const MIC_DEVICE_STORAGE_KEY = "ih.micDeviceId";
 
 /**
+ * The resume banner's "Ignore" button dismisses the unfinished-session banner for a specific
+ * interview WITHOUT abandoning it — the interview stays resumable, the banner just stops nagging.
+ * The set of ignored interview ids is persisted here (a JSON array of slugs) so the dismissal
+ * survives reloads; a NEWER unfinished interview isn't in the set, so it still surfaces. See
+ * loadIgnoredInterviewIds / addIgnoredInterviewId in helpers.ts.
+ */
+export const IGNORED_INTERVIEWS_STORAGE_KEY = "ih.ignoredInterviewIds";
+
+/**
  * Tunables for the Settings modal's live mic-test meter (useMicLevel). The meter is driven by `hark`
  * (the same loudness library useSpeaking uses), whose volume_change reports the input level in dBFS
  * (~-100 silent .. 0 loud). We map that dB range onto the bar's 0..1 width, so it sits left when you're

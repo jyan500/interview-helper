@@ -2,7 +2,7 @@
  * Small, dependency-free UI helpers shared across pages. Pure functions only — no React, no
  * network, no module state — so they're trivial to reuse and to reason about.
  */
-import { MIC_DEVICE_STORAGE_KEY } from "./constants";
+import { IGNORED_INTERVIEWS_STORAGE_KEY, MIC_DEVICE_STORAGE_KEY } from "./constants";
 
 /**
  * Two-letter initials for an avatar, derived from a display name or, failing that, an email.
@@ -30,4 +30,22 @@ export function loadStoredMicDeviceId(): string {
 
 export function saveStoredMicDeviceId(deviceId: string): void {
     localStorage.setItem(MIC_DEVICE_STORAGE_KEY, deviceId);
+}
+
+/**
+ * The interview ids the user has "Ignore"d on the resume banner (see IGNORED_INTERVIEWS_STORAGE_KEY).
+ * Stored as a JSON array of slugs; a malformed/missing value reads as an empty list. Ignoring hides
+ * the banner for THAT interview only — it stays resumable, and a newer unfinished one still shows.
+ */
+export function loadIgnoredInterviewIds(): string[] {
+    const raw = localStorage.getItem(IGNORED_INTERVIEWS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+}
+
+export function addIgnoredInterviewId(interviewId: string): void {
+    const ids = loadIgnoredInterviewIds();
+    if (ids.includes(interviewId)) return;
+    localStorage.setItem(IGNORED_INTERVIEWS_STORAGE_KEY, JSON.stringify([...ids, interviewId]));
 }

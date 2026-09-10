@@ -617,6 +617,115 @@ async def get_scorecard(interview_id: str) -> dict:
     return {"status": "not_found"}
 
 
+# ===========================================================================
+# RESUME — reopen an in-progress interview where the candidate left off.
+#
+# The design leans entirely on the OPEN-TURN model already in place: a non-finished
+# interview always has exactly one turn with `answer IS NULL` (the partial unique index
+# guarantees it), and that turn's `prompt_text` IS "the last question the interviewer asked".
+# So resuming is a pure READ — no state is mutated. The completed turns are the transcript to
+# redraw; the open turn is where the candidate picks back up. The next POST /api/answer then
+# continues from `message_history` + that same open turn, exactly as if the page had never
+# closed. (Clarification back-and-forth isn't in `turns` — it lives only in message_history,
+# which the model still replays — so the redrawn transcript shows the Q&A spine, matching the
+# History detail view.)
+#
+# THE PRODUCT RULE: only the MOST RECENT unfinished interview is resumable. That's enforced on
+# the backend (not just hidden in the client) via most_recent_unfinished_id below, so bypassing
+# the UI can't reopen a stale interview.
+# ===========================================================================
+
+
+async def get_resumable_interview(profile_id: str) -> dict | None:
+    """This user's ONE resumable interview — the most-recently-active unfinished one — or None.
+
+    Backs `GET /api/interviews?resumable=true` (the banner asks for just this, so the client never
+    pulls the whole history to find it) AND the guard in /api/interviews/{id}/resume (which compares
+    the requested id against this one). One query answers "is there a resumable interview, and
+    which?", so the two callers can't disagree.
+
+    A single indexed `LIMIT 1` — not the full list — because that's all "the resumable one" needs.
+    Ordered by `updated_at desc`, the SAME sort list_interviews uses, so this and the History list
+    agree on recency. `updated_at` doubles as "last active" (every /api/answer write bumps it), so
+    resuming-and-answering keeps an interview the resumable one, while STARTING a new interview
+    makes the new row the most recent and quietly demotes the old one — the intended behaviour.
+
+    Returns the SAME card shape list_interviews yields (so `?resumable=true` and the full list share
+    one response type), or None when the user has no unfinished interview. `done` is always False
+    here and `overall` is None (an unfinished interview isn't graded), but they're included so the
+    shape matches exactly. role/level (names) and the 1:1 scorecard are all selectin-loaded — free.
+    """
+    async with get_session() as db:
+        interview = (
+            await db.execute(
+                select(Interview)
+                .where(Interview.profile_id == profile_id, Interview.done.is_(False))
+                .order_by(Interview.updated_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if interview is None:
+            return None
+        return {
+            "interview_id": interview.slug,
+            "role": interview.role.name,
+            "level": interview.level.name,
+            "created_at": interview.created_at.isoformat(),
+            "done": interview.done,
+            "overall": interview.scorecard.overall if interview.scorecard is not None else None,
+        }
+
+
+async def load_resume_payload(interview_id: str) -> dict:
+    """Everything the frontend needs to REDRAW an in-progress interview and pick up the answer.
+
+    A purpose-built read (kept separate from get_interview so the interview:// resource and
+    /api/scorecard shapes don't move): it walks the turns ONCE and splits them into
+
+        turns            — the COMPLETED exchanges (answer is not None), oldest-first, each the
+                           exact prompt shown + the candidate's answer — i.e. the transcript.
+        current_question — the OPEN turn's prompt (answer is None): the question on the table,
+                           what the candidate resumes by answering. None if there somehow isn't
+                           one (a finished interview, or a data slip — the endpoint guards done).
+
+    Returns {"status": "ok", ...} with `role`/`level` as human-readable NAMES (the session
+    header shows them) and `profile_id` STRINGIFIED for require_ownership, or
+    {"status": "not_found"} for an unknown slug.
+    """
+    async with get_session() as db:
+        interview = (
+            await db.execute(select(Interview).where(Interview.slug == interview_id))
+        ).scalar_one_or_none()
+        if interview is None:
+            return {"status": "not_found"}
+
+        turns: list[dict] = []
+        current_question: str | None = None
+        for turn in interview.turns:          # already ordered by created_at
+            prompt = turn.prompt_text or turn.question.text
+            if turn.answer is None:
+                # the OPEN turn — the question awaiting an answer (the resume point)
+                current_question = prompt
+            else:
+                turns.append({
+                    "question_id": turn.question.slug,
+                    "question_text": prompt,
+                    "answer": turn.answer,
+                    "at": turn.created_at.isoformat(),
+                })
+
+        return {
+            "status": "ok",
+            "interview_id": interview.slug,
+            "profile_id": str(interview.profile_id) if interview.profile_id else None,
+            "done": interview.done,
+            "role": interview.role.name,
+            "level": interview.level.name,
+            "turns": turns,
+            "current_question": current_question,
+        }
+
+
 if __name__ == "__main__":
     # Smoke test with no LLM and no MCP. Needs an interview row to exist — create one via
     # POST /api/interview once api.py is rewritten, or insert one by hand, then put its
