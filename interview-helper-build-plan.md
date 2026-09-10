@@ -874,3 +874,62 @@ SpeechSynthesis block is NO LONGER slated for removal — it's the free engine n
 
 **Next up — Phase G (production hardening & deploy):** env-driven CORS, `client/vercel.json` SPA
 rewrite + `VITE_*` vars in Vercel, a FastAPI `Dockerfile` for Render/Railway, keep the guardrails.
+
+### Resume an in-progress interview — ✅ IMPLEMENTED (branch `resume-session`)
+
+*Feature (not a numbered phase). Backend `python -m py_compile` + app-import/route-registration
+clean; client `npx tsc --noEmit` clean. Live end-to-end (resume a real unfinished interview in the
+SPA) still to run via the run-interview-helper skill.*
+
+**The idea:** a signed-in user can reopen the interview they left unfinished and keep answering from
+the exact question on the table. It leans entirely on the durable state Phase A already gave us — no
+new mutation. **The OPEN TURN is the resume point**: a non-finished interview always has exactly one
+turn with `answer IS NULL` (the `uq_one_open_turn_per_interview` index), and its `prompt_text` is the
+last question asked. Completed turns are the transcript to redraw; the next `POST /api/answer`
+continues from the persisted `message_history` + that same open turn. Follow-up PROBES are preserved
+(they're turns); only clarification back-and-forth is absent from `turns` (it lives in
+`message_history`, which the model still replays) — matching the History detail view.
+
+**Product rule:** only the **most recent unfinished** interview is resumable (ordered by
+`updated_at desc`), enforced SERVER-SIDE so bypassing the client can't reopen a stale one. Starting a
+new interview naturally demotes the old one out of resumability. "Ignore" on the banner is a soft,
+persisted client dismissal (localStorage) — it does NOT abandon the interview, and a newer unfinished
+one still surfaces. No schema change, no abandon flag.
+
+**Backend (`server/`):**
+- `tools/interview.py` — `get_resumable_interview(profile_id)` (single indexed `LIMIT 1`,
+  `updated_at desc`; returns the SAME card shape as `list_interviews` so the response type doesn't
+  fork, or None) and `load_resume_payload(interview_id)` (walks turns once → completed `turns` +
+  the open turn's `current_question`; role/level as names; stringified `profile_id`).
+- `api.py` — **`GET /api/interviews?resumable=true`** reuses the existing list route (a `resumable:
+  bool` query param), returning the one resumable interview as a 0-or-1-element list. **`GET
+  /api/interviews/{id}/resume`** hydrates: guard order exists(404)→owns(403)→not done(409)→IS the
+  resumable one (409, via `get_resumable_interview`). Route declared with a distinct trailing segment
+  so it doesn't collide with the detail route; the `resumable` flag needed no new route.
+
+**Frontend (`client/src/`):**
+- `api.ts` — `tagTypes: ["Interviews"]`; `getMyInterviews` takes a **generic `QueryParams` bag**
+  (via fetchBaseQuery `params`) and provides the tag; `startInterview`/`submitAnswer`/`getScorecard`
+  invalidate it so the banner recomputes. New `getResume` query + `useLazyGetResumeQuery`. `TurnBase`
+  extracted; `InterviewTurn` (answer nullable) and `ResumeTurn` (answer string) extend it.
+- `components/ResumeBanner.tsx` (new, shared) — asks `getMyInterviews({ resumable: true })`, reads
+  `interviews[0]`, renders the "Unfinished session" banner with **Resume** (nav to `/session` with
+  `{ interviewId, role, level, resume: true }`) and **Ignore** (localStorage dismissal). Dropped on
+  both `DashboardPage` (replacing the static mock banner) and `InterviewsPage`.
+- `SessionLayout.tsx` — `SessionNavState.firstMessage` now optional + `resume?: boolean`. **Refresh
+  guard:** it SNAPSHOTS the nav into `useState` on mount, then STRIPS it from the history entry
+  (`navigate(pathname, {replace, state: null})`). React Router keeps `location.state` in
+  `window.history.state`, which survives a hard refresh — so without this, a mid-interview refresh
+  re-seeded SessionPage from stale nav (re-asking answered questions, desyncing the open turn). Now
+  the live session runs off the snapshot while a refresh reloads a state-less entry → the existing
+  `!interviewId` guard bounces home → the banner reattaches to server truth. Same path replace keeps
+  SessionPage mounted (no lost transcript).
+- `SessionPage.tsx` — the seed effect branches: **resume** triggers `getResume`, rebuilds the
+  transcript from completed turns, appends `current_question` as the current interviewer line, and
+  speaks it (409/403/404 → redirect home); **fresh** is the unchanged firstMessage seed.
+- `helpers.ts` / `constants.ts` — `load/addIgnoredInterviewId` + `IGNORED_INTERVIEWS_STORAGE_KEY`.
+
+**Deferred / not gaps:** InterviewsPage's row list stays static mock — only the banner was added
+there (the resumable-row highlight would need the table wired to real data, a separate effort). A
+`/session` hard-refresh intentionally bounces home (see the SessionLayout refresh guard) rather than
+self-recovering in place — the banner offers a clean resume; no deep-link `/session/:id` recovery yet.

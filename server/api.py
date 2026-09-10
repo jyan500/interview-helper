@@ -117,8 +117,10 @@ from tools.interview import (
     create_interview,
     get_interview,
     get_scorecard,
+    get_resumable_interview,
     list_interviews,
     load_interview_state,
+    load_resume_payload,
     open_turn,
     record_answer,
     save_interview_state,
@@ -688,9 +690,22 @@ async def scorecard(
 # request for an attacker to tamper with — "my history" can't be widened to "someone else's"
 # because the only identity in play is the one auth.py proved. That's why this route needs no
 # separate require_ownership call: the ownership IS the query.
+#
+# `?resumable=true` NARROWS this same route to the ONE resumable interview (the resume banner's
+# question), so the client asks the backend "which one can I resume?" rather than pulling the whole
+# history and filtering. It reuses this endpoint (not a new one) and returns the SAME
+# {"interviews": [...]} shape — a 0-or-1-element list — so the frontend reads `interviews[0]`.
 # ===========================================================================
 @app.get("/api/interviews")
-async def my_interviews(user_id: str = Depends(require_user)) -> dict:
+async def my_interviews(
+    user_id: str = Depends(require_user),
+    resumable: bool = False,
+) -> dict:
+    if resumable:
+        # just the most-recently-active unfinished interview (a single indexed LIMIT 1), wrapped in
+        # the same list shape so the response type doesn't fork.
+        card = await get_resumable_interview(user_id)
+        return {"interviews": [card] if card is not None else []}
     result = await list_interviews(user_id)
     return {"interviews": result["interviews"]}
 
@@ -724,6 +739,56 @@ async def interview_detail(
         "summary": interview["summary"],
         # null until this interview has been graded (or until get_scorecard is implemented).
         "scorecard": card if card.get("status") == "ok" else None,
+    }
+
+
+# ===========================================================================
+# GET /api/interviews/{interview_id}/resume : reopen an in-progress interview.
+#
+# The counterpart to the History detail view above, for the OTHER kind of "reopen": not a
+# finished interview to review, but an UNFINISHED one to keep answering. It returns exactly
+# what SessionPage needs to redraw the screen — the transcript so far + the question currently
+# on the table (the open turn) — after which the normal /api/answer loop continues untouched,
+# because the interview's whole state (message_history, the open turn, the probe budget) has
+# been sitting in Postgres the entire time. Resume is a READ; it mutates nothing.
+#
+# GUARD ORDER extends the usual exists -> owns -> state ladder with the PRODUCT RULE:
+#   exists (404) -> owns (403) -> not already finished (409) -> IS the most recent
+#   unfinished interview for this user (409).
+# That last check is why this can't just be the detail route with a flag: detail must serve
+# ANY owned interview (History reviews old, finished ones), whereas resume is deliberately
+# narrowed to the single most-recent unfinished one. Enforcing it HERE (not only by hiding the
+# button in the UI) means a hand-crafted request can't reopen a stale interview.
+# ===========================================================================
+@app.get("/api/interviews/{interview_id}/resume")
+async def resume_interview(
+    interview_id: str,
+    user_id: str = Depends(require_user),
+) -> dict:
+    payload = await load_resume_payload(interview_id)
+    if payload["status"] != "ok":
+        raise HTTPException(status_code=404, detail="unknown interview")
+    require_ownership(payload["profile_id"], user_id)
+    if payload["done"]:
+        raise HTTPException(status_code=409, detail="this interview is already finished")
+
+    # THE PRODUCT RULE, enforced server-side: only the most recent unfinished interview is
+    # resumable. The SAME query the banner uses (get_resumable_interview) decides which that is, so
+    # the affordance and the guard can't disagree; a mismatch means a newer unfinished interview has
+    # superseded this one (e.g. the user started another), so this one is no longer resumable.
+    resumable = await get_resumable_interview(user_id)
+    if resumable is None or resumable["interview_id"] != interview_id:
+        raise HTTPException(
+            status_code=409,
+            detail="only the most recent unfinished interview can be resumed",
+        )
+
+    return {
+        "interview_id": payload["interview_id"],
+        "role": payload["role"],
+        "level": payload["level"],
+        "turns": payload["turns"],
+        "current_question": payload["current_question"],
     }
 
 

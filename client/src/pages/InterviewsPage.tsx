@@ -11,6 +11,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
 import AppNav from "../components/AppNav";
+import ResumeBanner from "../components/ResumeBanner";
 
 type Row = {
     id: string;
@@ -65,6 +66,10 @@ export default function InterviewsPage() {
                             New interview
                         </button>
                     </div>
+
+                    {/* Unfinished session banner — the same affordance as the Dashboard, so a user
+                        landing here can resume without a detour home. Renders only when one exists. */}
+                    <ResumeBanner className="mt-5" />
 
                     {/* Filter row */}
                     <div className="mt-5 flex flex-wrap items-center gap-2.5">
