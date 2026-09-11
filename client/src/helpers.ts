@@ -60,6 +60,14 @@ export function formatShortDate(iso: string): string {
 }
 
 /**
+ * A "6:30 PM" clock time for a single transcript turn, from an ISO timestamp (InterviewTurn.at).
+ * Just hours:minutes — the header already carries the date, so each message row shows only its time.
+ */
+export function formatTime(iso: string): string {
+    return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+}
+
+/**
  * A scorecard's overall (already round(,2) server-side) as a table cell reads it: always at least one
  * decimal so a whole number shows as "4.0" not "4", but keeping the second decimal when there is one
  * ("4.25"). Matches how the mocks render scores.

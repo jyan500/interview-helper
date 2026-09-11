@@ -130,6 +130,9 @@ export interface InterviewTurn extends TurnBase {
 // a live grade uses, so <ScorecardView> renders it unchanged.
 export interface InterviewDetail {
     interview_id: string;
+    role: string; // human-readable name ("Backend Engineer") — for the detail header
+    level: string; // human-readable name ("Entry level") — for the detail header
+    created_at: string; // ISO timestamp — the header date
     turns: InterviewTurn[];
     summary: string | null;
     scorecard: Scorecard | null;

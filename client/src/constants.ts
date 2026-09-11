@@ -136,4 +136,6 @@ export const MIC_SILENCE_LEVEL = 0.05;
 export const MIC_SILENCE_MS = 2500;
 
 export const PAGE_SIZE = 12
-export const LOADING_BAR = "inline-block h-3.5 animate-pulse rounded bg-neutral-800";
+// The shimmer look for loading placeholders — animation + shape + fill only. Each consumer adds its
+// own height (and inline-block/width) so one bar's dimensions don't leak into every skeleton.
+export const SHIMMER = "animate-pulse rounded bg-neutral-800";

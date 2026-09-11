@@ -1,7 +1,7 @@
-import { LOADING_BAR } from "../constants"
+import { SHIMMER } from "../constants"
 
 export const SkeletonText = () => {
 	return (
-		<div className={"mt-2 animate-pulse" + LOADING_BAR}></div>
+		<div className={"mt-2 inline-block h-3.5 " + SHIMMER}></div>
 	)
 }
