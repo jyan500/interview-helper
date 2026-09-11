@@ -417,6 +417,8 @@ async def list_interviews(
     q: str | None = None,
     role: str | None = None,
     level: str | None = None,
+    sort: str | None = None,
+    order: str | None = None,
 ) -> dict:
     """A PAGE of one user's interviews, newest first, optionally filtered — backs GET /api/interviews.
 
@@ -437,8 +439,15 @@ async def list_interviews(
 
     Returns the Page envelope {items, total, page, size, pages} — items are `_interview_card` dicts.
     The SAME envelope the `?resumable=true` path returns (a 0-or-1 page), so one response type serves
-    the whole endpoint. Sort is `updated_at desc` — "last active" first, what a resume/review list wants.
+    the whole endpoint.
+
+    SORT: the default is `updated_at desc` — "last active" first, what a resume/review list wants. The
+    Interviews page's Date and Score column arrows override it via `sort` ("date"|"score") + `order`
+    ("asc"|"desc"); anything else falls back to the default. Score lives on the 1:1 scorecard, so that
+    branch LEFT-joins it (ungraded interviews still appear) and keeps their NULL score at the bottom
+    regardless of direction — an ungraded row is never "the best" or "the worst" score.
     """
+    descending = order != "asc"  # default desc; only an explicit "asc" flips it
     async with get_session() as db:
         stmt = select(Interview).where(Interview.profile_id == profile_id)
         if q or role:
@@ -451,7 +460,15 @@ async def list_interviews(
             stmt = stmt.where(Level.slug == level)
         if q:
             stmt = stmt.where(or_(Role.name.ilike(f"%{q}%"), Level.name.ilike(f"%{q}%")))
-        stmt = stmt.order_by(Interview.updated_at.desc())
+        if sort == "date":
+            col = Interview.created_at
+            stmt = stmt.order_by(col.desc() if descending else col.asc())
+        elif sort == "score":
+            stmt = stmt.outerjoin(Interview.scorecard)
+            col = Scorecard.overall
+            stmt = stmt.order_by((col.desc() if descending else col.asc()).nulls_last())
+        else:
+            stmt = stmt.order_by(Interview.updated_at.desc())
         page = await apaginate(db, stmt, params)
         return {
             "items": [_interview_card(iv) for iv in page.items],

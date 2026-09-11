@@ -19,18 +19,32 @@ import type { InterviewSummary } from "../api";
 import { formatShortDate, formatScore } from "../helpers";
 import { PAGE_SIZE } from "../constants"
 import { SkeletonRow } from "./SkeletonRow"
+import SortableHeader from "./SortableHeader"
 
+// The two columns the Interviews page lets you sort by, and the direction. Exported so the page
+// (which owns the URL that holds the applied sort) speaks the same vocabulary as the header arrows.
+export type SortField = "date" | "score";
+export type SortOrder = "asc" | "desc";
 
 export default function InterviewsTable({
     interviews,
     resumableId = null,
     loading = false,
     skeletonRows = 8,
+    sort = null,
+    order = "desc",
+    onSort,
 }: {
     interviews: InterviewSummary[];
     resumableId?: string | null;
     loading?: boolean;
     skeletonRows?: number;
+    // Sort is opt-in: only the standalone Interviews page passes `onSort`, so its Date/Score
+    // headers become clickable arrows. The Dashboard card omits it and keeps plain headers — it
+    // shows a fixed "newest few" slice, so a sort control there would be meaningless.
+    sort?: SortField | null;
+    order?: SortOrder;
+    onSort?: (field: SortField) => void;
 }) {
     const navigate = useNavigate();
 
@@ -63,8 +77,17 @@ export default function InterviewsTable({
                 <thead>
                     <tr>
                         <th>Interview</th>
-                        <th>Date</th>
-                        <th>Score</th>
+                        {onSort ? (
+                            <>
+                                <SortableHeader label="Date" field="date" activeField={sort} order={order} onSort={onSort} />
+                                <SortableHeader label="Score" field="score" activeField={sort} order={order} onSort={onSort} />
+                            </>
+                        ) : (
+                            <>
+                                <th>Date</th>
+                                <th>Score</th>
+                            </>
+                        )}
                         <th></th>
                     </tr>
                 </thead>
