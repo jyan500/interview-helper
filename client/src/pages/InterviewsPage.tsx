@@ -143,7 +143,10 @@ export default function InterviewsPage() {
         window.scrollTo({ top: 0, behavior: "smooth" });
     }
 
+    // Reveal "Clear" whenever the view diverges from the default — an active filter OR an applied
+    // sort — since Clear resets the whole URL (filters and sort alike), it's the undo for both.
     const hasFilters = Boolean(queryArgs.q || roleSlug || levelSlug);
+    const canReset = hasFilters || sortField !== null;
 
     return (
         <div className="min-h-screen bg-bg text-ink">
@@ -200,7 +203,7 @@ export default function InterviewsPage() {
                         <button type="submit" className="btn btn-primary text-[13px]">
                             Search
                         </button>
-                        {hasFilters && (
+                        {canReset && (
                             <button type="button" className="btn btn-ghost text-[13px]" onClick={clearFilters}>
                                 Clear
                             </button>
