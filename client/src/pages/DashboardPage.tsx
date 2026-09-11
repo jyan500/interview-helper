@@ -68,7 +68,7 @@ export default function DashboardPage() {
     // Past interviews — the full history (for the count + the newest few rows) and, separately, the
     // one resumable interview so the table can show its Resume button. Both come back in the same
     // {interviews:[...]} shape; the resumable query narrows server-side to a 0-or-1-element list.
-    const { data: interviewsData } = useGetMyInterviewsQuery({ size: DASHBOARD_ROWS });
+    const { data: interviewsData, isFetching } = useGetMyInterviewsQuery({ size: DASHBOARD_ROWS });
     const { data: resumableData } = useGetMyInterviewsQuery({ resumable: true });
     const interviews = interviewsData?.items ?? [];
     const resumableId = resumableData?.items[0]?.interview_id ?? null;
@@ -165,7 +165,12 @@ export default function DashboardPage() {
                                     View all
                                 </Link>
                             </div>
-                            <InterviewsTable interviews={interviews} resumableId={resumableId} />
+                            <InterviewsTable
+                                interviews={interviews}
+                                resumableId={resumableId}
+                                loading={isFetching}
+                                skeletonRows={DASHBOARD_ROWS}
+                            />
                         </div>
                     </div>
 

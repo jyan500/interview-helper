@@ -36,6 +36,7 @@ import InterviewsTable from "../components/InterviewsTable";
 import Pagination from "../components/Pagination";
 import { optionFromSlug } from "../helpers";
 import { PAGE_SIZE } from "../constants"
+import { SkeletonText } from "../components/SkeletonText"
 
 // The filter form: the search text plus the two picker Options. Each Option is { value: slug, label:
 // name } so it feeds straight into the async select and back into the URL as role/level.
@@ -136,9 +137,6 @@ export default function InterviewsPage() {
                             <h1 className="font-heading text-[30px] font-medium leading-[1.1] tracking-[-0.02em]">
                                 Past interviews
                             </h1>
-                            <p className="mt-1.5 text-[13.5px] text-neutral-400">
-                                {data?.total ?? 0} sessions
-                            </p>
                         </div>
                         {/* Starting an interview needs the role/level pickers, which live in the Dashboard's
                             "Start an interview" card — so send the user there rather than duplicate the
