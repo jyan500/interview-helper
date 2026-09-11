@@ -1,0 +1,2 @@
+# Local-only dev/test seeders (fake data written straight to the DB) — never committed.
+seed_test/

@@ -45,7 +45,9 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import select
+from fastapi_pagination import Params
+from fastapi_pagination.ext.sqlalchemy import apaginate
+from sqlalchemy import or_, select
 
 from db.engine import get_session
 from db.models import (
@@ -392,48 +394,71 @@ async def save_interview_summary(interview_id: str, feedback: str) -> dict:
 # ===========================================================================
 
 
-async def list_interviews(profile_id: str) -> dict:
-    """Every interview belonging to one user, newest first — backs GET /api/interviews.
+def _interview_card(iv: Interview) -> dict:
+    """One interview as the History list / dashboard table renders it — the SUMMARY, not the
+    transcript. role/level are the human-readable NAMES (both relationships are selectin-loaded,
+    so reading them is free), and `overall` is the grade if scored else None (the 1:1
+    `interview.scorecard` is selectin-loaded too). The ONE card shape, shared by the list, the
+    `?resumable=true` narrowing, and get_resumable_interview so they can't drift apart."""
+    return {
+        "interview_id": iv.slug,
+        "role": iv.role.name,
+        "level": iv.level.name,
+        "created_at": iv.created_at.isoformat(),
+        "done": iv.done,
+        "overall": iv.scorecard.overall if iv.scorecard is not None else None,
+    }
 
-    WORKED EXAMPLE — the owner-scoped LIST. The single new idea vs get_interview is the WHERE
-    clause: `Interview.profile_id == profile_id`. That one predicate is the entire difference
-    between "my history" and "everyone's interviews", so it is the line to get right. The
-    caller (api.py) passes the *verified* uid from the JWT, never an id from the request body
-    — otherwise "list interviews" becomes "list ANYONE's interviews by guessing a uuid".
 
-    Returns {"ok": True, "interviews": [ {card}, ... ]}. Each card is the SUMMARY the History
-    list renders — deliberately NOT the transcript (that's the detail view's job, one row at a
-    time). `overall` is the interview's grade if it's been scored, else None: the 1:1
-    `interview.scorecard` relationship is selectin-loaded, so reading it here costs no extra
-    query per row.
+async def list_interviews(
+    profile_id: str,
+    params: Params,
+    *,
+    q: str | None = None,
+    role: str | None = None,
+    level: str | None = None,
+) -> dict:
+    """A PAGE of one user's interviews, newest first, optionally filtered — backs GET /api/interviews.
 
-    NOTE the sort: `updated_at` descending. `updated_at` doubles as "last active" (every
-    /api/answer write bumps it), so most-recently-touched floats to the top — which is what a
-    "resume / review" list wants, over creation order.
+    WORKED EXAMPLE — the owner-scoped LIST. The single line that matters for security is the WHERE
+    clause `Interview.profile_id == profile_id`: that one predicate is the entire difference between
+    "my history" and "everyone's interviews". The caller (api.py) passes the *verified* uid from the
+    JWT, never an id from the request body — otherwise this becomes "list ANYONE's interviews".
+
+    PAGING is the library's (fastapi-pagination's `apaginate` runs the COUNT + LIMIT/OFFSET over our
+    statement), FILTERING is ours — the same division of labour as list_roles/list_levels:
+      - role / level: the vocab SLUG (the wire's identifier everywhere). Matched via a join to the
+        Role/Level table on its unique slug — the id stays internal.
+      - q: a case-insensitive substring match on the role OR level NAME (deliberately narrow — not
+        question/transcript text).
+    Each relationship is joined AT MOST ONCE (guarded on whether any filter references it), which is
+    why q + role can coexist without joining Role twice. The joins are 1:1 so they can't multiply
+    rows; selectin still loads role/level for display via its own query — these joins are WHERE-only.
+
+    Returns the Page envelope {items, total, page, size, pages} — items are `_interview_card` dicts.
+    The SAME envelope the `?resumable=true` path returns (a 0-or-1 page), so one response type serves
+    the whole endpoint. Sort is `updated_at desc` — "last active" first, what a resume/review list wants.
     """
     async with get_session() as db:
-        result = await db.execute(
-            select(Interview)
-            .where(Interview.profile_id == profile_id)
-            .order_by(Interview.updated_at.desc())
-        )
-        interviews = result.scalars().all()
+        stmt = select(Interview).where(Interview.profile_id == profile_id)
+        if q or role:
+            stmt = stmt.join(Interview.role)
+        if q or level:
+            stmt = stmt.join(Interview.level)
+        if role:
+            stmt = stmt.where(Role.slug == role)
+        if level:
+            stmt = stmt.where(Level.slug == level)
+        if q:
+            stmt = stmt.where(or_(Role.name.ilike(f"%{q}%"), Level.name.ilike(f"%{q}%")))
+        stmt = stmt.order_by(Interview.updated_at.desc())
+        page = await apaginate(db, stmt, params)
         return {
-            "ok": True,
-            "interviews": [
-                {
-                    "interview_id": iv.slug,
-                    # role/level as the human-readable NAME (the list shows it to a person);
-                    # both relationships are selectin-loaded on the interview.
-                    "role": iv.role.name,
-                    "level": iv.level.name,
-                    "created_at": iv.created_at.isoformat(),
-                    "done": iv.done,
-                    # the grade if graded, else None — the History list shows "—" for ungraded.
-                    "overall": iv.scorecard.overall if iv.scorecard is not None else None,
-                }
-                for iv in interviews
-            ],
+            "items": [_interview_card(iv) for iv in page.items],
+            "total": page.total,
+            "page": page.page,
+            "size": page.size,
+            "pages": page.pages,
         }
 
 
@@ -666,14 +691,7 @@ async def get_resumable_interview(profile_id: str) -> dict | None:
         ).scalar_one_or_none()
         if interview is None:
             return None
-        return {
-            "interview_id": interview.slug,
-            "role": interview.role.name,
-            "level": interview.level.name,
-            "created_at": interview.created_at.isoformat(),
-            "done": interview.done,
-            "overall": interview.scorecard.overall if interview.scorecard is not None else None,
-        }
+        return _interview_card(interview)
 
 
 async def load_resume_payload(interview_id: str) -> dict:

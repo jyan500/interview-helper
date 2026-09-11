@@ -2,6 +2,7 @@
  * Small, dependency-free UI helpers shared across pages. Pure functions only — no React, no
  * network, no module state — so they're trivial to reuse and to reason about.
  */
+import type { SelectOption } from "./components/AsyncPaginateSelect";
 import { IGNORED_INTERVIEWS_STORAGE_KEY, MIC_DEVICE_STORAGE_KEY } from "./constants";
 
 /**
@@ -65,4 +66,14 @@ export function formatShortDate(iso: string): string {
  */
 export function formatScore(overall: number): string {
     return Number.isInteger(overall) ? overall.toFixed(1) : String(overall);
+}
+
+/**
+ * A react-select Option seeded from a filter slug in the URL (e.g. role). Its value is the slug; the
+ * label STARTS as the slug (a placeholder) so a form's draft mirrors the applied filter even before the
+ * real name is fetched, and the caller swaps in the fetched name once it resolves. Null when there's
+ * no slug.
+ */
+export function optionFromSlug(slug: string | null): SelectOption | null {
+    return slug ? { value: slug, label: slug } : null;
 }

@@ -34,13 +34,16 @@ export interface StartInterviewRequest {
 }
 // Phase D — the picker's options, from GET /api/roles and GET /api/levels. Each row pairs the
 // slug the client sends back with the name it shows the user (see list_roles/list_levels).
-export interface RolePageItem {
+// The fields every paginated lookup row shares: the `slug` (the app's outward identifier everywhere —
+// what both STARTING an interview and FILTERING the history send back) and the display `name`. The int
+// id stays internal to the DB and never crosses the wire. Role/level rows extend this, and a future
+// paginated lookup (question types, tags, …) can reuse the same base rather than re-declaring the pair.
+export interface BasePageItem {
     slug: string;
     name: string;
 }
-export interface LevelPageItem {
-    slug: string;
-    name: string;
+export type RolePageItem = BasePageItem;
+export interface LevelPageItem extends BasePageItem {
     rank: number; // entry(1) < mid(2) < senior(3) — the picker renders in this order
 }
 // The server-side pagination envelope, mirroring fastapi-pagination's Page[T] (see api.py's
@@ -109,9 +112,6 @@ export interface InterviewSummary {
     created_at: string; // ISO timestamp
     done: boolean;
     overall: number | null; // the grade, or null if never scored
-}
-export interface MyInterviewsResponse {
-    interviews: InterviewSummary[];
 }
 // The fields every turn carries regardless of who's reading it — the exchange minus its answer.
 // InterviewTurn and ResumeTurn share these and differ ONLY in the `answer` type (see each).
@@ -327,12 +327,13 @@ export const interviewApi = createApi({
         // between /api/interviews and /api/interview. RTK Query caches it and re-fetches on mount,
         // so finishing an interview and clicking History shows it without a manual refresh.
         // Phase C — the History LIST, and (with { resumable: true }) the resume banner's single
-        // question. The arg is an optional generic params bag: no arg = the full history; passing
-        // e.g. { resumable: true } narrows it server-side to the one resumable interview, returned
-        // in the SAME {interviews:[...]} shape as a 0-or-1-element list, so the banner reads
-        // `interviews[0]`. Both variants provide the "Interviews" tag, so starting/answering/grading
-        // invalidates both.
-        getMyInterviews: builder.query<MyInterviewsResponse, QueryParams | void>({
+        // question. The arg is an optional generic params bag: no arg = the full history; add
+        // { page, size, q, role, level } to page/filter it (the Interviews page does), or
+        // { resumable: true } to narrow it server-side to the one resumable interview. Every variant
+        // returns the SAME Page envelope {items,total,page,size,pages} — the resumable/empty cases are
+        // just a 0-or-1-item page, so the banner reads `items[0]`. All variants provide the "Interviews"
+        // tag, so starting/answering/grading invalidates them.
+        getMyInterviews: builder.query<Page<InterviewSummary>, QueryParams | void>({
             query: (params) => ({ url: "/interviews", params: params || {} }),
             providesTags: ["Interviews"],
         }),
@@ -359,6 +360,15 @@ export const interviewApi = createApi({
         getLevels: builder.query<Page<LevelPageItem>, OptionPageQuery>({
             query: ({ q = "", page = 1 }) => `/levels?q=${encodeURIComponent(q)}&page=${page}`,
         }),
+        // Resolve ONE role/level by its slug — backs GET /api/roles/{slug} + /api/levels/{slug}. The
+        // Interviews-page filter uses these to turn a role/level slug from the URL into the current
+        // NAME to show in its picker, so the label reflects the live row instead of a cached copy.
+        getRole: builder.query<RolePageItem, string>({
+            query: (slug) => `/roles/${encodeURIComponent(slug)}`,
+        }),
+        getLevel: builder.query<LevelPageItem, string>({
+            query: (slug) => `/levels/${encodeURIComponent(slug)}`,
+        }),
     }),
 });
 
@@ -379,4 +389,8 @@ export const {
     // can .unwrap() — exactly what an async loadOptions needs.
     useLazyGetRolesQuery,
     useLazyGetLevelsQuery,
+    // By-slug vocab lookups — the Interviews filter hydrates its picker labels from a role/level slug
+    // in the URL. Pass skipToken when there's no slug so the query doesn't fire.
+    useGetRoleQuery,
+    useGetLevelQuery,
 } = interviewApi;

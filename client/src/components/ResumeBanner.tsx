@@ -5,8 +5,8 @@
  * WHY IT OWNS ITS OWN DATA: the "resumable" interview is a derived fact — the most-recently-active
  * one that isn't finished — and both host pages want the SAME answer. So the banner asks for it
  * directly (getMyInterviews with { resumable: true }, which the backend narrows to that one
- * interview) rather than each page pulling the whole history and filtering. It comes back in the
- * list shape as a 0-or-1-element array, so `interviews[0]` is the resumable one (or undefined).
+ * interview) rather than each page pulling the whole history and filtering. It comes back as a
+ * 0-or-1-item page, so `items[0]` is the resumable one (or undefined).
  *
  * "Only the most recent is resumable" is enforced server-side (resume_interview 409s otherwise);
  * this component is just the affordance. "Ignore" dismisses the banner for that interview WITHOUT
@@ -25,8 +25,8 @@ export default function ResumeBanner({ className = "" }: { className?: string })
     // immediately (the persisted copy is for the NEXT load).
     const [ignored, setIgnored] = useState<string[]>(loadIgnoredInterviewIds);
 
-    // The backend returns a 0-or-1-element list, so the resumable interview is the first (or none).
-    const resumable = data?.interviews[0];
+    // The backend returns a 0-or-1-item page, so the resumable interview is the first (or none).
+    const resumable = data?.items[0];
     if (!resumable || ignored.includes(resumable.interview_id)) return null;
 
     function onResume() {

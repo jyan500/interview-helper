@@ -42,12 +42,12 @@ export default function HistoryPage() {
 
             {isLoading && <p className="text-slate-600">Loading…</p>}
             {error && <p className="text-red-700">Couldn't load your interviews.</p>}
-            {data && data.interviews.length === 0 && (
+            {data && data.items.length === 0 && (
                 <p className="text-slate-600">No interviews yet — finish one and it'll show up here.</p>
             )}
 
             <ul className="space-y-2">
-                {data?.interviews.map((iv) => (
+                {data?.items.map((iv) => (
                     <li key={iv.interview_id}>
                         <button
                             onClick={() => setSelectedId(iv.interview_id)}

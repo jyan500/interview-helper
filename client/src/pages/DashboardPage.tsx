@@ -29,7 +29,8 @@ type StartFormValues = {
     level: SelectOption | null;
 };
 
-// How many recent interviews the dashboard card shows before "View all" takes over.
+// How many recent interviews the dashboard card shows before "View all" takes over. Sent as the
+// page `size` so the server returns just this many (page 1, newest first) rather than the whole history.
 const DASHBOARD_ROWS = 5;
 
 // Static skill bars. The weakest one uses accent-300 so it reads as the low bar.
@@ -67,10 +68,10 @@ export default function DashboardPage() {
     // Past interviews — the full history (for the count + the newest few rows) and, separately, the
     // one resumable interview so the table can show its Resume button. Both come back in the same
     // {interviews:[...]} shape; the resumable query narrows server-side to a 0-or-1-element list.
-    const { data: interviewsData } = useGetMyInterviewsQuery();
+    const { data: interviewsData } = useGetMyInterviewsQuery({ size: DASHBOARD_ROWS });
     const { data: resumableData } = useGetMyInterviewsQuery({ resumable: true });
-    const interviews = interviewsData?.interviews ?? [];
-    const resumableId = resumableData?.interviews[0]?.interview_id ?? null;
+    const interviews = interviewsData?.items ?? [];
+    const resumableId = resumableData?.items[0]?.interview_id ?? null;
 
     // The KICKOFF: POST /api/interview, then hand the fresh interview to /session via route state
     // (SessionLayout guards on it; SessionPage seeds the first question + speaks it from firstMessage).
@@ -164,10 +165,7 @@ export default function DashboardPage() {
                                     View all
                                 </Link>
                             </div>
-                            <InterviewsTable
-                                interviews={interviews.slice(0, DASHBOARD_ROWS)}
-                                resumableId={resumableId}
-                            />
+                            <InterviewsTable interviews={interviews} resumableId={resumableId} />
                         </div>
                     </div>
 

@@ -10,19 +10,38 @@
  *
  * PURE PRESENTATION: the caller owns the fetch and hands in the rows it wants shown (the
  * Dashboard slices to a few recent ones; the Interviews page passes the full list) plus the
- * resumable id. Loading/error states live with the caller too, since their surrounding chrome
- * differs; this only renders the table, or a short empty line when there are no rows.
+ * resumable id. Error state lives with the caller too, since their surrounding chrome differs;
+ * this renders the table, a short empty line when there are no rows, or — while `loading` — a
+ * shimmer skeleton in the same shape, so a re-fetch (page/filter change) doesn't flash stale rows.
  */
 import { useNavigate } from "react-router";
 import type { InterviewSummary } from "../api";
 import { formatShortDate, formatScore } from "../helpers";
 
+// One shimmer placeholder row, matching the four columns. inline-block so the trailing bar honours
+// the cell's text-align (right) the way a real button would.
+function SkeletonRow() {
+    const bar = "inline-block h-3.5 animate-pulse rounded bg-neutral-800";
+    return (
+        <tr>
+            <td><span className={bar + " w-48"} /></td>
+            <td><span className={bar + " w-20"} /></td>
+            <td><span className={bar + " w-8"} /></td>
+            <td className="text-right"><span className={bar + " w-14"} /></td>
+        </tr>
+    );
+}
+
 export default function InterviewsTable({
     interviews,
     resumableId = null,
+    loading = false,
+    skeletonRows = 8,
 }: {
     interviews: InterviewSummary[];
     resumableId?: string | null;
+    loading?: boolean;
+    skeletonRows?: number;
 }) {
     const navigate = useNavigate();
 
@@ -40,7 +59,8 @@ export default function InterviewsTable({
         });
     }
 
-    if (interviews.length === 0) {
+    // Empty line only when we're settled with no rows — never mid-fetch, when the skeleton shows.
+    if (!loading && interviews.length === 0) {
         return (
             <p className="px-3 py-6 text-[13.5px] text-neutral-400">
                 No interviews yet — finish one and it'll show up here.
@@ -60,7 +80,8 @@ export default function InterviewsTable({
                     </tr>
                 </thead>
                 <tbody>
-                    {interviews.map((iv) => {
+                    {loading && Array.from({ length: skeletonRows }).map((_, i) => <SkeletonRow key={i} />)}
+                    {!loading && interviews.map((iv) => {
                         const isResumable = iv.interview_id === resumableId;
                         return (
                             <tr key={iv.interview_id}>
