@@ -17,6 +17,7 @@
 import { useNavigate } from "react-router";
 import type { InterviewSummary } from "../api";
 import { formatShortDate, formatScore } from "../helpers";
+import { PAGE_SIZE } from "../constants"
 
 // One shimmer placeholder row, matching the four columns. inline-block so the trailing bar honours
 // the cell's text-align (right) the way a real button would.

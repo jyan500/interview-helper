@@ -35,8 +35,7 @@ import ResumeBanner from "../components/ResumeBanner";
 import InterviewsTable from "../components/InterviewsTable";
 import Pagination from "../components/Pagination";
 import { optionFromSlug } from "../helpers";
-
-const PAGE_SIZE = 20;
+import { PAGE_SIZE } from "../constants"
 
 // The filter form: the search text plus the two picker Options. Each Option is { value: slug, label:
 // name } so it feeds straight into the async select and back into the URL as role/level.
