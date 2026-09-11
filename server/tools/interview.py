@@ -152,6 +152,13 @@ async def get_interview(interview_id: str) -> dict:
             # bar. It's the levels.slug ("mid"), JSON-safe, and `interview.level` is selectin-
             # loaded (free), exactly like `load_interview_state` already returns it:
             "level": interview.level.slug,
+            # DISPLAY fields, for the History detail view's header (role · level, and the date).
+            # `level` above stays the SLUG because grading calibration reads it; these carry the
+            # human-readable NAMES + the created timestamp instead. All three come off the same
+            # selectin-loaded row, so no extra query — the detail endpoint just forwards them.
+            "role": interview.role.name,
+            "level_name": interview.level.name,
+            "created_at": interview.created_at.isoformat(),
             "turns": [
                 {
                     # the wire shape keeps the SLUG under the key "question_id", exactly as

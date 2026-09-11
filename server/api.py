@@ -746,6 +746,12 @@ async def interview_detail(
     card = await get_scorecard(interview_id)
     return {
         "interview_id": interview["interview_id"],
+        # display fields for the detail header (role · level, and the date). `level_name` is the
+        # human-readable name; get_interview's `level` is the slug (grading needs that), so the
+        # wire contract carries the name under the plain `level` the frontend header reads.
+        "role": interview["role"],
+        "level": interview["level_name"],
+        "created_at": interview["created_at"],
         "turns": interview["turns"],
         "summary": interview["summary"],
         # null until this interview has been graded (or until get_scorecard is implemented).
