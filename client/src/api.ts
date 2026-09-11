@@ -34,13 +34,16 @@ export interface StartInterviewRequest {
 }
 // Phase D — the picker's options, from GET /api/roles and GET /api/levels. Each row pairs the
 // slug the client sends back with the name it shows the user (see list_roles/list_levels).
-export interface RolePageItem {
+// The fields every paginated lookup row shares: the `slug` (the app's outward identifier everywhere —
+// what both STARTING an interview and FILTERING the history send back) and the display `name`. The int
+// id stays internal to the DB and never crosses the wire. Role/level rows extend this, and a future
+// paginated lookup (question types, tags, …) can reuse the same base rather than re-declaring the pair.
+export interface BasePageItem {
     slug: string;
     name: string;
 }
-export interface LevelPageItem {
-    slug: string;
-    name: string;
+export type RolePageItem = BasePageItem;
+export interface LevelPageItem extends BasePageItem {
     rank: number; // entry(1) < mid(2) < senior(3) — the picker renders in this order
 }
 // The server-side pagination envelope, mirroring fastapi-pagination's Page[T] (see api.py's
@@ -109,9 +112,6 @@ export interface InterviewSummary {
     created_at: string; // ISO timestamp
     done: boolean;
     overall: number | null; // the grade, or null if never scored
-}
-export interface MyInterviewsResponse {
-    interviews: InterviewSummary[];
 }
 // The fields every turn carries regardless of who's reading it — the exchange minus its answer.
 // InterviewTurn and ResumeTurn share these and differ ONLY in the `answer` type (see each).
@@ -276,7 +276,6 @@ export const interviewApi = createApi({
     // without a manual refresh.
     tagTypes: ["Interviews"],
     endpoints: (builder) => ({
-        // WORKED EXAMPLE — start an interview.
         // It's a MUTATION, not a query. Even though it "gets" the first question, the POST
         // CREATES server-side state — a row in `interviews` (a side effect). Rule of thumb:
         // queries = cacheable reads (GET), mutations = writes/actions (POST/PUT/DELETE). Same
@@ -322,22 +321,10 @@ export const interviewApi = createApi({
                 responseHandler: (response) => response.blob(),
             }),
         }),
-        // Phase C — the History LIST. A QUERY, not a mutation: it's a cacheable GET of existing
-        // rows (no side effect), the frontend mirror of the read-vs-write split the backend draws
-        // between /api/interviews and /api/interview. RTK Query caches it and re-fetches on mount,
-        // so finishing an interview and clicking History shows it without a manual refresh.
-        // Phase C — the History LIST, and (with { resumable: true }) the resume banner's single
-        // question. The arg is an optional generic params bag: no arg = the full history; passing
-        // e.g. { resumable: true } narrows it server-side to the one resumable interview, returned
-        // in the SAME {interviews:[...]} shape as a 0-or-1-element list, so the banner reads
-        // `interviews[0]`. Both variants provide the "Interviews" tag, so starting/answering/grading
-        // invalidates both.
-        getMyInterviews: builder.query<MyInterviewsResponse, QueryParams | void>({
+        getMyInterviews: builder.query<Page<InterviewSummary>, QueryParams | void>({
             query: (params) => ({ url: "/interviews", params: params || {} }),
             providesTags: ["Interviews"],
         }),
-        // Phase C — the History DETAIL: one interview by id. Also a query; the arg is the slug,
-        // interpolated into the path. Backs the drill-in transcript + remembered scorecard.
         getInterviewDetail: builder.query<InterviewDetail, string>({
             query: (interviewId) => `/interviews/${interviewId}`,
         }),
@@ -348,21 +335,21 @@ export const interviewApi = createApi({
         getResume: builder.query<ResumePayload, string>({
             query: (interviewId) => `/interviews/${interviewId}/resume`,
         }),
-        // Phase D — the picker's option lists, now PAGINATED + SEARCHABLE. Still queries
-        // (cacheable GETs of slow-changing vocab), but the arg is { q, page }: the AsyncPaginate
-        // select calls these imperatively from inside its loadOptions — once per keystroke/scroll —
-        // rather than once on mount. That's why the LAZY hooks are exported below: the picker owns
-        // WHEN to fetch. RTK Query still caches per distinct arg, so re-scrolling a page is free.
         getRoles: builder.query<Page<RolePageItem>, OptionPageQuery>({
             query: ({ q = "", page = 1 }) => `/roles?q=${encodeURIComponent(q)}&page=${page}`,
         }),
         getLevels: builder.query<Page<LevelPageItem>, OptionPageQuery>({
             query: ({ q = "", page = 1 }) => `/levels?q=${encodeURIComponent(q)}&page=${page}`,
         }),
+        getRole: builder.query<RolePageItem, string>({
+            query: (slug) => `/roles/${encodeURIComponent(slug)}`,
+        }),
+        getLevel: builder.query<LevelPageItem, string>({
+            query: (slug) => `/levels/${encodeURIComponent(slug)}`,
+        }),
     }),
 });
 
-// RTK Query generates one hook per endpoint. Export the ones the UI consumes.
 export const {
     useStartInterviewMutation,
     useSubmitAnswerMutation,
@@ -371,12 +358,9 @@ export const {
     useTtsMutation,
     useGetMyInterviewsQuery,
     useGetInterviewDetailQuery,
-    // Resume is lazy: SessionPage triggers it from its seed effect only when entering in resume
-    // mode, then rebuilds the transcript from the payload.
     useLazyGetResumeQuery,
-    // LAZY variants: the picker triggers these imperatively inside loadOptions (see App.tsx),
-    // not on mount. useLazy* returns [trigger, result] where trigger(arg) returns a promise you
-    // can .unwrap() — exactly what an async loadOptions needs.
     useLazyGetRolesQuery,
     useLazyGetLevelsQuery,
+    useGetRoleQuery,
+    useGetLevelQuery,
 } = interviewApi;

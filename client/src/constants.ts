@@ -134,3 +134,6 @@ export const MIC_LEVEL_FLOOR_DB = -60;
 export const MIC_LEVEL_CEIL_DB = -10;
 export const MIC_SILENCE_LEVEL = 0.05;
 export const MIC_SILENCE_MS = 2500;
+
+export const PAGE_SIZE = 12
+export const LOADING_BAR = "inline-block h-3.5 animate-pulse rounded bg-neutral-800";

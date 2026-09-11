@@ -1,46 +1,129 @@
 /**
- * Past interviews — list, Nocturne mock 3a. Every session, filterable, each reopenable.
+ * Past interviews — the full list, Nocturne mock 3a. Every session the signed-in user has run,
+ * each reopenable (and the most-recent unfinished one resumable).
  *
- * DESIGN/LAYOUT ONLY: static rows matching the handoff copy; the filter controls carry
- * local state so they toggle, but nothing filters the (static) list yet. Rows and the
- * "New interview" button route. Production wiring points are flagged `// TODO(wire)`.
+ * The list is InterviewsTable (shared with the Dashboard card); the rows come from GET /api/interviews,
+ * now server-side PAGED (20/page) and FILTERED. The filter surface is one react-hook-form form — a
+ * search box (matched against role/level name only, sent as `q`) and two async role/level pickers whose
+ * value is the vocab slug (sent as role/level) — and ONE submit applies all three together.
  *
- * Deliberate product decision from the handoff: mode (voice/text) is NOT shown here —
- * both are the same interview, stored as one text transcript.
+ * THE URL IS THE SOURCE OF TRUTH. The query args are derived from the query string every render, so a
+ * deep link like ?role=backend-engineer&page=2 reproduces exactly this view, and Back/Forward just work.
+ * The form only WRITES to the URL on submit; it never holds applied state the URL doesn't. The pickers
+ * show only the slug in the URL, so their labels are hydrated by fetching the role/level by slug
+ * (useGetRole/LevelQuery) — the live name, not a copy cached in the URL.
+ *
+ * Deliberate product decision from the handoff: mode (voice/text) is NOT shown here — both are the
+ * same interview, stored as one text transcript.
  */
-import { useState } from "react";
-import { useNavigate } from "react-router";
+import { useEffect } from "react";
+import { useNavigate, useSearchParams } from "react-router";
+import { useForm } from "react-hook-form";
+import { skipToken } from "@reduxjs/toolkit/query/react";
+import {
+    useGetLevelQuery,
+    useGetMyInterviewsQuery,
+    useGetRoleQuery,
+    useLazyGetLevelsQuery,
+    useLazyGetRolesQuery,
+    type QueryParams,
+} from "../api";
+import type { SelectOption } from "../components/AsyncPaginateSelect";
+import { ControlledAsyncPaginateSelect } from "../components/ControlledAsyncPaginateSelect";
 import AppNav from "../components/AppNav";
 import ResumeBanner from "../components/ResumeBanner";
+import InterviewsTable from "../components/InterviewsTable";
+import Pagination from "../components/Pagination";
+import { optionFromSlug } from "../helpers";
+import { PAGE_SIZE } from "../constants"
+import { SkeletonText } from "../components/SkeletonText"
 
-type Row = {
-    id: string;
-    role: string;
-    level: string;
-    date: string;
-} & (
-    | { status: "scored"; topic: string; questions: number; score: string }
-    | { status: "in-progress"; answered: number; questions: number }
-);
-
-const ROWS: Row[] = [
-    { id: "1", role: "Backend engineer", level: "Entry level", date: "27 Aug", status: "scored", topic: "Debugging under pressure", questions: 4, score: "4.25" },
-    { id: "2", role: "Product manager", level: "Entry level", date: "27 Aug", status: "scored", topic: "Prioritisation and stakeholders", questions: 5, score: "4.25" },
-    { id: "3", role: "Backend engineer", level: "Mid level", date: "27 Aug", status: "in-progress", answered: 2, questions: 6 },
-    { id: "4", role: "Backend engineer", level: "Mid level", date: "27 Aug", status: "scored", topic: "Caching and read scaling", questions: 6, score: "4.5" },
-    { id: "5", role: "Backend engineer", level: "Senior", date: "25 Aug", status: "scored", topic: "Incident response", questions: 5, score: "4.0" },
-    { id: "6", role: "Backend engineer", level: "Mid level", date: "25 Aug", status: "in-progress", answered: 1, questions: 6 },
-    { id: "7", role: "Product manager", level: "Entry level", date: "24 Aug", status: "scored", topic: "Roadmap tradeoffs", questions: 4, score: "3.0" },
-];
-
-const FILTERS = ["All", "Scored", "In progress"] as const;
-type Filter = (typeof FILTERS)[number];
-
-const GRID = "grid grid-cols-[1fr_110px_140px] gap-3.5";
+// The filter form: the search text plus the two picker Options. Each Option is { value: slug, label:
+// name } so it feeds straight into the async select and back into the URL as role/level.
+type FiltersForm = {
+    q: string;
+    role: SelectOption | null;
+    level: SelectOption | null;
+};
 
 export default function InterviewsPage() {
     const navigate = useNavigate();
-    const [filter, setFilter] = useState<Filter>("All");
+    const [searchParams, setSearchParams] = useSearchParams();
+
+    const [triggerRoles] = useLazyGetRolesQuery();
+    const [triggerLevels] = useLazyGetLevelsQuery();
+
+    // Query args derived from the URL every render — the results always match the query string.
+    const roleSlug = searchParams.get("role");
+    const levelSlug = searchParams.get("level");
+    const page = Number(searchParams.get("page")) || 1;
+    const queryArgs: QueryParams = {
+        page,
+        size: PAGE_SIZE,
+        q: searchParams.get("q") || undefined,
+        role: roleSlug || undefined,
+        level: levelSlug || undefined,
+    };
+
+    // isFetching (not isLoading) so the skeleton shows on EVERY refetch — a page or filter change —
+    // not just the first mount, and the stale rows are hidden behind it meanwhile.
+    const { data, isFetching, error } = useGetMyInterviewsQuery(queryArgs);
+    const { data: resumableData } = useGetMyInterviewsQuery({ resumable: true });
+    const interviews = data?.items ?? [];
+    const totalPages = data?.pages ?? 0;
+    const resumableId = resumableData?.items[0]?.interview_id ?? null;
+
+    // Resolve the current NAME for whichever role/level slug is in the URL, so the picker can show its
+    // label instead of the bare slug. skipToken = no slug, so the query stays idle.
+    const { data: roleData } = useGetRoleQuery(roleSlug ?? skipToken);
+    const { data: levelData } = useGetLevelQuery(levelSlug ?? skipToken);
+
+    // The filter form, seeded from the URL so a deep link's filters show selected. Applying happens only
+    // on submit (handleSubmit(applyFilters)); nothing here auto-fires, so the form is a plain draft.
+    const { control, register, handleSubmit, reset, setValue } = useForm<FiltersForm>({
+        defaultValues: {
+            q: searchParams.get("q") ?? "",
+            role: optionFromSlug(roleSlug),
+            level: optionFromSlug(levelSlug),
+        },
+    });
+
+    // Swap each picker's placeholder slug-label for the fetched name. Guarded on the slug still matching
+    // the URL so a cached result from a since-cleared filter can't repopulate the picker.
+    useEffect(() => {
+        if (roleData && roleData.slug === roleSlug)
+            setValue("role", { value: roleData.slug, label: roleData.name });
+    }, [roleData, roleSlug, setValue]);
+    useEffect(() => {
+        if (levelData && levelData.slug === levelSlug)
+            setValue("level", { value: levelData.slug, label: levelData.name });
+    }, [levelData, levelSlug, setValue]);
+
+    function applyFilters(values: FiltersForm) {
+        const next = new URLSearchParams();
+        if (values.q.trim()) next.set("q", values.q.trim());
+        if (values.role) next.set("role", values.role.value);
+        if (values.level) next.set("level", values.level.value);
+        // no `page` => page 1: a changed filter resets to the first page of the new result set.
+        setSearchParams(next);
+    }
+
+    // Clear both the form draft and the applied filters in the URL, without a navigation.
+    function clearFilters() {
+        reset({ q: "", role: null, level: null });
+        setSearchParams(new URLSearchParams());
+    }
+
+    function goToPage(p: number) {
+        const next = new URLSearchParams(searchParams);
+        next.set("page", String(p));
+        setSearchParams(next);
+        // The pager sits at the bottom, so a page change would otherwise leave the user staring at
+        // the footer of the new page — send them back to the top.
+        window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    const hasFilters = Boolean(queryArgs.q || roleSlug || levelSlug);
 
     return (
         <div className="min-h-screen bg-bg text-ink">
@@ -54,9 +137,6 @@ export default function InterviewsPage() {
                             <h1 className="font-heading text-[30px] font-medium leading-[1.1] tracking-[-0.02em]">
                                 Past interviews
                             </h1>
-                            <p className="mt-1.5 text-[13.5px] text-neutral-400">
-                                28 sessions · 14 scored · 6 still in progress
-                            </p>
                         </div>
                         {/* Starting an interview needs the role/level pickers, which live in the Dashboard's
                             "Start an interview" card — so send the user there rather than duplicate the
@@ -71,102 +151,59 @@ export default function InterviewsPage() {
                         landing here can resume without a detour home. Renders only when one exists. */}
                     <ResumeBanner className="mt-5" />
 
-                    {/* Filter row */}
-                    <div className="mt-5 flex flex-wrap items-center gap-2.5">
+                    {/* Filter row — one RHF form; Search (or Enter) applies the text AND both pickers at once. */}
+                    <form
+                        onSubmit={handleSubmit(applyFilters)}
+                        className="mt-5 flex flex-wrap items-center gap-2.5"
+                    >
                         <input
+                            {...register("q")}
                             className="input w-[280px] text-[13.5px]"
-                            placeholder="Search role, question or transcript…"
+                            placeholder="Search by role or level…"
                         />
-                        <div className="seg">
-                            {FILTERS.map((f) => (
-                                <button
-                                    key={f}
-                                    type="button"
-                                    className={"seg-opt" + (filter === f ? " is-active" : "")}
-                                    onClick={() => setFilter(f)}
-                                >
-                                    {f}
-                                </button>
-                            ))}
+                        <div className="w-[190px]">
+                            <ControlledAsyncPaginateSelect
+                                control={control}
+                                name="role"
+                                fetchPage={triggerRoles}
+                                placeholder="All roles"
+                            />
                         </div>
-                        <span className="tag tag-outline">All roles</span>
-                        <span className="tag tag-outline">All levels</span>
-                        <span className="ml-auto text-[13px] text-neutral-400">Sort: Newest first</span>
-                    </div>
+                        <div className="w-[190px]">
+                            <ControlledAsyncPaginateSelect
+                                control={control}
+                                name="level"
+                                fetchPage={triggerLevels}
+                                placeholder="All levels"
+                            />
+                        </div>
+                        <button type="submit" className="btn btn-primary text-[13px]">
+                            Search
+                        </button>
+                        {hasFilters && (
+                            <button type="button" className="btn btn-ghost text-[13px]" onClick={clearFilters}>
+                                Clear
+                            </button>
+                        )}
+                    </form>
                 </div>
 
-                {/* Rows */}
+                {/* List — the shared table, fed real (paged, filtered) data. */}
                 <div className="px-7 pb-[26px] pt-2">
-                    {/* Column header */}
-                    <div className={GRID + " kicker border-b border-divider px-3 pb-2"}>
-                        <span>Interview</span>
-                        <span>Date</span>
-                        <span className="text-right">Score</span>
-                    </div>
-
-                    {ROWS.map((row) => (
-                        <div
-                            key={row.id}
-                            className={GRID + " items-center rounded-sm border-b border-divider px-3 py-3.5 hover:bg-neutral-900"}
-                        >
-                            {/* Interview cell */}
-                            <div>
-                                <div className="text-[15px]">
-                                    {row.role} <span className="text-neutral-400">· {row.level}</span>
-                                </div>
-                                {row.status === "scored" ? (
-                                    <div className="mt-[3px] text-[12.5px] text-neutral-400">
-                                        {row.topic} · {row.questions} questions
-                                    </div>
-                                ) : (
-                                    <div className="mt-[3px] flex items-center gap-2 text-[12.5px] text-neutral-400">
-                                        <span className="h-[5px] w-[5px] rounded-full bg-accent" />
-                                        In progress · answered {row.answered} of {row.questions}
-                                    </div>
-                                )}
-                            </div>
-
-                            {/* Date */}
-                            <span className="text-[13.5px] text-neutral-300">{row.date}</span>
-
-                            {/* Score cell */}
-                            <div className="flex items-center justify-end gap-3">
-                                {row.status === "scored" ? (
-                                    <>
-                                        <span className="font-heading text-[19px]">
-                                            {row.score}
-                                            <span className="text-[13px] text-neutral-400">/5</span>
-                                        </span>
-                                        <button
-                                            className="btn btn-ghost text-[13px]"
-                                            onClick={() => navigate(`/interviews/${row.id}`)}
-                                        >
-                                            Open
-                                        </button>
-                                    </>
-                                ) : (
-                                    <>
-                                        <span className="text-[13.5px] text-neutral-400">Not scored</span>
-                                        <button
-                                            className="btn btn-primary text-[13px]"
-                                            onClick={() => navigate("/session")}
-                                        >
-                                            Resume
-                                        </button>
-                                    </>
-                                )}
-                            </div>
-                        </div>
-                    ))}
-
-                    {/* Footer / pagination */}
-                    <div className="mt-[18px] flex items-center justify-between text-[13px] text-neutral-400">
-                        <span>Showing 7 of 28</span>
-                        <div className="flex gap-2">
-                            <button className="btn btn-ghost text-[13px]">Previous</button>
-                            <button className="btn btn-secondary text-[13px]">Next</button>
-                        </div>
-                    </div>
+                    {error ? (
+                        <p className="px-3 py-6 text-[13.5px] text-gap">Couldn't load your interviews.</p>
+                    ) : (
+                        <>
+                            <InterviewsTable
+                                interviews={interviews}
+                                resumableId={resumableId}
+                                loading={isFetching}
+                            />
+                            {!isFetching && (
+                                <Pagination page={data?.page ?? page} totalPages={totalPages} onPageChange={goToPage} />
+                            )}
+                        </>
+                    )}
                 </div>
             </div>
         </div>

@@ -127,7 +127,9 @@ from tools.interview import (
     save_scorecard,
 )
 from tools.questions import (
+    get_level_by_slug,
     get_question,
+    get_role_by_slug,
     get_rubric,
     list_levels,
     list_roles,
@@ -698,16 +700,23 @@ async def scorecard(
 # ===========================================================================
 @app.get("/api/interviews")
 async def my_interviews(
+    params: Params = Depends(),
     user_id: str = Depends(require_user),
     resumable: bool = False,
+    q: str | None = None,
+    role: str | None = None,
+    level: str | None = None,
 ) -> dict:
+    # `?resumable=true` NARROWS to the ONE resumable interview (the banner's question). It returns the
+    # SAME page envelope as the full list — a 0-or-1-item page — so the client reads `items[0]` and the
+    # endpoint has one response shape. `params`/`q`/`role`/`level` don't apply to this branch.
     if resumable:
-        # just the most-recently-active unfinished interview (a single indexed LIMIT 1), wrapped in
-        # the same list shape so the response type doesn't fork.
         card = await get_resumable_interview(user_id)
-        return {"interviews": [card] if card is not None else []}
-    result = await list_interviews(user_id)
-    return {"interviews": result["interviews"]}
+        items = [card] if card is not None else []
+        return {"items": items, "total": len(items), "page": 1, "size": params.size, "pages": 1 if items else 0}
+    # The full history: server-side paged (page/size from the query string via `params`) and filtered
+    # by role/level SLUG + search — see list_interviews. Same {items,total,page,size,pages} envelope.
+    return await list_interviews(user_id, params, q=q, role=role, level=level)
 
 
 # ===========================================================================
@@ -826,6 +835,27 @@ async def levels(
     user_id: str = Depends(require_user),
 ):
     return await list_levels(params, search=q)
+
+
+# GET /api/roles/{slug} + /api/levels/{slug} : resolve ONE vocab row by its slug. These back the
+# Interviews-page filter, whose URL carries the role/level slug — the picker fetches the current NAME to
+# display from here rather than caching it in the URL, so the label always reflects the live row. A slug
+# with no row is a 404. Same require_user gate as the list routes (behind <ProtectedRoute>, touches no
+# user data).
+@app.get("/api/roles/{slug}", response_model=RoleOut)
+async def role_by_slug(slug: str, user_id: str = Depends(require_user)):
+    row = await get_role_by_slug(slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail="unknown role")
+    return row
+
+
+@app.get("/api/levels/{slug}", response_model=LevelOut)
+async def level_by_slug(slug: str, user_id: str = Depends(require_user)):
+    row = await get_level_by_slug(slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail="unknown level")
+    return row
 
 
 # NOTE — deliberately NOT calling `add_pagination(app)`. In fastapi-pagination 0.15.16 that helper

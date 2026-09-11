@@ -174,6 +174,24 @@ async def list_levels(params: Params, search: str | None = None):
         return await apaginate(db, stmt, params)
 
 
+# get_role_by_slug / get_level_by_slug — resolve ONE vocab row by its slug, backing GET
+# /api/roles/{slug} and /api/levels/{slug}. These exist for the Interviews-page filter: its URL carries
+# the role/level slug, and the picker needs the current NAME to display — fetched fresh here rather than
+# cached in the URL, so a renamed role shows its new name. Return the ORM row (the route's response_model
+# coerces it) or None for an unknown slug; only scalar columns are read, so use after the session closes
+# is safe. `slug` is unique+indexed, so this is a single index seek, not a scan.
+async def get_role_by_slug(slug: str) -> Role | None:
+    async with get_session() as db:
+        return (
+            await db.execute(select(Role).where(Role.slug == slug))
+        ).scalar_one_or_none()
+
+
+async def get_level_by_slug(slug: str) -> Level | None:
+    async with get_session() as db:
+        return (
+            await db.execute(select(Level).where(Level.slug == slug))
+        ).scalar_one_or_none()
 
 
 async def get_question(question_id: str) -> dict:

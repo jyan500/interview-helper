@@ -2,6 +2,7 @@
  * Small, dependency-free UI helpers shared across pages. Pure functions only — no React, no
  * network, no module state — so they're trivial to reuse and to reason about.
  */
+import type { SelectOption } from "./components/AsyncPaginateSelect";
 import { IGNORED_INTERVIEWS_STORAGE_KEY, MIC_DEVICE_STORAGE_KEY } from "./constants";
 
 /**
@@ -48,4 +49,31 @@ export function addIgnoredInterviewId(interviewId: string): void {
     const ids = loadIgnoredInterviewIds();
     if (ids.includes(interviewId)) return;
     localStorage.setItem(IGNORED_INTERVIEWS_STORAGE_KEY, JSON.stringify([...ids, interviewId]));
+}
+
+/**
+ * A compact "09/10/2026" date for the interview tables, from an ISO timestamp
+ * (InterviewSummary.created_at). en-US fixes the mm/dd/yyyy ordering regardless of the viewer's locale.
+ */
+export function formatShortDate(iso: string): string {
+    return new Date(iso).toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" });
+}
+
+/**
+ * A scorecard's overall (already round(,2) server-side) as a table cell reads it: always at least one
+ * decimal so a whole number shows as "4.0" not "4", but keeping the second decimal when there is one
+ * ("4.25"). Matches how the mocks render scores.
+ */
+export function formatScore(overall: number): string {
+    return Number.isInteger(overall) ? overall.toFixed(1) : String(overall);
+}
+
+/**
+ * A react-select Option seeded from a filter slug in the URL (e.g. role). Its value is the slug; the
+ * label STARTS as the slug (a placeholder) so a form's draft mirrors the applied filter even before the
+ * real name is fetched, and the caller swaps in the fetched name once it resolves. Null when there's
+ * no slug.
+ */
+export function optionFromSlug(slug: string | null): SelectOption | null {
+    return slug ? { value: slug, label: slug } : null;
 }
