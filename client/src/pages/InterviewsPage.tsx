@@ -32,7 +32,7 @@ import type { SelectOption } from "../components/AsyncPaginateSelect";
 import { ControlledAsyncPaginateSelect } from "../components/ControlledAsyncPaginateSelect";
 import AppNav from "../components/AppNav";
 import ResumeBanner from "../components/ResumeBanner";
-import InterviewsTable from "../components/InterviewsTable";
+import InterviewsTable, { type SortField, type SortOrder } from "../components/InterviewsTable";
 import Pagination from "../components/Pagination";
 import { optionFromSlug } from "../helpers";
 import { PAGE_SIZE } from "../constants"
@@ -57,12 +57,20 @@ export default function InterviewsPage() {
     const roleSlug = searchParams.get("role");
     const levelSlug = searchParams.get("level");
     const page = Number(searchParams.get("page")) || 1;
+    // Sort lives in the URL too, so a deep link reproduces the ordering and Back/Forward step
+    // through re-sorts. Only "date"/"score" are real columns; anything else means "no explicit
+    // sort", so the backend keeps its updated_at-desc default and the arrows show neutral.
+    const sortParam = searchParams.get("sort");
+    const sortField: SortField | null = sortParam === "date" || sortParam === "score" ? sortParam : null;
+    const sortOrder: SortOrder = searchParams.get("order") === "asc" ? "asc" : "desc";
     const queryArgs: QueryParams = {
         page,
         size: PAGE_SIZE,
         q: searchParams.get("q") || undefined,
         role: roleSlug || undefined,
         level: levelSlug || undefined,
+        sort: sortField || undefined,
+        order: sortField ? sortOrder : undefined,
     };
 
     // isFetching (not isLoading) so the skeleton shows on EVERY refetch — a page or filter change —
@@ -114,6 +122,18 @@ export default function InterviewsPage() {
         setSearchParams(new URLSearchParams());
     }
 
+    // Click a column arrow: the same column flips direction, a new column starts descending
+    // (newest / highest first). A re-sort returns to page 1 of the reordered set, but keeps the
+    // active filters — sorting a filtered list shouldn't clear the filter.
+    function onSort(field: SortField) {
+        const next = new URLSearchParams(searchParams);
+        const nextOrder = field === sortField && sortOrder === "desc" ? "asc" : "desc";
+        next.set("sort", field);
+        next.set("order", nextOrder);
+        next.delete("page");
+        setSearchParams(next);
+    }
+
     function goToPage(p: number) {
         const next = new URLSearchParams(searchParams);
         next.set("page", String(p));
@@ -123,7 +143,10 @@ export default function InterviewsPage() {
         window.scrollTo({ top: 0, behavior: "smooth" });
     }
 
+    // Reveal "Clear" whenever the view diverges from the default — an active filter OR an applied
+    // sort — since Clear resets the whole URL (filters and sort alike), it's the undo for both.
     const hasFilters = Boolean(queryArgs.q || roleSlug || levelSlug);
+    const canReset = hasFilters || sortField !== null;
 
     return (
         <div className="min-h-screen bg-bg text-ink">
@@ -180,7 +203,7 @@ export default function InterviewsPage() {
                         <button type="submit" className="btn btn-primary text-[13px]">
                             Search
                         </button>
-                        {hasFilters && (
+                        {canReset && (
                             <button type="button" className="btn btn-ghost text-[13px]" onClick={clearFilters}>
                                 Clear
                             </button>
@@ -198,6 +221,9 @@ export default function InterviewsPage() {
                                 interviews={interviews}
                                 resumableId={resumableId}
                                 loading={isFetching}
+                                sort={sortField}
+                                order={sortOrder}
+                                onSort={onSort}
                             />
                             {!isFetching && (
                                 <Pagination page={data?.page ?? page} totalPages={totalPages} onPageChange={goToPage} />
