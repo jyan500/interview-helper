@@ -11,6 +11,7 @@ import SessionLayout from "./pages/SessionLayout";
 import InterviewsPage from "./pages/InterviewsPage";
 import InterviewDetailPage from "./pages/InterviewDetailPage";
 import { AuthProvider } from "./auth/AuthProvider";
+import { ToastProvider } from "./toast/ToastProvider";
 import LoginPage from "./auth/LoginPage";
 import SignupPage from "./auth/SignupPage";
 import ForgotPasswordPage from "./auth/ForgotPasswordPage";
@@ -45,6 +46,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         <Provider store={store}>
             <BrowserRouter>
                 <AuthProvider>
+                    {/* Toasts — global, self-dismissing notifications. Inside AuthProvider so any
+                        page (all of them below) can useToast(); it renders its own fixed container. */}
+                    <ToastProvider>
                     <Routes>
                         {/* PUBLIC — reachable signed out, which is the entire point of them.
                             The Nocturne redesign adds the forgot/reset password flow (mock 4c);
@@ -78,6 +82,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                             mistyped URL doesn't linger in history. */}
                         <Route path="*" element={<Navigate to="/" replace />} />
                     </Routes>
+                    </ToastProvider>
                 </AuthProvider>
             </BrowserRouter>
         </Provider>

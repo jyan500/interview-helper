@@ -44,6 +44,7 @@ Quick test once filled in (from server/):
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from fastapi_pagination import Params
 from fastapi_pagination.ext.sqlalchemy import apaginate
@@ -53,6 +54,7 @@ from db.engine import get_session
 from db.models import (
     Interview,
     Level,
+    Profile,
     Question,
     Role,
     Scorecard,
@@ -664,6 +666,249 @@ async def get_scorecard(interview_id: str) -> dict:
 
 
     return {"status": "not_found"}
+
+
+# ===========================================================================
+# DASHBOARD & PROFILE — the signal panel's role-scoped aggregates, plus the per-user
+# default the panel and the kickoff form open on.
+#
+# Everything the dashboard shows already EXISTS in the scorecard rows — this section only
+# reads and reshapes it, no new stored facts. The three cards map straight onto the grade:
+#   Readiness       -> each graded interview's `scorecards.overall`, oldest -> newest (a trend)
+#   Skill breakdown -> per-dimension averages across those interviews' ScorecardEntryScore rows
+#   Work on next    -> the `improvement` line off recent ScorecardEntry rows
+# All THREE are scoped to ONE role, because a rubric's dimensions are role-specific — averaging
+# "Tradeoff reasoning" for a backend role together with a PM role would blend two different bars.
+# The role is the user's pick (the picker), else their profile default, else their most-recent.
+# ===========================================================================
+
+# How many "work on next" improvement lines the dashboard surfaces — the most recent few, so
+# the list stays a short prompt to act on rather than a full backlog.
+WORK_ON_NEXT_CAP = 5
+
+# The selectable TIME WINDOW the dashboard aggregates over — the client picks one, so readiness is
+# a recent-trend signal rather than a lifetime archive, and the query is bounded by date instead of
+# an arbitrary count no matter how many interviews a heavy user has done. Each maps to a lookback
+# from "now"; an unrecognised (or missing) value falls back to the default below.
+DASHBOARD_PERIODS = {
+    "week": timedelta(days=7),
+    "month": timedelta(days=30),
+    "year": timedelta(days=365),
+}
+DASHBOARD_DEFAULT_PERIOD = "month"
+
+
+async def get_profile(profile_id: str) -> dict:
+    """This user's profile row — display name + their default role/level (each as slug + name,
+    or None if unset). Backs GET /api/profile, which seeds the kickoff form's pre-fill and the
+    signal panel's initial role. The `role`/`level` relationships are selectin-loaded, so this
+    is one row read."""
+    async with get_session() as db:
+        profile = (
+            await db.execute(select(Profile).where(Profile.id == profile_id))
+        ).scalar_one_or_none()
+        if profile is None:
+            return {"status": "not_found"}
+        return {
+            "status": "ok",
+            "display_name": profile.display_name,
+            "role": ({"slug": profile.role.slug, "name": profile.role.name}
+                     if profile.role is not None else None),
+            "level": ({"slug": profile.level.slug, "name": profile.level.name}
+                      if profile.level is not None else None),
+        }
+
+
+async def set_profile_defaults(
+    profile_id: str, role_slug: str | None = None, level_slug: str | None = None
+) -> dict:
+    """Set this user's default role and/or level — backs PATCH /api/profile. Each arg is a SLUG
+    the route received; None means "leave this one alone" (same don't-touch convention as
+    save_interview_state), so the caller can update role, level, or both. Resolves the slug to a
+    row and refuses an unknown one rather than storing a dangling id.
+
+    Returns {"ok": True} or {"ok": False, "error": ...}."""
+    async with get_session() as db:
+        profile = (
+            await db.execute(select(Profile).where(Profile.id == profile_id))
+        ).scalar_one_or_none()
+        if profile is None:
+            return {"ok": False, "error": "profile not found"}
+        if role_slug is not None:
+            role = (
+                await db.execute(select(Role).where(Role.slug == role_slug))
+            ).scalar_one_or_none()
+            if role is None:
+                return {"ok": False, "error": f"unknown role: {role_slug}"}
+            profile.role_id = role.id
+        if level_slug is not None:
+            level = (
+                await db.execute(select(Level).where(Level.slug == level_slug))
+            ).scalar_one_or_none()
+            if level is None:
+                return {"ok": False, "error": f"unknown level: {level_slug}"}
+            profile.level_id = level.id
+        await db.commit()
+        return {"ok": True}
+
+
+async def list_interviewed_roles(profile_id: str, params: Params, *, search: str | None = None):
+    """A PAGE of the DISTINCT roles this user has a GRADED interview for — the signal panel's role
+    picker options. Paginated (the picker is an async-paginate select, and a heavy user's role
+    count can exceed one page) and owner-scoped by the same WHERE clause as list_interviews.
+
+    GRADED only (an inner join to `scorecards`): the three cards are all built from the grade, so a
+    role with only ungraded interviews has nothing to show and would be a dead option. `.distinct()`
+    collapses the one-row-per-interview the join produces back to one row per role; ordered by name
+    so the menu is stable. Returns fastapi-pagination's Page[Role]; RoleOut serializes each row (same
+    as list_roles), so the picker reads {slug, name} exactly like GET /api/roles."""
+    async with get_session() as db:
+        stmt = (
+            select(Role)
+            .join(Interview, Interview.role_id == Role.id)
+            .join(Scorecard, Scorecard.interview_id == Interview.id)
+            .where(Interview.profile_id == profile_id)
+        )
+        if search:
+            stmt = stmt.where(Role.name.ilike(f"%{search}%"))
+        stmt = stmt.distinct().order_by(Role.name)
+        return await apaginate(db, stmt, params)
+
+
+def _empty_readiness() -> dict:
+    """The readiness block when there's nothing graded for the selected role — no series, no
+    latest, no delta. The client renders the empty-state placeholder from `count == 0`."""
+    return {"series": [], "latest": None, "delta": None, "count": 0}
+
+
+async def get_dashboard(
+    profile_id: str, role_slug: str | None = None, period: str | None = None
+) -> dict:
+    """The signal panel's role-scoped aggregates — readiness trend, skill breakdown, work-on-next.
+
+    ROLE RESOLUTION (the "effective role" the panel opens on):
+      1. the slug the client asked for (the picker's current value), if given and real;
+      2. else the profile's default role;
+      3. else the user's most-recently-graded role;
+      4. else None — the user has no graded interviews at all (a first-visit empty state).
+    The chosen role's slug + name are echoed back so the picker can seed its label without a
+    second lookup. Role resolution is NOT time-bounded — we pick a sensible role first, then the
+    window filters its interviews (so a too-narrow window shows that role's empty state, not a
+    different role's data).
+
+    TIME WINDOW: `period` ("week"|"month"|"year", default "month") bounds the aggregates to
+    interviews graded within that lookback — the client's window control. The effective period is
+    echoed back so the client can reflect what was actually applied.
+
+    Then, over this user's GRADED interviews FOR THAT ROLE within the window, oldest -> newest:
+      readiness       — `overall` per interview as a series (the sparkline), plus latest, the
+                        delta across the window (latest - earliest, None with < 2), and the count.
+      skill_breakdown — every ScorecardEntryScore averaged per dimension, in the rubric's own
+                        dimension order (aggregate_scores with that whitelist both orders and drops
+                        any stray name). One {dimension, average} per bar.
+      work_on_next    — the `improvement` line off recent entries (newest interview first), capped.
+
+    All the nested rows (scorecard -> entries -> scores -> dimension, and role.rubric.dimensions)
+    are selectin-loaded, so this walks them in Python — no GROUP BY SQL — exactly like get_scorecard.
+    """
+    period = period if period in DASHBOARD_PERIODS else DASHBOARD_DEFAULT_PERIOD
+    cutoff = datetime.now(timezone.utc) - DASHBOARD_PERIODS[period]
+    async with get_session() as db:
+        # (1)-(4) resolve the effective role.
+        role_row = None
+        if role_slug:
+            role_row = (
+                await db.execute(select(Role).where(Role.slug == role_slug))
+            ).scalar_one_or_none()
+        if role_row is None and not role_slug:
+            profile = (
+                await db.execute(select(Profile).where(Profile.id == profile_id))
+            ).scalar_one_or_none()
+            if profile is not None and profile.role is not None:
+                role_row = profile.role
+            if role_row is None:
+                recent = (
+                    await db.execute(
+                        select(Interview)
+                        .join(Interview.scorecard)   # inner join -> graded interviews only
+                        .where(Interview.profile_id == profile_id)
+                        .order_by(Interview.created_at.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if recent is not None:
+                    role_row = recent.role
+        if role_row is None:
+            return {
+                "role": None,
+                "role_name": None,
+                "period": period,
+                "readiness": _empty_readiness(),
+                "skill_breakdown": [],
+                "work_on_next": [],
+            }
+
+        # this role's graded interviews WITHIN THE WINDOW, oldest -> newest (the trend's natural
+        # order). The `created_at >= cutoff` predicate is the time-window filter.
+        interviews = (
+            await db.execute(
+                select(Interview)
+                .join(Interview.scorecard)
+                .where(
+                    Interview.profile_id == profile_id,
+                    Interview.role_id == role_row.id,
+                    Interview.created_at >= cutoff,
+                )
+                .order_by(Interview.created_at.asc())
+            )
+        ).scalars().all()
+
+        series = [iv.scorecard.overall for iv in interviews]
+        readiness = _empty_readiness()
+        if series:
+            readiness = {
+                "series": series,
+                "latest": series[-1],
+                # delta across the shown window; None until there are two points to compare.
+                "delta": round(series[-1] - series[0], 2) if len(series) >= 2 else None,
+                "count": len(series),
+            }
+
+        # skill breakdown — flatten every (dimension_name, score) pair, average per dimension in
+        # the rubric's declared order (the whitelist also drops anything not in this rubric).
+        pairs: list[tuple[str, int]] = []
+        for iv in interviews:
+            for entry in iv.scorecard.entries:
+                for score in entry.scores:
+                    pairs.append((score.dimension.name, score.score))
+        dim_names = (
+            [d.name for d in role_row.rubric.dimensions] if role_row.rubric is not None else None
+        )
+        agg = aggregate_scores(pairs, dim_names)
+        skill_breakdown = [
+            {"dimension": name, "average": avg}
+            for name, avg in agg["dimension_averages"].items()
+        ]
+
+        # work on next — the improvement lines off the most recent interviews first, capped.
+        work_on_next: list[str] = []
+        for iv in reversed(interviews):          # newest first
+            for entry in iv.scorecard.entries:
+                if entry.improvement:
+                    work_on_next.append(entry.improvement)
+                    if len(work_on_next) >= WORK_ON_NEXT_CAP:
+                        break
+            if len(work_on_next) >= WORK_ON_NEXT_CAP:
+                break
+
+        return {
+            "role": role_row.slug,
+            "role_name": role_row.name,
+            "period": period,
+            "readiness": readiness,
+            "skill_breakdown": skill_breakdown,
+            "work_on_next": work_on_next,
+        }
 
 
 # ===========================================================================

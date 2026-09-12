@@ -156,6 +156,53 @@ export interface ResumePayload {
     current_question: string | null;
 }
 
+// The dashboard signal panel (GET /api/dashboard) — the role-scoped aggregates that replaced the
+// three hardcoded cards. Mirrors get_dashboard in tools/interview.py; keep in sync by hand.
+// `role`/`role_name` echo the EFFECTIVE role the backend resolved (the picker's value, else the
+// profile default, else the most-recently-graded role, else null when nothing is graded yet) so
+// the picker can seed its label without a second lookup. All scores are on the app's 1-5 scale.
+//
+// The three time windows the panel can aggregate over — the client's window control sends one and
+// the response echoes the effective `period` back. Mirrors DASHBOARD_PERIODS in tools/interview.py.
+export type DashboardPeriod = "week" | "month" | "year";
+export interface Readiness {
+    series: number[]; // each graded interview's overall in the window, oldest -> newest (sparkline)
+    latest: number | null; // the newest overall, or null with no graded interviews in the window
+    delta: number | null; // latest - earliest across the window; null with < 2 points
+    count: number; // how many graded interviews back this
+}
+export interface SkillScore {
+    dimension: string; // rubric dimension name ("Tradeoff reasoning")
+    average: number; // 1-5, averaged across the role's graded interviews in the window
+}
+export interface DashboardData {
+    role: string | null; // effective role slug, or null when the user has nothing graded
+    role_name: string | null; // its display name, for seeding the picker's label
+    period: DashboardPeriod; // the window actually applied
+    readiness: Readiness;
+    skill_breakdown: SkillScore[];
+    work_on_next: string[]; // recent improvement lines, newest first
+}
+// The query arg: the picker's chosen role slug (omit to let the backend pick the default) and the
+// chosen time window (omit to let the backend default it).
+export interface DashboardQuery {
+    role?: string;
+    period?: DashboardPeriod;
+}
+
+// GET /api/profile — the user's default role/level (each slug + name, or null if unset), for the
+// kickoff form's pre-fill and the signal panel's initial role. Mirrors get_profile.
+export interface ProfileData {
+    display_name: string | null;
+    role: BasePageItem | null; // the default role as {slug, name}
+    level: BasePageItem | null; // the default level as {slug, name}
+}
+// PATCH /api/profile — set the default. Both optional slugs; omit one to leave it unchanged.
+export interface ProfileUpdate {
+    role?: string;
+    level?: string;
+}
+
 // Phase 5 robust STT — the /api/transcribe response. The REQUEST is a FormData (the recorded
 // audio blob), not a JSON body, so there's no matching request interface: fetchBaseQuery detects
 // a FormData body, leaves it un-stringified, and lets the browser set the multipart Content-Type.
@@ -277,7 +324,10 @@ export const interviewApi = createApi({
     // unfinished interview, so the writes that change which interview that is — starting a new one,
     // answering (bumps updated_at / can finish it), grading — invalidate it so the banner recomputes
     // without a manual refresh.
-    tagTypes: ["Interviews"],
+    // "Interviews" — the user's interview list (see above). "Dashboard" — the signal panel's
+    // aggregates + the picker's graded-role list: a new grade changes both, so getScorecard
+    // invalidates it. "Profile" — the user's default role/level, invalidated when they set it.
+    tagTypes: ["Interviews", "Dashboard", "Profile"],
     endpoints: (builder) => ({
         // It's a MUTATION, not a query. Even though it "gets" the first question, the POST
         // CREATES server-side state — a row in `interviews` (a side effect). Rule of thumb:
@@ -302,7 +352,9 @@ export const interviewApi = createApi({
         // kicks off server-side grading work, same instinct as startInterview/submitAnswer.
         getScorecard: builder.mutation<Scorecard, ScorecardRequest>({
             query: (body) => ({ url: "/scorecard", method: "POST", body }),
-            invalidatesTags: ["Interviews"],
+            // grading changes both the list order (overall) AND every dashboard aggregate (a new
+            // graded interview shifts readiness, the skill averages, and can add a role to the picker).
+            invalidatesTags: ["Interviews", "Dashboard"],
         }),
         // Phase 5 robust STT — transcribe one recorded utterance via /api/transcribe (OpenAI
         // Whisper). A mutation: it's a POST with a side effect (an API call), same instinct as the
@@ -347,6 +399,32 @@ export const interviewApi = createApi({
         getRole: builder.query<RolePageItem, string>({
             query: (slug) => `/roles/${encodeURIComponent(slug)}`,
         }),
+        // The dashboard signal panel — role- and window-scoped aggregates. A QUERY (cacheable GET);
+        // omit `role`/`period` to let the backend pick the effective role (default/most-recent) and
+        // default window. Tagged "Dashboard" so a new grade refetches it.
+        getDashboard: builder.query<DashboardData, DashboardQuery | void>({
+            query: (arg) => ({ url: "/dashboard", params: (arg as DashboardQuery) ?? {} }),
+            providesTags: ["Dashboard"],
+        }),
+        // The picker's options — the roles the user has a GRADED interview for. Paginated + searchable
+        // (an async-paginate select feeds it { q, page }), same shape as getRoles. Tagged "Dashboard"
+        // so a newly graded role appears without a manual refresh.
+        getInterviewedRoles: builder.query<Page<RolePageItem>, OptionPageQuery>({
+            query: ({ q = "", page = 1 }) =>
+                `/dashboard/roles?q=${encodeURIComponent(q)}&page=${page}`,
+            providesTags: ["Dashboard"],
+        }),
+        // The user's default role/level — seeds the kickoff form pre-fill and the panel's first role.
+        getProfile: builder.query<ProfileData, void>({
+            query: () => "/profile",
+            providesTags: ["Profile"],
+        }),
+        // Set the default (the "Set as default" control). A mutation (PATCH); invalidates the profile
+        // so the pre-fill reflects the new default on next read.
+        updateProfile: builder.mutation<{ ok: boolean }, ProfileUpdate>({
+            query: (body) => ({ url: "/profile", method: "PATCH", body }),
+            invalidatesTags: ["Profile"],
+        }),
         getLevel: builder.query<LevelPageItem, string>({
             query: (slug) => `/levels/${encodeURIComponent(slug)}`,
         }),
@@ -366,4 +444,8 @@ export const {
     useLazyGetLevelsQuery,
     useGetRoleQuery,
     useGetLevelQuery,
+    useGetDashboardQuery,
+    useLazyGetInterviewedRolesQuery,
+    useGetProfileQuery,
+    useUpdateProfileMutation,
 } = interviewApi;

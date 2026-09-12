@@ -16,6 +16,7 @@ import { useParams, Link } from "react-router";
 import AppNav from "../components/AppNav";
 import MessageRow from "../components/MessageRow";
 import Donut from "../components/Donut";
+import ScoreBar from "../components/ScoreBar";
 import InterviewDetailSkeleton from "../components/InterviewDetailSkeleton";
 import { useGetInterviewDetailQuery, type AnswerGrade, type Scorecard } from "../api";
 import { formatScore, formatShortDate, formatTime } from "../helpers";
@@ -141,18 +142,11 @@ function ScorecardPanel({ card }: { card: Scorecard }) {
                 <Donut value={card.overall} max={5} />
             </div>
 
-            {/* Criteria bars — one per rubric dimension, from the whole-interview averages */}
+            {/* Criteria bars — one per rubric dimension, from the whole-interview averages. Shared
+                <ScoreBar> with the dashboard's skill breakdown. */}
             <div className="flex flex-col gap-[13px]">
                 {Object.entries(card.dimension_averages).map(([dimension, avg]) => (
-                    <div key={dimension}>
-                        <div className="flex justify-between text-[13.5px]">
-                            <span>{dimension}</span>
-                            <span className="text-neutral-300">{formatScore(avg)}</span>
-                        </div>
-                        <div className="mt-[5px] h-1.5 rounded-[3px] bg-neutral-800">
-                            <div className="h-1.5 rounded-[3px] bg-accent" style={{ width: `${(avg / 5) * 100}%` }} />
-                        </div>
-                    </div>
+                    <ScoreBar key={dimension} label={dimension} value={avg} />
                 ))}
             </div>
 
