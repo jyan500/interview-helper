@@ -62,8 +62,8 @@ export default function DashboardPage() {
     const seededDefaults = useRef(false);
     useEffect(() => {
         if (seededDefaults.current || !profile) return;
-        if (profile.role) setValue("role", { value: profile.role.slug, label: profile.role.name });
-        if (profile.level) setValue("level", { value: profile.level.slug, label: profile.level.name });
+        if (profile.role) setValue("role", { value: profile.role.slug, label: profile.role.name }, { shouldValidate: true });
+        if (profile.level) setValue("level", { value: profile.level.slug, label: profile.level.name }, { shouldValidate: true });
         seededDefaults.current = true;
     }, [profile, setValue]);
 
