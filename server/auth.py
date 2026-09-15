@@ -44,6 +44,7 @@ the access_token out of devtools, and:
 """
 from __future__ import annotations
 
+import logging
 import os
 
 import jwt
@@ -66,6 +67,15 @@ if not SUPABASE_URL:
 JWT_AUDIENCE = "authenticated"
 JWT_ISSUER = f"{SUPABASE_URL}/auth/v1"
 JWKS_URL = f"{SUPABASE_URL}/auth/v1/.well-known/jwks.json"
+
+logger = logging.getLogger(__name__)
+
+# Clock-skew tolerance for the `exp`/`iat`/`nbf` checks. supabase-js will hand a request a
+# token with only seconds of life left (it refreshes proactively but not eagerly), so if this
+# host's clock runs even slightly ahead of Supabase's, a still-fresh token reads as expired and
+# 401s — a self-inflicted, intermittent failure. 60s absorbs ordinary NTP drift without
+# meaningfully extending a token's real lifetime (they live ~1 hour).
+JWT_LEEWAY_SECONDS = 60
 
 # ---------------------------------------------------------------------------
 # The key source. ONE client for the process, built at import — it CACHES the fetched key
@@ -108,6 +118,7 @@ def decode_supabase_jwt(token: str) -> dict:
         algorithms=["ES256"],
         audience=JWT_AUDIENCE,
         issuer=JWT_ISSUER,
+        leeway=JWT_LEEWAY_SECONDS,
     )
 
 
@@ -153,7 +164,12 @@ async def require_user(
             detail="Could not verify token right now, please try again",
             headers={"Retry-After": "120"}
         )
-    except jwt.PyJWTError:
+    except jwt.PyJWTError as exc:
+        # Log the REASON, class name only — no token, no claims. This is what makes an
+        # intermittent 401 diagnosable: ExpiredSignatureError points at clock skew / refresh
+        # timing, while InvalidSignatureError / InvalidIssuerError / DecodeError point at a
+        # genuinely bad or foreign token. Without this the cause is invisible in prod.
+        logger.warning("JWT rejected: %s", type(exc).__name__)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, 
             detail="Invalid Token",
