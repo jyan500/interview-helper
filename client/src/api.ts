@@ -310,6 +310,14 @@ const baseQueryWithReauth: BaseQueryFn<
     const { data, error } = await supabase.auth.refreshSession()
     if (!error && data.session){
         result = await rawBaseQuery(args, api, extraOptions)
+        // The refresh minted a fresh token but the server STILL rejects it — the credential
+        // isn't the problem, and there's nothing left to retry. Sign out rather than return
+        // the 401: without this the mirror stays non-null, <ProtectedRoute> never redirects,
+        // and every subsequent request repeats this dance — the "logged in but everything
+        // 401s until I manually log out" phase. signOut fires onAuthStateChange -> redirect.
+        if (result.error?.status === 401){
+            await supabase.auth.signOut()
+        }
     }
     else {
         await supabase.auth.signOut()
