@@ -5,7 +5,7 @@ Usage:  from db.models import Interview, Question, Role
 WHERE EACH TABLE CAME FROM — every one of these already existed, just not as a table:
 
     data/questions.json     ->  roles · rubrics · rubric_dimensions · questions ·
-                                question_types · tags
+                                question_types · tags · question_roles
     data/sessions/*.json    ->  turns · interviews.summary       (the transcript)
     SESSIONS dict in api.py ->  interviews                       (live conversation state)
     returned-only scorecard ->  scorecards · scorecard_entries · scorecard_entry_scores
@@ -108,6 +108,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.associationproxy import AssociationProxy, association_proxy
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -222,9 +223,17 @@ class Role(Base, TimestampMixin):
     slug: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # "backend-engineer"
     name: Mapped[str] = mapped_column(String(128))                          # "Backend Engineer"
 
-    questions: Mapped[list[Question]] = relationship(
-        back_populates="role", lazy="selectin", order_by="Question.sort_order"
+    # N:N to questions, through the `question_roles` association object. `question_links` is the
+    # authoritative side — it carries each pairing's per-role `sort_order` — while `questions` is
+    # an association proxy that reads STRAIGHT THROUGH to the Question rows, in that bank order. So
+    # `role.questions` keeps returning an ordered list of questions exactly as it did when
+    # `role_id`/`sort_order` lived on the question itself; nothing above this model has to change.
+    # (The proxy is read-only here in practice: the seeder writes `question_roles` rows directly.)
+    question_links: Mapped[list[QuestionRole]] = relationship(
+        back_populates="role", lazy="selectin",
+        order_by="QuestionRole.sort_order", cascade="all, delete-orphan",
     )
+    questions: AssociationProxy[list[Question]] = association_proxy("question_links", "question")
     rubric: Mapped[Rubric | None] = relationship(back_populates="role", lazy="selectin")
 
 
@@ -264,8 +273,9 @@ class QuestionType(Base, TimestampMixin):
 class Tag(Base, TimestampMixin):
     """A topic a question touches: "debugging", "scalability", "concurrency".
 
-    THE ONE MANY-TO-MANY IN THE SCHEMA — a question has one type but several tags, which is
-    why this needs the `question_tags` join table below while `question_types` doesn't.
+    ONE OF TWO MANY-TO-MANYS IN THE SCHEMA — a question has one type but several tags, which
+    is why this needs the `question_tags` join table below while `question_types` doesn't. (The
+    other is question<->role, via the `QuestionRole` association object further down.)
 
     Why not a JSONB array of strings on `questions` (which a GIN index would query just
     fine): the vocabulary. As a blob, "system-design" and "systems-design" are two silently
@@ -291,6 +301,51 @@ question_tags = Table(
     Column("question_id", ForeignKey("questions.id", ondelete="CASCADE"), primary_key=True),
     Column("tag_id", ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True),
 )
+
+
+class QuestionRole(Base, TimestampMixin):
+    """The N:N pairing of a question to a role — plus that question's bank ORDER within the role.
+
+    WHERE IT CAME FROM: `questions.role_id` used to pin each question to exactly one role, and
+    `questions.sort_order` gave it one global position. A question can now belong to several
+    roles, and its place in the bank differs per role (question be-1 might lead the backend list
+    but sit third in a platform list), so `sort_order` moves here — onto the PAIRING, the only
+    place a per-role order can live.
+
+    WHY A MODEL AND NOT A PLAIN `Table` (like `question_tags` above): it carries a column of its
+    own. That's exactly the graduation the `question_tags` note predicted — "if it ever needs a
+    column it becomes a real model class and picks up TimestampMixin with it." A bare join row
+    would have nowhere to put `sort_order`.
+
+    WHAT DID NOT MOVE: `level_id` stays on `questions`. Seniority is a property of the QUESTION's
+    difficulty — the same in whatever role asks it — and the JSON bank authors it per question. If
+    a question ever needs a different level per role, it moves here too; until then, keeping it on
+    the question keeps the seed and `next_question`'s at-or-below filter simple.
+
+    SURROGATE `id` + a UNIQUE (question_id, role_id): follows the surrogate-key convention up top;
+    the pair is the natural key, so the unique constraint is what actually stops a duplicate
+    pairing. Both FKs are `ondelete="CASCADE"` — drop a role or a question and its pairings go with
+    it (same as `question_tags`).
+    """
+    __tablename__ = "question_roles"
+    __table_args__ = (
+        UniqueConstraint("question_id", "role_id", name="uq_question_role"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    question_id: Mapped[int] = mapped_column(
+        ForeignKey("questions.id", ondelete="CASCADE"), index=True
+    )
+    role_id: Mapped[int] = mapped_column(
+        ForeignKey("roles.id", ondelete="CASCADE"), index=True
+    )
+    # this question's position in THIS role's bank — was `questions.sort_order`, now per pairing.
+    # `next_question` orders on it; `Role.question_links` is ordered by it so `role.questions`
+    # comes back in bank order.
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+    question: Mapped[Question] = relationship(back_populates="role_links", lazy="selectin")
+    role: Mapped[Role] = relationship(back_populates="question_links", lazy="selectin")
 
 
 # ===========================================================================
@@ -349,21 +404,24 @@ class Question(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     slug: Mapped[str] = mapped_column(String(64), unique=True, index=True)   # "be-1"
-    role_id: Mapped[int] = mapped_column(ForeignKey("roles.id", ondelete="CASCADE"), index=True)
     type_id: Mapped[int] = mapped_column(ForeignKey("question_types.id"), index=True)
     text: Mapped[str] = mapped_column(Text)
 
     # Phase D fills this. Nullable until then so today's bank — which has no levels — seeds
-    # cleanly and next_question can ignore the column.
+    # cleanly and next_question can ignore the column. Stays on the QUESTION (not the
+    # question_roles pairing): seniority is intrinsic to the question, the same in every role.
     level_id: Mapped[int | None] = mapped_column(
         ForeignKey("levels.id"), nullable=True, index=True
     )
 
-    # `next_question` returns "the first unasked question in BANK ORDER". A JSON array had
-    # that order for free; a table has no inherent order, so we store it explicitly.
-    sort_order: Mapped[int] = mapped_column(Integer, default=0)
-
-    role: Mapped[Role] = relationship(back_populates="questions", lazy="selectin")
+    # N:N to roles, through `question_roles` (see QuestionRole). `role_links` is the association
+    # object side (it holds the per-role `sort_order`); `roles` proxies straight to the Role rows.
+    # `next_question` returns "the first unasked question in BANK ORDER" — that order now lives on
+    # the pairing (`QuestionRole.sort_order`), because a shared question orders differently per role.
+    role_links: Mapped[list[QuestionRole]] = relationship(
+        back_populates="question", lazy="selectin", cascade="all, delete-orphan",
+    )
+    roles: AssociationProxy[list[Role]] = association_proxy("role_links", "role")
     type: Mapped[QuestionType] = relationship(lazy="selectin")
     level: Mapped[Level | None] = relationship(lazy="selectin")
     tags: Mapped[list[Tag]] = relationship(secondary=question_tags, lazy="selectin")

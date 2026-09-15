@@ -8,7 +8,9 @@ statement of how the old shape maps to the new one:
 
     bank["roles"][slug]                 -> a roles row
       .rubric.dimensions[]              -> a rubrics row + one rubric_dimensions row each
-      .questions[]                      -> a questions row (its array index becomes sort_order)
+      .questions[]                      -> a questions row + a question_roles row pairing it to
+                                          this role (the array index becomes that pairing's
+                                          sort_order — per-role bank order)
         .type                           -> a question_types row, deduped across the bank
         .level                          -> the question's level_id, via the levels map (Phase D)
         .tags[]                         -> tags rows + question_tags pairings
@@ -44,6 +46,7 @@ from db.engine import get_session
 from db.models import (
     Level,
     Question,
+    QuestionRole,
     QuestionType,
     ReferenceBrief,
     Role,
@@ -94,7 +97,7 @@ async def _get_or_create(db: AsyncSession, model, *, slug: str, **fields):
 async def seed() -> None:
     bank = json.loads(_BANK.read_text(encoding="utf-8"))
     created = {"levels": 0, "roles": 0, "types": 0, "tags": 0, "dimensions": 0,
-               "questions": 0, "briefs": 0}
+               "questions": 0, "question_roles": 0, "briefs": 0}
 
     async with get_session() as db:
         # --- levels: authored, not from the bank ---------------------------------------
@@ -193,11 +196,9 @@ async def seed() -> None:
                 if question is None:
                     question = Question(
                         slug=q["id"],          # "be-1" — the bank's id becomes the slug
-                        role_id=role.id,
                         type_id=qtype.id,
                         text=q["text"],
                         level_id=level_row.id if level_row else None,   # Phase D
-                        sort_order=i,          # array position becomes explicit bank order
                         tags=tags,             # writes the question_tags rows
                     )
                     db.add(question)
@@ -219,6 +220,29 @@ async def seed() -> None:
                     # no-op.
                     if question.level_id is None and level_row is not None:
                         question.level_id = level_row.id
+
+                # --- the question<->role pairing (N:N) ----------------------------------
+                # `role_id`/`sort_order` moved off the question and onto this join row, so the
+                # pairing is what actually ties a question to this role — and `sort_order` is
+                # per role, from the array position within THIS role's list. Get-or-create keyed
+                # on (question, role): re-running is a no-op, and authoring the SAME question slug
+                # under a second role in the JSON simply adds a second pairing (the question row
+                # itself is reused via the slug lookup above). That's how a question becomes N:N.
+                link = (
+                    await db.execute(
+                        select(QuestionRole).where(
+                            QuestionRole.question_id == question.id,
+                            QuestionRole.role_id == role.id,
+                        )
+                    )
+                ).scalar_one_or_none()
+                if link is None:
+                    db.add(
+                        QuestionRole(
+                            question_id=question.id, role_id=role.id, sort_order=i
+                        )
+                    )
+                    created["question_roles"] += 1
 
         # --- reference briefs (Phase E): authored markdown, one file per question ---------
         # Briefs live as data/reference_briefs/<question-slug>.md, NOT inline in questions.json:

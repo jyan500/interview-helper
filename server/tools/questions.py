@@ -36,7 +36,8 @@ from sqlalchemy import select
 
 from db.engine import get_session
 # ReferenceBrief added for Phase E's get_reference (pre-imported so the TODO body has it ready).
-from db.models import Level, Question, ReferenceBrief, Role, Rubric
+# QuestionRole is the question<->role join carrying per-role bank order (next_question orders on it).
+from db.models import Level, Question, QuestionRole, ReferenceBrief, Role, Rubric
 
 
 def _question_dict(question: Question) -> dict:
@@ -140,9 +141,13 @@ async def next_question(
         asked = asked_ids or []
         if role_row is None:
             return {"status": "not_found", "role": role}
+        # question<->role is N:N now: join the pairing to scope to this role, and order by the
+        # pairing's sort_order (per-role bank order — a shared question orders differently per role).
         stmt = (
-            select(Question).where(Question.role_id == role_row.id)
-            .order_by(Question.sort_order)
+            select(Question)
+            .join(QuestionRole, QuestionRole.question_id == Question.id)
+            .where(QuestionRole.role_id == role_row.id)
+            .order_by(QuestionRole.sort_order)
         )
         if (asked):
             stmt = stmt.where(Question.slug.not_in(asked))
