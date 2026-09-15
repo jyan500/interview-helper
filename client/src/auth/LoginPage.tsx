@@ -15,6 +15,7 @@ import { useForm } from "react-hook-form";
 import { Link, useLocation, useNavigate } from "react-router";
 import { supabase } from "../supabase";
 import { Brand } from "../components/AuthCard";
+import Button from "../components/Button";
 
 type LoginFields = {
     email: string;
@@ -128,14 +129,16 @@ export default function LoginPage() {
                             {errors.password && <p className="mt-1 text-[12.5px] text-gap">{errors.password.message}</p>}
                         </div>
 
-                        <button
+                        <Button
                             type="submit"
+                            variant="primary"
+                            block
                             disabled={isSubmitting}
-                            className="btn btn-primary btn-block text-[15px]"
+                            className="text-[15px]"
                             style={{ padding: "11px 0" }}
                         >
                             {isSubmitting ? "Signing in…" : "Sign in"}
-                        </button>
+                        </Button>
                     </form>
 
                     {/* "or" divider */}
@@ -147,12 +150,12 @@ export default function LoginPage() {
 
                     {/* Social sign-in — DESIGN ONLY (TODO(wire): supabase OAuth) */}
                     <div className="flex flex-col gap-2.5">
-                        <button className="btn btn-secondary btn-block text-sm" style={{ padding: "10px 0" }}>
+                        <Button variant="secondary" block className="text-sm" style={{ padding: "10px 0" }}>
                             Continue with Google
-                        </button>
-                        <button className="btn btn-secondary btn-block text-sm" style={{ padding: "10px 0" }}>
+                        </Button>
+                        <Button variant="secondary" block className="text-sm" style={{ padding: "10px 0" }}>
                             Continue with GitHub
-                        </button>
+                        </Button>
                     </div>
 
                     <p className="mt-[26px] text-[13.5px] text-neutral-400">

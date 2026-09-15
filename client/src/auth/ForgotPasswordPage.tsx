@@ -10,6 +10,7 @@ import { Link } from "react-router";
 import { useState } from "react";
 import { supabase } from "../supabase";
 import AuthCard, { Brand } from "../components/AuthCard";
+import Button from "../components/Button";
 
 type Fields = { email: string };
 
@@ -47,12 +48,12 @@ export default function ForgotPasswordPage() {
                     minutes.
                 </p>
                 <div className="mt-[22px] flex gap-2">
-                    <button className="btn btn-secondary text-[13.5px]" onClick={() => onSubmit(getValues())}>
+                    <Button variant="secondary" className="text-[13.5px]" onClick={() => onSubmit(getValues())}>
                         Resend link
-                    </button>
-                    <button className="btn btn-ghost text-[13.5px]" onClick={() => setSent(false)}>
+                    </Button>
+                    <Button variant="ghost" className="text-[13.5px]" onClick={() => setSent(false)}>
                         Use a different email
-                    </button>
+                    </Button>
                 </div>
             </AuthCard>
         );
@@ -90,14 +91,16 @@ export default function ForgotPasswordPage() {
                     </div>
                 )}
 
-                <button
+                <Button
                     type="submit"
+                    variant="primary"
+                    block
                     disabled={isSubmitting}
-                    className="btn btn-primary btn-block text-[15px]"
+                    className="text-[15px]"
                     style={{ padding: "11px 0" }}
                 >
                     {isSubmitting ? "Sending…" : "Send reset link"}
-                </button>
+                </Button>
             </form>
 
             <p className="mt-[22px] text-[13.5px] text-neutral-400">

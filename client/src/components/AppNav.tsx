@@ -8,6 +8,7 @@
  */
 import { NavLink } from "react-router";
 import { useAuth } from "../auth/AuthProvider";
+import Button from "./Button";
 
 // NavLink hands its className a { isActive } flag; the active link takes ink + an accent
 // underline, the inactive one the muted neutral-400 — matching the mock exactly.
@@ -38,9 +39,9 @@ export default function AppNav() {
 
             <div className="flex items-center gap-[14px] text-[13px] text-neutral-300">
                 <span>{session?.user.email ?? "you@example.com"}</span>
-                <button className="btn btn-secondary text-[13px]" onClick={() => signOut()}>
+                <Button variant="secondary" className="text-[13px]" onClick={() => signOut()}>
                     Sign out
-                </button>
+                </Button>
             </div>
         </nav>
     );

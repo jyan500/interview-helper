@@ -16,6 +16,7 @@ import { Link, useNavigate } from "react-router";
 import { useState } from "react";
 import { supabase } from "../supabase";
 import AuthCard, { Brand, StrengthMeter } from "../components/AuthCard";
+import Button from "../components/Button";
 
 type SignupFields = {
     email: string;
@@ -145,14 +146,16 @@ export default function SignupPage() {
                     </div>
                 )}
 
-                <button
+                <Button
                     type="submit"
+                    variant="primary"
+                    block
                     disabled={isSubmitting}
-                    className="btn btn-primary btn-block text-[15px]"
+                    className="text-[15px]"
                     style={{ padding: "11px 0" }}
                 >
                     {isSubmitting ? "Creating account…" : "Create account"}
-                </button>
+                </Button>
             </form>
 
             <p className="mt-[22px] text-[12.5px] leading-[1.5] text-neutral-400">

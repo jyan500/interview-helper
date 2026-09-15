@@ -20,6 +20,7 @@ import { formatShortDate, formatScore } from "../helpers";
 import { PAGE_SIZE } from "../constants"
 import { SkeletonRow } from "./SkeletonRow"
 import SortableHeader from "./SortableHeader"
+import Button from "./Button"
 
 // The two columns the Interviews page lets you sort by, and the direction. Exported so the page
 // (which owns the URL that holds the applied sort) speaks the same vocabulary as the header arrows.
@@ -115,19 +116,21 @@ export default function InterviewsTable({
                                 </td>
                                 <td className="text-right">
                                     {isResumable ? (
-                                        <button
-                                            className="btn btn-primary text-[13px]"
+                                        <Button
+                                            variant="primary"
+                                            className="text-[13px]"
                                             onClick={() => onResume(iv)}
                                         >
                                             Resume
-                                        </button>
+                                        </Button>
                                     ) : (
-                                        <button
-                                            className="btn btn-ghost text-[13px]"
+                                        <Button
+                                            variant="ghost"
+                                            className="text-[13px]"
                                             onClick={() => navigate(`/interviews/${iv.interview_id}`)}
                                         >
                                             Open
-                                        </button>
+                                        </Button>
                                     )}
                                 </td>
                             </tr>

@@ -29,6 +29,7 @@ import type { Icon } from "@phosphor-icons/react";
 import MessageRow from "../components/MessageRow";
 import LoadingDots from "../components/LoadingDots";
 import SettingsModal from "../components/SettingsModal";
+import Button from "../components/Button";
 import { useAuth } from "../auth/AuthProvider";
 import { useGetScorecardMutation, useLazyGetResumeQuery, useSubmitAnswerMutation } from "../api";
 import { useSessionNav } from "./SessionLayout";
@@ -386,13 +387,14 @@ export default function SessionPage() {
                 </div>
                 <div className="flex items-center gap-[18px] text-[13px] text-neutral-300">
                     <span className="font-heading text-[18px] text-ink">{clock}</span>
-                    <button
-                        className="btn btn-ghost btn-icon"
+                    <Button
+                        variant="ghost"
+                        icon
                         aria-label="Settings"
                         onClick={() => setSettingsOpen(true)}
                     >
                         <Gear size={17} weight="regular" />
-                    </button>
+                    </Button>
                 </div>
             </div>
 
@@ -543,16 +545,16 @@ function VoiceColumn({
                         confirming ? (
                             <div className="flex items-center gap-2.5 rounded-md border border-accent px-3 py-1.5 text-[12.5px] text-accent-300">
                                 <span>Still there? {Math.ceil(countdownMs / 1000)}s</span>
-                                <button className="btn btn-ghost text-[12.5px]" onClick={onKeepListening}>
+                                <Button variant="ghost" className="text-[12.5px]" onClick={onKeepListening}>
                                     Keep talking
-                                </button>
+                                </Button>
                             </div>
                         ) : noInput ? (
                             <div className="flex items-center gap-2.5 whitespace-nowrap rounded-md border border-gap-border bg-gap-bg px-3 py-1.5 text-[12.5px] text-gap">
                                 <span>Still there?</span>
-                                <button className="btn btn-ghost text-[12.5px] text-gap" onClick={onCheckMic}>
+                                <Button variant="ghost" className="text-[12.5px] text-gap" onClick={onCheckMic}>
                                     Check your mic
-                                </button>
+                                </Button>
                             </div>
                         ) : null
                     }
@@ -565,8 +567,9 @@ function VoiceColumn({
             <div className="flex items-center rounded-md border border-divider">
                 {supported && !done && (
                     <>
-                        <button
-                            className="btn btn-primary flex items-center gap-[9px] text-[15px] disabled:opacity-50"
+                        <Button
+                            variant="primary"
+                            className="flex items-center gap-[9px] text-[15px] disabled:opacity-50"
                             style={{ padding: "13px 30px" }}
                             onClick={onToggleMic}
                             // Locked while the AI is speaking, while a turn is being prepared
@@ -575,33 +578,36 @@ function VoiceColumn({
                         >
                             <Microphone size={17} weight="regular" />
                             {micLabel(listening, voiceMode)}
-                        </button>
-                        <button
-                            className="btn btn-ghost flex items-center gap-2 border-l border-divider disabled:opacity-50"
+                        </Button>
+                        <Button
+                            variant="ghost"
+                            className="flex items-center gap-2 border-l border-divider disabled:opacity-50"
                             style={{ padding: "13px 18px" }}
                             onClick={onToggleVoiceMode}
                             disabled={listening || confirming || preparing}
                         >
                             Mode: {voiceMode}
-                        </button>
+                        </Button>
                     </>
                 )}
-                <button
-                    className="btn btn-ghost flex items-center gap-2 border-l border-divider"
+                <Button
+                    variant="ghost"
+                    className="flex items-center gap-2 border-l border-divider"
                     style={{ padding: "13px 18px" }}
                     onClick={onSwitch}
                 >
                     <PencilSimple size={16} weight="regular" />
                     Switch to text
-                </button>
-                <button
-                    className="btn btn-ghost border-l border-divider disabled:opacity-50"
+                </Button>
+                <Button
+                    variant="ghost"
+                    className="border-l border-divider disabled:opacity-50"
                     style={{ padding: "13px 20px" }}
                     onClick={onEnd}
                     disabled={ended}
                 >
                     {ended ? "Ending…" : "End session"}
-                </button>
+                </Button>
             </div>
 
             {done && (
@@ -777,32 +783,35 @@ function TextColumn({
                     )}
                     <div className="flex items-center justify-between">
                         <div className="flex items-center rounded-md border border-divider">
-                            <button
-                                className="btn btn-ghost flex items-center gap-2"
+                            <Button
+                                variant="ghost"
+                                className="flex items-center gap-2"
                                 style={{ padding: "10px 16px" }}
                                 onClick={onSwitch}
                             >
                                 <Microphone size={16} weight="regular" />
                                 Switch to voice
-                            </button>
-                            <button
-                                className="btn btn-ghost border-l border-divider disabled:opacity-50"
+                            </Button>
+                            <Button
+                                variant="ghost"
+                                className="border-l border-divider disabled:opacity-50"
                                 style={{ padding: "10px 18px" }}
                                 onClick={onEnd}
                                 disabled={ended}
                             >
                                 {ended ? "Ending…" : "End session"}
-                            </button>
+                            </Button>
                         </div>
                         {!done && (
-                            <button
-                                className="btn btn-primary text-[15px] disabled:opacity-50"
+                            <Button
+                                variant="primary"
+                                className="text-[15px] disabled:opacity-50"
                                 style={{ padding: "11px 28px" }}
                                 onClick={onSend}
                                 disabled={answering || transcribing || ended || !draft.trim()}
                             >
                                 {transcribing ? "Transcribing…" : answering ? "Sending…" : "Send answer"}
-                            </button>
+                            </Button>
                         )}
                     </div>
                 </div>

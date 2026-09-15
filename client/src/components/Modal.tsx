@@ -8,6 +8,7 @@
  */
 import { useEffect, type ReactNode } from "react";
 import { X } from "@phosphor-icons/react";
+import Button from "./Button";
 
 export default function Modal({
     open,
@@ -42,9 +43,9 @@ export default function Modal({
             >
                 <div className="mb-5 flex items-center justify-between">
                     <h2 className="font-heading text-[21px] font-medium">{title}</h2>
-                    <button className="btn btn-ghost btn-icon" aria-label="Close" onClick={onClose}>
+                    <Button variant="ghost" icon aria-label="Close" onClick={onClose}>
                         <X size={18} weight="regular" />
-                    </button>
+                    </Button>
                 </div>
                 {children}
             </div>

@@ -17,6 +17,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router";
 import { useGetMyInterviewsQuery } from "../api";
 import { addIgnoredInterviewId, loadIgnoredInterviewIds } from "../helpers";
+import Button from "./Button";
 
 export default function ResumeBanner({ className = "" }: { className?: string }) {
     const navigate = useNavigate();
@@ -64,12 +65,12 @@ export default function ResumeBanner({ className = "" }: { className?: string })
                 </div>
             </div>
             <div className="flex gap-2">
-                <button className="btn btn-ghost" onClick={onIgnore}>
+                <Button variant="ghost" onClick={onIgnore}>
                     Ignore
-                </button>
-                <button className="btn btn-primary" onClick={onResume}>
+                </Button>
+                <Button variant="primary" onClick={onResume}>
                     Resume
-                </button>
+                </Button>
             </div>
         </div>
     );
