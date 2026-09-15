@@ -2,7 +2,7 @@
  * Interview detail — transcript + scorecard, Nocturne mock 3b, NOW WIRED.
  *
  * This is the History detail view, reading GET /api/interviews/{id} (useGetInterviewDetailQuery).
- * It renders the SAME graded scorecard the old ScorecardView showed (overall + per-dimension
+ * It renders the SAME graded scorecard shape the live grade produces (overall + per-dimension
  * averages + per-question strength/gap/improvement), poured into the new mock-3b layout: a donut
  * ring, criteria bars, and per-question cards. The transcript reuses the shared <MessageRow>.
  *

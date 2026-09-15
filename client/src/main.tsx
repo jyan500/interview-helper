@@ -3,8 +3,6 @@ import ReactDOM from "react-dom/client";
 import { Provider } from "react-redux";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { store } from "./store";
-import App from "./App";
-import HistoryPage from "./HistoryPage";
 import DashboardPage from "./pages/DashboardPage";
 import SessionPage from "./pages/SessionPage";
 import SessionLayout from "./pages/SessionLayout";
@@ -59,10 +57,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                         <Route path="/reset-password" element={<ResetPasswordPage />} />
 
                         {/* PROTECTED — a layout route with no path of its own. Everything
-                            nested inside renders only if <ProtectedRoute> returns <Outlet />.
-                            The Nocturne design pages live here; the old working interview flow
-                            (App.tsx) is preserved at /interview-legacy so nothing functional
-                            is lost while the new screens are design-only. */}
+                            nested inside renders only if <ProtectedRoute> returns <Outlet />. */}
                         <Route element={<ProtectedRoute />}>
                             <Route path="/" element={<DashboardPage />} />
                             {/* /session is gated by SessionLayout (a layout route): it renders the
@@ -73,9 +68,6 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                             </Route>
                             <Route path="/interviews" element={<InterviewsPage />} />
                             <Route path="/interviews/:id" element={<InterviewDetailPage />} />
-                            {/* Preserved: the pre-redesign working interview + history. */}
-                            <Route path="/interview-legacy" element={<App />} />
-                            <Route path="/history" element={<HistoryPage />} />
                         </Route>
 
                         {/* anything else -> home, which is itself gated. `replace` so a

@@ -1,5 +1,5 @@
 /**
- * The fixed bottom-left stack the toasts live in. Purely positional: it anchors the column to the
+ * The fixed bottom-right stack the toasts live in. Purely positional: it anchors the column to the
  * corner and lets ToastItem handle each row's look and animation.
  *
  * `pointer-events-none` on the stack so it never blocks clicks on the page behind an empty corner;
@@ -20,7 +20,7 @@ export default function ToastContainer({
     if (toasts.length === 0) return null;
 
     return (
-        <div className="pointer-events-none fixed bottom-4 left-4 z-50 flex flex-col gap-2.5">
+        <div className="pointer-events-none fixed bottom-4 right-4 z-50 flex flex-col gap-2.5">
             {toasts.map((t) => (
                 <ToastItem key={t.id} toast={t} onDismiss={onDismiss} />
             ))}

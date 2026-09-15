@@ -2,8 +2,8 @@
  * Interview session — Nocturne mocks 2a (voice) and 2b (text), NOW WIRED. ONE route, two
  * modes, switchable mid-session. Full-viewport height.
  *
- * This is the new home of the interview loop that used to live in App.tsx (the /interview-legacy
- * screen). The voice logic (useSmartVoiceTurn + useSpeak), the RTK Query mutations
+ * This is the home of the interview loop (originally prototyped in the now-removed App.tsx
+ * skeleton). The voice logic (useSmartVoiceTurn + useSpeak), the RTK Query mutations
  * (submitAnswer / getScorecard) and the two turn-taking effects moved here verbatim; the design's
  * mock content is replaced by the real transcript/draft/voice state. What is NOT here is the
  * KICKOFF: /api/interview is fired by the producer (Dashboard "Start interview" / Interviews

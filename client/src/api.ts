@@ -127,7 +127,7 @@ export interface InterviewTurn extends TurnBase {
 }
 // The detail view's payload: transcript + the persisted grade (null until graded, or until the
 // backend's get_scorecard read-back is implemented). The scorecard is the SAME `Scorecard` shape
-// a live grade uses, so <ScorecardView> renders it unchanged.
+// a live grade uses, so the detail view renders it unchanged.
 export interface InterviewDetail {
     interview_id: string;
     role: string; // human-readable name ("Backend Engineer") — for the detail header
