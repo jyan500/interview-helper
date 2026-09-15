@@ -720,17 +720,22 @@ async def my_interviews(
     level: str | None = None,
     sort: str | None = None,
     order: str | None = None,
+    scored: bool = False,
 ) -> dict:
     # `?resumable=true` NARROWS to the ONE resumable interview (the banner's question). It returns the
     # SAME page envelope as the full list — a 0-or-1-item page — so the client reads `items[0]` and the
-    # endpoint has one response shape. `params`/`q`/`role`/`level` don't apply to this branch.
+    # endpoint has one response shape. `params`/`q`/`role`/`level`/`scored` don't apply to this branch,
+    # so hiding unscored interviews from the list can never change which interview is resumable.
     if resumable:
         card = await get_resumable_interview(user_id)
         items = [card] if card is not None else []
         return {"items": items, "total": len(items), "page": 1, "size": params.size, "pages": 1 if items else 0}
     # The full history: server-side paged (page/size from the query string via `params`) and filtered
-    # by role/level SLUG + search — see list_interviews. Same {items,total,page,size,pages} envelope.
-    return await list_interviews(user_id, params, q=q, role=role, level=level, sort=sort, order=order)
+    # by role/level SLUG + search — see list_interviews. `?scored=true` keeps only graded interviews
+    # (the list's default view; the "Show all" toggle drops it). Same {items,...} envelope.
+    return await list_interviews(
+        user_id, params, q=q, role=role, level=level, sort=sort, order=order, scored=scored
+    )
 
 
 # ===========================================================================

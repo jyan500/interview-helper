@@ -41,7 +41,7 @@ export default function ReadinessCard({
                 </p>
             ) : (
                 <>
-                    <div className="mt-1 flex items-end gap-2.5">
+                    <div className="mt-2 flex items-end gap-2.5">
                         <span className="font-heading text-[46px] leading-none">{formatScore(latest)}</span>
                         <span className="pb-2 text-[13px] text-neutral-400">/ 5</span>
                         {delta !== null && (

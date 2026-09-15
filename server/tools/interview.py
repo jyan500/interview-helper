@@ -428,6 +428,7 @@ async def list_interviews(
     level: str | None = None,
     sort: str | None = None,
     order: str | None = None,
+    scored: bool = False,
 ) -> dict:
     """A PAGE of one user's interviews, newest first, optionally filtered — backs GET /api/interviews.
 
@@ -442,9 +443,19 @@ async def list_interviews(
         Role/Level table on its unique slug — the id stays internal.
       - q: a case-insensitive substring match on the role OR level NAME (deliberately narrow — not
         question/transcript text).
+      - scored: when True, keep ONLY graded interviews (those with a scorecard). This is the
+        Interviews list's default VIEW (the client sends scored=true) — an unfinished or abandoned
+        interview has no grade to show, so the "Score" column would be blank and the row is just
+        clutter; the page's "Show all" toggle drops the flag to reveal them. Expressed as
+        `Interview.scorecard.has()`, an EXISTS subquery rather than a join, so it composes with the
+        score-sort OUTER join below without turning that into an inner join or double-counting rows.
     Each relationship is joined AT MOST ONCE (guarded on whether any filter references it), which is
     why q + role can coexist without joining Role twice. The joins are 1:1 so they can't multiply
     rows; selectin still loads role/level for display via its own query — these joins are WHERE-only.
+
+    NOTE this is deliberately SEPARATE from get_resumable_interview: the resume banner never routes
+    through here (the endpoint short-circuits `?resumable=true` before calling this), so hiding
+    unscored interviews from the list can't affect which interview is resumable.
 
     Returns the Page envelope {items, total, page, size, pages} — items are `_interview_card` dicts.
     The SAME envelope the `?resumable=true` path returns (a 0-or-1 page), so one response type serves
@@ -469,6 +480,10 @@ async def list_interviews(
             stmt = stmt.where(Level.slug == level)
         if q:
             stmt = stmt.where(or_(Role.name.ilike(f"%{q}%"), Level.name.ilike(f"%{q}%")))
+        if scored:
+            # EXISTS on the 1:1 scorecard — keeps graded interviews only, without a join (so the
+            # score-sort outerjoin below stays an OUTER join and rows aren't multiplied).
+            stmt = stmt.where(Interview.scorecard.has())
         if sort == "date":
             col = Interview.created_at
             stmt = stmt.order_by(col.desc() if descending else col.asc())

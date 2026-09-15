@@ -90,10 +90,12 @@ export default function DashboardPage() {
     const [triggerRoles] = useLazyGetRolesQuery();
     const [triggerLevels] = useLazyGetLevelsQuery();
 
-    // Past interviews — the full history (for the count + the newest few rows) and, separately, the
-    // one resumable interview so the table can show its Resume button. Both come back in the same
-    // {interviews:[...]} shape; the resumable query narrows server-side to a 0-or-1-element list.
-    const { data: interviewsData, isFetching } = useGetMyInterviewsQuery({ size: DASHBOARD_ROWS });
+    // Past interviews — the newest few GRADED interviews (scored: true hides in-progress/abandoned
+    // ones, whose Score column would be blank) and, separately, the one resumable interview so the
+    // table can show its Resume button. Both come back in the same {interviews:[...]} shape; the
+    // resumable query narrows server-side to a 0-or-1-element list. The unfinished interview isn't
+    // lost from this page — the ResumeBanner above surfaces it.
+    const { data: interviewsData, isFetching } = useGetMyInterviewsQuery({ size: DASHBOARD_ROWS, scored: true });
     // `isLoading` gates the Start button below: we can't know whether starting would overwrite an
     // unfinished interview until this settles. It's true only on the first load with no data, so a
     // FAILED request flips it back to false — re-enabling Start (resumableId stays null → no confirm,
