@@ -181,9 +181,30 @@ class Profile(Base, TimestampMixin):
     id: Mapped[uuid_pkg.UUID] = mapped_column(Uuid, primary_key=True)  # = auth.users.id
     display_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
+    # THE DASHBOARD DEFAULT — the role/level this user usually practises, so the kickoff form
+    # opens pre-filled and the signal panel opens scoped to it instead of making them re-pick
+    # every visit. Both NULLABLE: a fresh profile has no default until the user sets one, and
+    # the dashboard falls back to their most-recently-graded role in the meantime.
+    #
+    # ondelete="SET NULL", NOT cascade: a role/level is slow-changing seed vocabulary, but if one
+    # were ever removed, the profile should simply lose its default — never be deleted along with
+    # it. These are FKs to the vocab tables, so they store the int id (resolved from the slug at
+    # write time), same as everywhere else — `role_id`/`level_id` follow the xxx_id/xxx pair
+    # convention above, read back through the `role`/`level` relationships.
+    role_id: Mapped[int | None] = mapped_column(
+        ForeignKey("roles.id", ondelete="SET NULL"), nullable=True
+    )
+    level_id: Mapped[int | None] = mapped_column(
+        ForeignKey("levels.id", ondelete="SET NULL"), nullable=True
+    )
+
     interviews: Mapped[list[Interview]] = relationship(
         back_populates="profile", lazy="selectin"
     )
+    # the default role/level, read as slug + name for the picker; selectin so they load with the
+    # profile row rather than firing a query when touched (see the lazy="selectin" note up top).
+    role: Mapped[Role | None] = relationship(lazy="selectin")
+    level: Mapped[Level | None] = relationship(lazy="selectin")
 
 
 # ===========================================================================

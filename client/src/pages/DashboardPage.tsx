@@ -9,16 +9,25 @@
  * Fluid, not fixed: the mock's 1440px frame becomes a max-width container, and the
  * two-column body collapses to one column below ~1024px (lg:).
  */
+import { useEffect, useRef } from "react";
 import { Link, useNavigate } from "react-router";
 import { useForm } from "react-hook-form";
 import { useAuth } from "../auth/AuthProvider"
-import { useGetMyInterviewsQuery, useLazyGetLevelsQuery, useLazyGetRolesQuery, useStartInterviewMutation } from "../api";
+import { useToast } from "../toast/ToastProvider";
+import {
+    useGetMyInterviewsQuery,
+    useGetProfileQuery,
+    useLazyGetLevelsQuery,
+    useLazyGetRolesQuery,
+    useStartInterviewMutation,
+    useUpdateProfileMutation,
+} from "../api";
 import { ControlledAsyncPaginateSelect } from "../components/ControlledAsyncPaginateSelect";
 import type { SelectOption } from "../components/AsyncPaginateSelect";
 import AppNav from "../components/AppNav";
 import ResumeBanner from "../components/ResumeBanner";
 import InterviewsTable from "../components/InterviewsTable";
-import Sparkline from "../components/Sparkline";
+import SignalPanel from "../components/SignalPanel";
 
 // The kickoff form's shape — the same one App.tsx's legacy flow uses. Each field holds react-select's
 // Option ({ value: slug, label: name }) or null until picked; onStart unwraps `.value` to the slug the
@@ -33,33 +42,46 @@ type StartFormValues = {
 // page `size` so the server returns just this many (page 1, newest first) rather than the whole history.
 const DASHBOARD_ROWS = 5;
 
-// Static skill bars. The weakest one uses accent-300 so it reads as the low bar.
-const SKILLS = [
-    { label: "Communication", value: 86, weak: false },
-    { label: "Technical depth", value: 74, weak: false },
-    { label: "Structure (STAR)", value: 69, weak: false },
-    { label: "Tradeoff reasoning", value: 54, weak: true },
-];
-
-// The readiness score series feeding the sparkline (oldest → newest, ending at 78).
-const READINESS = [58, 61, 66, 64, 70, 74, 78];
-
-const WORK_ON_NEXT = [
-    "Name the tradeoff before choosing. Two answers on 1 Sep skipped it.",
-    "Cap answers near 90 seconds — your median is 2m 40s.",
-    "Practice cache invalidation; it came up twice and stalled both times.",
-];
-
 export default function DashboardPage() {
     const navigate = useNavigate();
     const { session } = useAuth();
 
     // The kickoff form — RHF owns the role/level Options; mode "onChange" keeps formState.isValid live
     // so the Start button enables the instant both required fields are picked. Same setup as App.tsx.
-    const { control, handleSubmit, formState } = useForm<StartFormValues>({
+    const { control, handleSubmit, formState, setValue, watch } = useForm<StartFormValues>({
         defaultValues: { role: null, level: null },
         mode: "onChange",
     });
+
+    // PRE-FILL from the user's saved default (GET /api/profile), once — so a returning user opens on
+    // the role/level they usually practise instead of two empty pickers. Seeded via setValue (not the
+    // form's defaultValues, which are fixed before the profile loads) and guarded by a ref so it never
+    // clobbers a pick the user has since made. A profile with no default leaves the pickers empty.
+    const { data: profile } = useGetProfileQuery();
+    const seededDefaults = useRef(false);
+    useEffect(() => {
+        if (seededDefaults.current || !profile) return;
+        if (profile.role) setValue("role", { value: profile.role.slug, label: profile.role.name });
+        if (profile.level) setValue("level", { value: profile.level.slug, label: profile.level.name });
+        seededDefaults.current = true;
+    }, [profile, setValue]);
+
+    // "Set as default" — persist the currently-picked role + level to the profile (PATCH /api/profile),
+    // so it becomes next visit's pre-fill and the signal panel's default scope. Watched so the button
+    // enables only once both are picked; a toast confirms (or reports) the write without a route change.
+    const { toast } = useToast();
+    const [saveDefault, { isLoading: savingDefault }] = useUpdateProfileMutation();
+    const roleValue = watch("role");
+    const levelValue = watch("level");
+    async function onSetDefault() {
+        if (!roleValue || !levelValue) return;
+        try {
+            await saveDefault({ role: roleValue.value, level: levelValue.value }).unwrap();
+            toast("Saved as your default role & level", { variant: "success" });
+        } catch {
+            toast("Couldn't save your default. Try again.", { variant: "error" });
+        }
+    }
     // LAZY option triggers handed straight to the two async selects as their `fetchPage` — the select
     // owns paginate/map, we only inject WHICH endpoint (see ControlledAsyncPaginateSelect).
     const [triggerRoles] = useLazyGetRolesQuery();
@@ -143,7 +165,19 @@ export default function DashboardPage() {
                                 </div>
                             </div>
 
-                            <div className="mt-[18px] flex justify-end">
+                            <div className="mt-[18px] flex items-center justify-end gap-3">
+                                {/* Save the current picks as the default (see onSetDefault). type="button"
+                                    so it never submits the form / starts an interview. Enabled once both
+                                    picks exist. */}
+                                <button
+                                    type="button"
+                                    onClick={onSetDefault}
+                                    disabled={savingDefault || !roleValue || !levelValue}
+                                    className="btn btn-secondary text-[15px] disabled:opacity-50"
+                                    style={{ padding: "11px 20px" }}
+                                >
+                                    {savingDefault ? "Saving…" : "Set as default"}
+                                </button>
                                 <button
                                     type="submit"
                                     // disabled until BOTH required selects are valid, and while the POST is in flight
@@ -174,57 +208,9 @@ export default function DashboardPage() {
                         </div>
                     </div>
 
-                    {/* ── Right column (signal) ───────────────────────────────── */}
-                    <div className="flex flex-col gap-5">
-                        {/* Readiness */}
-                        <div className="rounded-md border border-divider px-5 py-[18px]">
-                            <div className="kicker">Readiness</div>
-                            <div className="mt-1 flex items-end gap-2.5">
-                                <span className="font-heading text-[46px] leading-none">78</span>
-                                <span className="pb-2 text-[13px] text-accent-300">+7 over 4 sessions</span>
-                            </div>
-                            <div className="mt-2">
-                                <Sparkline data={READINESS} />
-                            </div>
-                        </div>
-
-                        {/* Skill breakdown */}
-                        <div className="rounded-md border border-divider px-5 py-[18px]">
-                            <div className="kicker">Skill breakdown</div>
-                            <div className="mt-3 flex flex-col gap-[11px] text-[13px]">
-                                {SKILLS.map((s) => (
-                                    <div key={s.label}>
-                                        <div className="flex justify-between">
-                                            <span>{s.label}</span>
-                                            <span>{s.value}</span>
-                                        </div>
-                                        <div className="mt-1 h-1.5 rounded-[3px] bg-neutral-800">
-                                            <div
-                                                className={"h-1.5 rounded-[3px] " + (s.weak ? "bg-accent-300" : "bg-accent")}
-                                                style={{ width: `${s.value}%` }}
-                                            />
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-
-                        {/* Work on next */}
-                        <div className="rounded-md border border-divider px-5 py-[18px]">
-                            <div className="kicker">Work on next</div>
-                            <div className="mt-3 flex flex-col gap-3 text-[13.5px] leading-[1.4]">
-                                {WORK_ON_NEXT.map((item, i) => (
-                                    <div key={i} className="flex gap-2.5">
-                                        <span className="font-heading text-[15px] text-accent-300">
-                                            {String(i + 1).padStart(2, "0")}
-                                        </span>
-                                        <span>{item}</span>
-                                    </div>
-                                ))}
-                            </div>
-                            <button className="btn btn-secondary btn-block mt-3.5">Drill these in 10 min</button>
-                        </div>
-                    </div>
+                    {/* ── Right column (signal) — role- and window-scoped readiness / skill breakdown /
+                        work on next, self-contained (fetches its own data). ─────────────────────── */}
+                    <SignalPanel />
                 </div>
             </div>
         </div>

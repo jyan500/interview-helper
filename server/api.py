@@ -115,16 +115,20 @@ from auth import require_ownership, require_user
 from db.engine import engine
 from tools.interview import (
     create_interview,
+    get_dashboard,
     get_interview,
+    get_profile,
     get_scorecard,
     get_resumable_interview,
     list_interviews,
+    list_interviewed_roles,
     load_interview_state,
     load_resume_payload,
     open_turn,
     record_answer,
     save_interview_state,
     save_scorecard,
+    set_profile_defaults,
 )
 from tools.questions import (
     get_level_by_slug,
@@ -178,6 +182,14 @@ class AnswerRequest(BaseModel):
 class ScorecardRequest(BaseModel):
     interview_id: str
     role: str = "backend-engineer"   # which rubric to grade against (matches the interview)
+
+
+# PATCH /api/profile body — the dashboard default. Both OPTIONAL slugs: sending only one updates
+# only that column (the None = don't-touch convention set_profile_defaults follows), so the client
+# can save role + level together (the usual case) or either alone.
+class ProfileUpdate(BaseModel):
+    role: str | None = None
+    level: str | None = None
 
 
 # Phase F — the /api/tts request. Unlike /api/transcribe (whose request is raw multipart audio,
@@ -864,6 +876,59 @@ async def level_by_slug(slug: str, user_id: str = Depends(require_user)):
     if row is None:
         raise HTTPException(status_code=404, detail="unknown level")
     return row
+
+
+# ===========================================================================
+# DASHBOARD & PROFILE — the signal panel's data + the per-user default it opens on.
+#
+# GET  /api/profile        — this user's display name + default role/level (for the kickoff
+#                            form's pre-fill and the panel's initial role).
+# PATCH /api/profile       — set that default (the "Set as default" control).
+# GET  /api/dashboard/roles — the roles the user has a graded interview for (the picker's options),
+#                            PAGINATED like /api/roles because a heavy user's list can exceed a page.
+# GET  /api/dashboard      — the role-scoped readiness / skill breakdown / work-on-next.
+#
+# All owner-scoped the same way as /api/interviews: the VERIFIED uid goes straight into the query,
+# never an id from the request, so there's nothing to authorize separately — "my dashboard" can't
+# be widened to someone else's.
+# ===========================================================================
+@app.get("/api/profile")
+async def profile(user_id: str = Depends(require_user)) -> dict:
+    result = await get_profile(user_id)
+    if result.get("status") != "ok":
+        # the signup trigger creates a profile for every auth user, so a verified token should
+        # always have one; a miss here is a real inconsistency, not an expected empty state.
+        raise HTTPException(status_code=404, detail="profile not found")
+    return result
+
+
+@app.patch("/api/profile")
+async def update_profile(
+    body: ProfileUpdate,
+    user_id: str = Depends(require_user),
+) -> dict:
+    result = await set_profile_defaults(user_id, role_slug=body.role, level_slug=body.level)
+    if not result["ok"]:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.get("/api/dashboard/roles", response_model=Page[RoleOut])
+async def dashboard_roles(
+    params: Params = Depends(),
+    q: str | None = None,
+    user_id: str = Depends(require_user),
+):
+    return await list_interviewed_roles(user_id, params, search=q)
+
+
+@app.get("/api/dashboard")
+async def dashboard(
+    role: str | None = None,
+    period: str | None = None,   # "week"|"month"|"year" — the time window (get_dashboard defaults it)
+    user_id: str = Depends(require_user),
+) -> dict:
+    return await get_dashboard(user_id, role_slug=role, period=period)
 
 
 # NOTE — deliberately NOT calling `add_pagination(app)`. In fastapi-pagination 0.15.16 that helper

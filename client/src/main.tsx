@@ -3,14 +3,13 @@ import ReactDOM from "react-dom/client";
 import { Provider } from "react-redux";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { store } from "./store";
-import App from "./App";
-import HistoryPage from "./HistoryPage";
 import DashboardPage from "./pages/DashboardPage";
 import SessionPage from "./pages/SessionPage";
 import SessionLayout from "./pages/SessionLayout";
 import InterviewsPage from "./pages/InterviewsPage";
 import InterviewDetailPage from "./pages/InterviewDetailPage";
 import { AuthProvider } from "./auth/AuthProvider";
+import { ToastProvider } from "./toast/ToastProvider";
 import LoginPage from "./auth/LoginPage";
 import SignupPage from "./auth/SignupPage";
 import ForgotPasswordPage from "./auth/ForgotPasswordPage";
@@ -45,6 +44,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         <Provider store={store}>
             <BrowserRouter>
                 <AuthProvider>
+                    {/* Toasts — global, self-dismissing notifications. Inside AuthProvider so any
+                        page (all of them below) can useToast(); it renders its own fixed container. */}
+                    <ToastProvider>
                     <Routes>
                         {/* PUBLIC — reachable signed out, which is the entire point of them.
                             The Nocturne redesign adds the forgot/reset password flow (mock 4c);
@@ -55,10 +57,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                         <Route path="/reset-password" element={<ResetPasswordPage />} />
 
                         {/* PROTECTED — a layout route with no path of its own. Everything
-                            nested inside renders only if <ProtectedRoute> returns <Outlet />.
-                            The Nocturne design pages live here; the old working interview flow
-                            (App.tsx) is preserved at /interview-legacy so nothing functional
-                            is lost while the new screens are design-only. */}
+                            nested inside renders only if <ProtectedRoute> returns <Outlet />. */}
                         <Route element={<ProtectedRoute />}>
                             <Route path="/" element={<DashboardPage />} />
                             {/* /session is gated by SessionLayout (a layout route): it renders the
@@ -69,15 +68,13 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                             </Route>
                             <Route path="/interviews" element={<InterviewsPage />} />
                             <Route path="/interviews/:id" element={<InterviewDetailPage />} />
-                            {/* Preserved: the pre-redesign working interview + history. */}
-                            <Route path="/interview-legacy" element={<App />} />
-                            <Route path="/history" element={<HistoryPage />} />
                         </Route>
 
                         {/* anything else -> home, which is itself gated. `replace` so a
                             mistyped URL doesn't linger in history. */}
                         <Route path="*" element={<Navigate to="/" replace />} />
                     </Routes>
+                    </ToastProvider>
                 </AuthProvider>
             </BrowserRouter>
         </Provider>
