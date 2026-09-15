@@ -9,7 +9,7 @@
  * Fluid, not fixed: the mock's 1440px frame becomes a max-width container, and the
  * two-column body collapses to one column below ~1024px (lg:).
  */
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { useForm } from "react-hook-form";
 import { useAuth } from "../auth/AuthProvider"
@@ -29,6 +29,8 @@ import ResumeBanner from "../components/ResumeBanner";
 import InterviewsTable from "../components/InterviewsTable";
 import SignalPanel from "../components/SignalPanel";
 import Button from "../components/Button";
+import OverwriteInterviewModal from "../components/OverwriteInterviewModal";
+import StartingOverlay from "../components/StartingOverlay";
 
 // The kickoff form's shape — the same one App.tsx's legacy flow uses. Each field holds react-select's
 // Option ({ value: slug, label: name }) or null until picked; onStart unwraps `.value` to the slug the
@@ -92,29 +94,65 @@ export default function DashboardPage() {
     // one resumable interview so the table can show its Resume button. Both come back in the same
     // {interviews:[...]} shape; the resumable query narrows server-side to a 0-or-1-element list.
     const { data: interviewsData, isFetching } = useGetMyInterviewsQuery({ size: DASHBOARD_ROWS });
-    const { data: resumableData } = useGetMyInterviewsQuery({ resumable: true });
+    // `isLoading` gates the Start button below: we can't know whether starting would overwrite an
+    // unfinished interview until this settles. It's true only on the first load with no data, so a
+    // FAILED request flips it back to false — re-enabling Start (resumableId stays null → no confirm,
+    // just a direct start), rather than trapping the user behind a query that never came back.
+    const { data: resumableData, isLoading: resumableLoading } = useGetMyInterviewsQuery({ resumable: true });
     const interviews = interviewsData?.items ?? [];
     const resumableId = resumableData?.items[0]?.interview_id ?? null;
 
     // The KICKOFF: POST /api/interview, then hand the fresh interview to /session via route state
     // (SessionLayout guards on it; SessionPage seeds the first question + speaks it from firstMessage).
     // We never navigate to /session without a real interview — that's the whole producer/consumer split.
+    // While the POST is in flight, <StartingOverlay> blocks the whole page (see `starting` below).
     const [startInterview, { isLoading: starting }] = useStartInterviewMutation();
-    async function onStart({ role, level }: StartFormValues) {
+    async function doStart({ role, level }: StartFormValues) {
         if (!role || !level) return; // narrows Option | null -> Option; `required` already guarantees it
-        const res = await startInterview({ role: role.value, seniority: level.value }).unwrap();
-        navigate("/session", {
-            state: {
-                interviewId: res.interview_id,
-                firstMessage: res.message,
-                role: role.label, // human-readable labels for the session header
-                level: level.label,
-            },
-        });
+        try {
+            const res = await startInterview({ role: role.value, seniority: level.value }).unwrap();
+            navigate("/session", {
+                state: {
+                    interviewId: res.interview_id,
+                    firstMessage: res.message,
+                    role: role.label, // human-readable labels for the session header
+                    level: level.label,
+                },
+            });
+        } catch {
+            toast("Couldn't start your interview. Try again.", { variant: "error" });
+        }
+    }
+
+    // Form submit gate: if the user has an unfinished (resumable) interview, starting a new one would
+    // overwrite it, so confirm first. Otherwise start straight away. handleSubmit only calls this once
+    // both required picks are valid, so `values` are guaranteed present here.
+    const [confirmOverwrite, setConfirmOverwrite] = useState(false);
+    function onStart(values: StartFormValues) {
+        if (resumableId) {
+            setConfirmOverwrite(true);
+            return;
+        }
+        doStart(values);
+    }
+    // Confirmed the overwrite: close the modal and hand off to the blocking overlay while doStart runs.
+    // The picks are still in the form (never reset), so we read them from the watched values.
+    function onConfirmOverwrite() {
+        setConfirmOverwrite(false);
+        doStart({ role: roleValue, level: levelValue });
     }
 
     return (
         <div className="min-h-screen bg-bg text-ink">
+            {/* Confirm overwriting an unfinished interview (only reached when one exists). */}
+            <OverwriteInterviewModal
+                open={confirmOverwrite}
+                onClose={() => setConfirmOverwrite(false)}
+                onConfirm={onConfirmOverwrite}
+            />
+            {/* Blocks the page for BOTH start paths while the kickoff POST is in flight. */}
+            {starting && <StartingOverlay />}
+
             <AppNav />
 
             <div className="mx-auto max-w-[1440px]">
@@ -181,8 +219,10 @@ export default function DashboardPage() {
                                 <Button
                                     type="submit"
                                     variant="primary"
-                                    // disabled until BOTH required selects are valid, and while the POST is in flight
-                                    disabled={starting || !formState.isValid}
+                                    // disabled until BOTH required selects are valid, while the POST is in
+                                    // flight, and until the resumable-check query settles (so we know
+                                    // whether to warn about overwriting an unfinished interview)
+                                    disabled={starting || !formState.isValid || resumableLoading}
                                     className="text-[15px] disabled:opacity-50"
                                     style={{ padding: "11px 26px" }}
                                 >
