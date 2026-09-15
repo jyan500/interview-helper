@@ -34,6 +34,7 @@ import AppNav from "../components/AppNav";
 import ResumeBanner from "../components/ResumeBanner";
 import InterviewsTable, { type SortField, type SortOrder } from "../components/InterviewsTable";
 import Pagination from "../components/Pagination";
+import Button from "../components/Button";
 import { optionFromSlug } from "../helpers";
 import { PAGE_SIZE } from "../constants"
 import { SkeletonText } from "../components/SkeletonText"
@@ -165,9 +166,9 @@ export default function InterviewsPage() {
                             "Start an interview" card — so send the user there rather than duplicate the
                             kickoff form (or POST with guessed defaults). The interview is created there,
                             then /session is entered with it in route state. */}
-                        <button className="btn btn-primary text-sm" onClick={() => navigate("/")}>
+                        <Button variant="primary" className="text-sm" onClick={() => navigate("/")}>
                             New interview
-                        </button>
+                        </Button>
                     </div>
 
                     {/* Unfinished session banner — the same affordance as the Dashboard, so a user
@@ -200,13 +201,13 @@ export default function InterviewsPage() {
                                 placeholder="All levels"
                             />
                         </div>
-                        <button type="submit" className="btn btn-primary text-[13px]">
+                        <Button type="submit" variant="primary" className="text-[13px]">
                             Search
-                        </button>
+                        </Button>
                         {canReset && (
-                            <button type="button" className="btn btn-ghost text-[13px]" onClick={clearFilters}>
+                            <Button variant="ghost" className="text-[13px]" onClick={clearFilters}>
                                 Clear
-                            </button>
+                            </Button>
                         )}
                     </form>
                 </div>

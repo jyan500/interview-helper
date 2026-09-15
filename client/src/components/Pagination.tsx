@@ -7,6 +7,7 @@
  * It shows the first and last page always, a one-wide window around the current page, and an ellipsis
  * for any gap — so the control stays short whether there are 3 pages or 300.
  */
+import Button from "./Button";
 
 // The pages to render, with "…" marking a collapsed gap. Pure: first + last + {page-1, page, page+1},
 // de-duped, in range, ascending, with an ellipsis wherever consecutive shown pages skip a number.
@@ -39,14 +40,14 @@ export default function Pagination({
 
     return (
         <nav className="mt-[18px] flex items-center justify-center gap-2" aria-label="Pagination">
-            <button
-                type="button"
-                className="btn btn-ghost text-[13px]"
+            <Button
+                variant="ghost"
+                className="text-[13px]"
                 disabled={page <= 1}
                 onClick={() => onPageChange(page - 1)}
             >
                 Previous
-            </button>
+            </Button>
 
             {pageWindow(page, totalPages).map((item, i) =>
                 item === "…" ? (
@@ -54,26 +55,26 @@ export default function Pagination({
                         …
                     </span>
                 ) : (
-                    <button
+                    <Button
                         key={item}
-                        type="button"
-                        className={"btn text-[13px] " + (item === page ? "btn-primary" : "btn-secondary")}
+                        variant={item === page ? "primary" : "secondary"}
+                        className="text-[13px]"
                         aria-current={item === page ? "page" : undefined}
                         onClick={() => onPageChange(item)}
                     >
                         {item}
-                    </button>
+                    </Button>
                 ),
             )}
 
-            <button
-                type="button"
-                className="btn btn-ghost text-[13px]"
+            <Button
+                variant="ghost"
+                className="text-[13px]"
                 disabled={page >= totalPages}
                 onClick={() => onPageChange(page + 1)}
             >
                 Next
-            </button>
+            </Button>
         </nav>
     );
 }

@@ -25,6 +25,7 @@ import SignalCard from "./SignalCard";
 import ReadinessCard from "./ReadinessCard";
 import SkillBreakdownCard from "./SkillBreakdownCard";
 import WorkOnNextCard from "./WorkOnNextCard";
+import Button from "./Button";
 import { nocturneSelectStyles } from "../selectStyles";
 import { useGetDashboardQuery, useLazyGetInterviewedRolesQuery } from "../api";
 import type { DashboardPeriod, Readiness } from "../api";
@@ -105,13 +106,14 @@ export default function SignalPanel() {
                             />
                         )}
                     />
-                    <button
+                    <Button
                         type="submit"
+                        block
                         disabled={isFetching}
-                        className="btn btn-primary btn-block text-[13px] disabled:opacity-50"
+                        className="text-[13px] disabled:opacity-50"
                     >
                         {isFetching ? "Applying…" : "Apply"}
-                    </button>
+                    </Button>
                 </form>
             </SignalCard>
 

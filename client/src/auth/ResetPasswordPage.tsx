@@ -10,6 +10,7 @@ import { useForm } from "react-hook-form";
 import { useNavigate } from "react-router";
 import { supabase } from "../supabase";
 import AuthCard, { StrengthMeter } from "../components/AuthCard";
+import Button from "../components/Button";
 
 type Fields = { password: string; confirmPassword: string };
 
@@ -88,14 +89,16 @@ export default function ResetPasswordPage() {
                     </div>
                 )}
 
-                <button
+                <Button
                     type="submit"
+                    variant="primary"
+                    block
                     disabled={isSubmitting}
-                    className="btn btn-primary btn-block text-[15px]"
+                    className="text-[15px]"
                     style={{ padding: "11px 0" }}
                 >
                     {isSubmitting ? "Saving…" : "Save and sign in"}
-                </button>
+                </Button>
             </form>
         </AuthCard>
     );

@@ -28,6 +28,7 @@ import AppNav from "../components/AppNav";
 import ResumeBanner from "../components/ResumeBanner";
 import InterviewsTable from "../components/InterviewsTable";
 import SignalPanel from "../components/SignalPanel";
+import Button from "../components/Button";
 
 // The kickoff form's shape — the same one App.tsx's legacy flow uses. Each field holds react-select's
 // Option ({ value: slug, label: name }) or null until picked; onStart unwraps `.value` to the slug the
@@ -119,7 +120,6 @@ export default function DashboardPage() {
             <div className="mx-auto max-w-[1440px]">
                 {/* Greeting */}
                 <div className="px-7 pt-[22px]">
-                    <div className="kicker">Wednesday, 3 September</div>
                     <h1 className="mt-1.5 font-heading text-[34px] font-medium leading-[1.05]">
                         Hello, {session?.user?.user_metadata?.display_name ?? ""}
                     </h1>
@@ -169,24 +169,25 @@ export default function DashboardPage() {
                                 {/* Save the current picks as the default (see onSetDefault). type="button"
                                     so it never submits the form / starts an interview. Enabled once both
                                     picks exist. */}
-                                <button
-                                    type="button"
+                                <Button
+                                    variant="secondary"
                                     onClick={onSetDefault}
                                     disabled={savingDefault || !roleValue || !levelValue}
-                                    className="btn btn-secondary text-[15px] disabled:opacity-50"
+                                    className="text-[15px] disabled:opacity-50"
                                     style={{ padding: "11px 20px" }}
                                 >
                                     {savingDefault ? "Saving…" : "Set as default"}
-                                </button>
-                                <button
+                                </Button>
+                                <Button
                                     type="submit"
+                                    variant="primary"
                                     // disabled until BOTH required selects are valid, and while the POST is in flight
                                     disabled={starting || !formState.isValid}
-                                    className="btn btn-primary text-[15px] disabled:opacity-50"
+                                    className="text-[15px] disabled:opacity-50"
                                     style={{ padding: "11px 26px" }}
                                 >
                                     {starting ? "Starting…" : "Start interview"}
-                                </button>
+                                </Button>
                             </div>
                         </form>
 
