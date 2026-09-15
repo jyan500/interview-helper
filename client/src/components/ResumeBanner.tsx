@@ -1,9 +1,10 @@
 /**
- * The "Unfinished session" banner — offers to resume the single most-recent unfinished interview.
- * Shared between the Dashboard and the Past-interviews list (per the handoff: it lives on both).
+ * The "Unfinished session" banner — offers to resume the user's most-recent interview, but only
+ * while it's still unfinished. Shared between the Dashboard and the Past-interviews list (per the
+ * handoff: it lives on both).
  *
- * WHY IT OWNS ITS OWN DATA: the "resumable" interview is a derived fact — the most-recently-active
- * one that isn't finished — and both host pages want the SAME answer. So the banner asks for it
+ * WHY IT OWNS ITS OWN DATA: the "resumable" interview is a derived fact — the user's most-recent
+ * interview, surfaced only if unfinished — and both host pages want the SAME answer. So the banner asks for it
  * directly (getMyInterviews with { resumable: true }, which the backend narrows to that one
  * interview) rather than each page pulling the whole history and filtering. It comes back as a
  * 0-or-1-item page, so `items[0]` is the resumable one (or undefined).

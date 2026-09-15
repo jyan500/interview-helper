@@ -146,8 +146,9 @@ export interface ResumeTurn extends TurnBase {
 }
 // What SessionPage needs to redraw an in-progress interview and keep answering: the transcript so
 // far (`turns`), the question currently on the table (`current_question` = the open turn's prompt),
-// and human-readable role/level for the header. The backend only returns this for the SINGLE most
-// recent unfinished interview (else 409) — the "only the most recent is resumable" rule.
+// and human-readable role/level for the header. The backend only returns this while the interview
+// is the user's SINGLE most-recent one and still unfinished (else 409) — starting a newer interview
+// retires this one for good.
 export interface ResumePayload {
     interview_id: string;
     role: string; // human-readable name ("Backend Engineer")
@@ -346,8 +347,8 @@ export const interviewApi = createApi({
         // trigger is called `startInterview({ role, seniority })` instead of `startInterview()`.
         startInterview: builder.mutation<InterviewResponse, StartInterviewRequest>({
             query: (body) => ({ url: "/interview", method: "POST", body }),
-            // a new interview becomes the most recent unfinished one — the old resumable one is
-            // demoted, so the banner must recompute.
+            // a new interview becomes the user's most recent one — the previously resumable
+            // interview is retired for good, so the banner must recompute.
             invalidatesTags: ["Interviews"],
         }),
         submitAnswer: builder.mutation<AnswerResponse, AnswerRequest>({

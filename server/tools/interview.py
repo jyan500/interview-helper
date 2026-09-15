@@ -428,6 +428,7 @@ async def list_interviews(
     level: str | None = None,
     sort: str | None = None,
     order: str | None = None,
+    scored: bool = False,
 ) -> dict:
     """A PAGE of one user's interviews, newest first, optionally filtered — backs GET /api/interviews.
 
@@ -442,9 +443,19 @@ async def list_interviews(
         Role/Level table on its unique slug — the id stays internal.
       - q: a case-insensitive substring match on the role OR level NAME (deliberately narrow — not
         question/transcript text).
+      - scored: when True, keep ONLY graded interviews (those with a scorecard). This is the
+        Interviews list's default VIEW (the client sends scored=true) — an unfinished or abandoned
+        interview has no grade to show, so the "Score" column would be blank and the row is just
+        clutter; the page's "Show all" toggle drops the flag to reveal them. Expressed as
+        `Interview.scorecard.has()`, an EXISTS subquery rather than a join, so it composes with the
+        score-sort OUTER join below without turning that into an inner join or double-counting rows.
     Each relationship is joined AT MOST ONCE (guarded on whether any filter references it), which is
     why q + role can coexist without joining Role twice. The joins are 1:1 so they can't multiply
     rows; selectin still loads role/level for display via its own query — these joins are WHERE-only.
+
+    NOTE this is deliberately SEPARATE from get_resumable_interview: the resume banner never routes
+    through here (the endpoint short-circuits `?resumable=true` before calling this), so hiding
+    unscored interviews from the list can't affect which interview is resumable.
 
     Returns the Page envelope {items, total, page, size, pages} — items are `_interview_card` dicts.
     The SAME envelope the `?resumable=true` path returns (a 0-or-1 page), so one response type serves
@@ -469,6 +480,10 @@ async def list_interviews(
             stmt = stmt.where(Level.slug == level)
         if q:
             stmt = stmt.where(or_(Role.name.ilike(f"%{q}%"), Level.name.ilike(f"%{q}%")))
+        if scored:
+            # EXISTS on the 1:1 scorecard — keeps graded interviews only, without a join (so the
+            # score-sort outerjoin below stays an OUTER join and rows aren't multiplied).
+            stmt = stmt.where(Interview.scorecard.has())
         if sort == "date":
             col = Interview.created_at
             stmt = stmt.order_by(col.desc() if descending else col.asc())
@@ -924,14 +939,17 @@ async def get_dashboard(
 # which the model still replays — so the redrawn transcript shows the Q&A spine, matching the
 # History detail view.)
 #
-# THE PRODUCT RULE: only the MOST RECENT unfinished interview is resumable. That's enforced on
-# the backend (not just hidden in the client) via most_recent_unfinished_id below, so bypassing
-# the UI can't reopen a stale interview.
+# THE PRODUCT RULE: an unfinished interview is resumable ONLY while it's the user's single
+# most-recent interview. Starting a NEW interview therefore RETIRES the previous unfinished one
+# for good — the new row is now the most recent, and the old one can never be resumed again, even
+# after the new interview finishes. That's enforced on the backend (not just hidden in the client)
+# via get_resumable_interview below, so bypassing the UI can't reopen a stale interview.
 # ===========================================================================
 
 
 async def get_resumable_interview(profile_id: str) -> dict | None:
-    """This user's ONE resumable interview — the most-recently-active unfinished one — or None.
+    """This user's ONE resumable interview — their most-recent interview, but only if it's still
+    unfinished — or None.
 
     Backs `GET /api/interviews?resumable=true` (the banner asks for just this, so the client never
     pulls the whole history to find it) AND the guard in /api/interviews/{id}/resume (which compares
@@ -942,23 +960,31 @@ async def get_resumable_interview(profile_id: str) -> dict | None:
     Ordered by `updated_at desc`, the SAME sort list_interviews uses, so this and the History list
     agree on recency. `updated_at` doubles as "last active" (every /api/answer write bumps it), so
     resuming-and-answering keeps an interview the resumable one, while STARTING a new interview
-    makes the new row the most recent and quietly demotes the old one — the intended behaviour.
+    makes the NEW row the most recent — and because we look at the most-recent interview REGARDLESS
+    of `done` and bail unless it's unfinished, the superseded one is retired permanently, not merely
+    demoted until the new interview finishes.
 
     Returns the SAME card shape list_interviews yields (so `?resumable=true` and the full list share
-    one response type), or None when the user has no unfinished interview. `done` is always False
-    here and `overall` is None (an unfinished interview isn't graded), but they're included so the
-    shape matches exactly. role/level (names) and the 1:1 scorecard are all selectin-loaded — free.
+    one response type), or None when the most-recent interview is finished (or the user has none).
+    On the returned card `done` is always False and `overall` is None (an unfinished interview isn't
+    graded), but they're included so the shape matches exactly. role/level (names) and the 1:1
+    scorecard are all selectin-loaded — free.
     """
     async with get_session() as db:
         interview = (
             await db.execute(
                 select(Interview)
-                .where(Interview.profile_id == profile_id, Interview.done.is_(False))
+                .where(Interview.profile_id == profile_id)
                 .order_by(Interview.updated_at.desc())
                 .limit(1)
             )
         ).scalar_one_or_none()
-        if interview is None:
+        # Resumable ONLY if the user's single most-recent interview is itself unfinished. The
+        # instant a NEWER interview exists — which starting a new one guarantees — this returns
+        # None for the older unfinished one, and never resurfaces it even after that newer
+        # interview finishes. (The old `done.is_(False)` filter picked the most-recent UNFINISHED
+        # row, which reappeared once a newer finished one no longer masked it.)
+        if interview is None or interview.done:
             return None
         return _interview_card(interview)
 

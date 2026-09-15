@@ -7,6 +7,11 @@
  * search box (matched against role/level name only, sent as `q`) and two async role/level pickers whose
  * value is the vocab slug (sent as role/level) — and ONE submit applies all three together.
  *
+ * VIEW SCOPE: by default only GRADED interviews show (the query sends `scored=true`) — an in-progress
+ * or abandoned interview has no score, so it's hidden here (the ResumeBanner still surfaces the
+ * resumable one). The "Show all" toggle sets `?all=1` to reveal everything. It's a scope control, not a
+ * filter, so — like the sort arrows — it writes the URL on click rather than waiting for the form's submit.
+ *
  * THE URL IS THE SOURCE OF TRUTH. The query args are derived from the query string every render, so a
  * deep link like ?role=backend-engineer&page=2 reproduces exactly this view, and Back/Forward just work.
  * The form only WRITES to the URL on submit; it never holds applied state the URL doesn't. The pickers
@@ -30,8 +35,10 @@ import {
 } from "../api";
 import type { SelectOption } from "../components/AsyncPaginateSelect";
 import { ControlledAsyncPaginateSelect } from "../components/ControlledAsyncPaginateSelect";
+import { Question } from "@phosphor-icons/react";
 import AppNav from "../components/AppNav";
 import ResumeBanner from "../components/ResumeBanner";
+import Tooltip from "../components/Tooltip";
 import InterviewsTable, { type SortField, type SortOrder } from "../components/InterviewsTable";
 import Pagination from "../components/Pagination";
 import Button from "../components/Button";
@@ -64,6 +71,9 @@ export default function InterviewsPage() {
     const sortParam = searchParams.get("sort");
     const sortField: SortField | null = sortParam === "date" || sortParam === "score" ? sortParam : null;
     const sortOrder: SortOrder = searchParams.get("order") === "asc" ? "asc" : "desc";
+    // View scope: by default we show only GRADED interviews (scored: true). `?all=1` opts into the
+    // full list — in-progress and abandoned interviews included — which the "Show all" toggle sets.
+    const showAll = searchParams.get("all") === "1";
     const queryArgs: QueryParams = {
         page,
         size: PAGE_SIZE,
@@ -72,6 +82,8 @@ export default function InterviewsPage() {
         level: levelSlug || undefined,
         sort: sortField || undefined,
         order: sortField ? sortOrder : undefined,
+        // scored: true is the default; omit it (undefined) when showing all so the backend doesn't filter.
+        scored: showAll ? undefined : true,
     };
 
     // isFetching (not isLoading) so the skeleton shows on EVERY refetch — a page or filter change —
@@ -135,6 +147,17 @@ export default function InterviewsPage() {
         setSearchParams(next);
     }
 
+    // Flip the view scope between "graded only" (default) and "all". Writes the URL immediately —
+    // like the sort arrows, not the apply-on-submit filter form — and resets to page 1 since the
+    // result set changes. Other filters/sort are preserved.
+    function toggleShowAll() {
+        const next = new URLSearchParams(searchParams);
+        if (showAll) next.delete("all");
+        else next.set("all", "1");
+        next.delete("page");
+        setSearchParams(next);
+    }
+
     function goToPage(p: number) {
         const next = new URLSearchParams(searchParams);
         next.set("page", String(p));
@@ -144,10 +167,11 @@ export default function InterviewsPage() {
         window.scrollTo({ top: 0, behavior: "smooth" });
     }
 
-    // Reveal "Clear" whenever the view diverges from the default — an active filter OR an applied
-    // sort — since Clear resets the whole URL (filters and sort alike), it's the undo for both.
+    // Reveal "Clear" whenever the view diverges from the default — an active filter, an applied
+    // sort, OR the show-all scope — since Clear resets the whole URL (all of them alike), it's the
+    // undo for each.
     const hasFilters = Boolean(queryArgs.q || roleSlug || levelSlug);
-    const canReset = hasFilters || sortField !== null;
+    const canReset = hasFilters || sortField !== null || showAll;
 
     return (
         <div className="min-h-screen bg-bg text-ink">
@@ -209,6 +233,38 @@ export default function InterviewsPage() {
                                 Clear
                             </Button>
                         )}
+                        {/* View scope, not a filter: writes the URL immediately (type="button" keeps it
+                            out of the form's submit). The toggle + its help icon travel together, pushed
+                            right (ml-auto) away from the Search/Clear cluster. */}
+                        <div className="ml-auto flex items-center gap-1.5">
+                            <Button
+                                variant="secondary"
+                                className="text-[13px]"
+                                aria-pressed={showAll}
+                                onClick={toggleShowAll}
+                            >
+                                {showAll ? "Graded only" : "Show all"}
+                            </Button>
+                            {/* Explains the default scope. Content tracks the current mode so it never
+                                contradicts the button's label. align="end" opens the bubble leftward,
+                                since the icon sits at the row's right edge. */}
+                            <Tooltip
+                                align="end"
+                                content={
+                                    showAll
+                                        ? "Showing every interview you've done, scored or not. Click “Graded only” to see just the ones with a score."
+                                        : "Only interviews with a score are shown. Click “Show all” to see every interview you've done."
+                                }
+                            >
+                                <button
+                                    type="button"
+                                    aria-label="About the Show all / Graded only toggle"
+                                    className="flex cursor-help items-center text-neutral-500 transition-colors hover:text-ink"
+                                >
+                                    <Question size={16} weight="bold" aria-hidden="true" />
+                                </button>
+                            </Tooltip>
+                        </div>
                     </form>
                 </div>
 
