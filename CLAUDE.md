@@ -4,93 +4,121 @@ Guidance for Claude Code when working in this repository.
 
 ## What this project is
 
-**Interview Helper** started as a **learning project** that reuses the mental model from
-[`mcp-helpdesk`](../mcp-helpdesk) — a FastMCP **server** of tools/resources/prompts driven by a
-**Pydantic AI** agent loop — and applies it to a *voice interview coach*: it asks you an interview
-question, you answer, the LLM evaluates the answer and either gives feedback or asks a follow-up.
+**Interview Helper** is a **voice interview coach**: it asks an interview question, the candidate
+answers (typed or spoken), the LLM either probes with a follow-up or, at the end, grades the answers
+against authored rubrics and produces a scorecard. It began as a learning project modeled on
+[`mcp-helpdesk`](../mcp-helpdesk) (a FastMCP server of tools/resources/prompts driven by a Pydantic AI
+agent), and **as of 2026-07-31 it pivoted to a production deploy** — auth, a real database, and hosted
+deployment are all in scope now. The learning-first history explains why the code is shaped the way it
+is, but it is no longer the posture.
 
-The follow-on lesson here is **not** MCP itself (you learned the provider side in `mcp-helpdesk`).
-It's this: **the "AI core" of a voice app is identical to a text app.** Speech-to-text (STT) and
-text-to-speech (TTS) are just *edge adapters* bolted onto the two ends of a loop the LLM still runs
-over **text**. Prove the text loop first; add audio last.
+**The resume point across sessions is the plan.** Read the `## CURRENT STATUS (resume point)` section
+at the end of `interview-helper-build-plan.md` (repo root) FIRST when continuing work — it records
+what's done, why, and the explicit next action. Keep it current when you finish a meaningful chunk.
+
+### The headline design lesson (still true)
+
+STT and TTS are **edge adapters, not part of the agent** — and so is the web UI. The LLM reasons over
+text regardless of how the answer arrived:
 
 ```
-🎤 audio in ──► STT ──► text ──► [ AGENT LOOP: ask → evaluate → follow-up ] ──► text ──► TTS ──► 🔊 out
-                                  └── this is the whole project. same as mcp-helpdesk's core. ──┘
+🎤 / ⌨️ in ──► STT / HTTP ──► text ──► [ AGENT LOOP: ask → probe → grade ] ──► text ──► TTS / HTTP ──► 🔊 / 🖥️ out
 ```
 
-> **Status — as of 2026-07-31 this pivoted to a production deploy.** The phases below were built
-> learning-first (paced for part-time work, favoring clarity over robustness, everything
-> mocked/local/cheap), and that history explains why the architecture looks the way it does. It is
-> **no longer the current posture**: auth, a real database, and hosted deployment are now in scope.
-> Phased production plan: `C:\Users\janse\.claude\plans\synchronous-greeting-puffin.md`.
+The agent, tools, and templates are byte-for-byte the same whether driven by a terminal, a mic, or the
+SPA. Only the two ends change.
 
-## Guiding principle
+## Current architecture
 
-Build a thin **text-only** walking skeleton first — type an answer at a terminal, get a follow-up —
-then deepen one slice at a time. **Audio is the LAST slice, not the first.** Debugging interview logic
-and an audio pipeline simultaneously is the trap this ordering avoids.
+- **Backend — `server/` (FastAPI, `api.py`).** The single app. Every turn does
+  `load_interview_state → turn_agent.run → save_interview_state`; there is **no process-local state**.
+  Routes are gated by `Depends(require_user)` (authentication) plus an ownership check (authorization).
+- **The backend is NOT an MCP client.** `api.py` **imports the tool functions directly** (`from
+  tools.interview import …`, `from grading import …`). The MCP round-trip was earned only when the
+  *model* called the tools; the client-driven rewrite removed that caller, so the indirection went with
+  it (see the `no-indirection-without-a-consumer` convention).
+- **`server/mcp_server.py` still runs, as an external surface only** — for other people's MCP clients
+  (Claude Desktop, `mcp_client_demo.py`, `--list`). Same tool/prompt bodies, different door. Don't
+  route the app's own calls back through it.
+- **Frontend — `client/` (Vite + React + TypeScript SPA).** RTK Query (`src/api.ts`) is the HTTP layer;
+  `react-router` for nav, `react-hook-form` for forms, Supabase JS for auth. Pages in `src/pages/`,
+  shared UI in `src/components/`, auth flow in `src/auth/`, voice adapters in `src/voice/`.
+- **Auth — Supabase.** The SPA signs in against Supabase Auth and sends the access token as
+  `Authorization: Bearer <jwt>`. `server/auth.py` verifies it against Supabase's published **JWKS
+  (ES256)** — checks signature, `exp`, `aud`, `iss` — and trusts the `sub` claim as the user id. No
+  auth secret lives in `server/.env`; the backend needs none to verify.
 
-## What carries over from `mcp-helpdesk` (and what's new)
+### The primitive mapping (original design judgment, still how the tools are organized)
 
-| From `mcp-helpdesk` (reuse the pattern) | New here |
-| --- | --- |
-| FastMCP server: `@mcp.tool` / `@mcp.resource` / `@mcp.prompt` | Interview-shaped primitives (see mapping below) |
-| Pydantic AI agent drives the loop — no hand-rolled loop | A **multi-turn** conversation loop (message history), not one-shot |
-| Cost guardrails (max_tokens, request_limit, local everything) | STT/TTS as **edge adapters** — the one genuinely new concept |
-| stdio transport, `--list` discovery smoke test | A tiny JSON question bank + session store (no Postgres needed yet) |
+- **tools** = actions / side effects → recording an answer, creating an interview, saving a summary.
+- **resources** = read-only context → `rubric://{role}`, `question://{id}`, `reference://` briefs.
+- **prompts** = reusable templates → `behavioral_interview(role, seniority)`, the grading template.
 
-### The primitive mapping (this is the core design judgment)
-
-- **tools** = actions / side effects → `record_answer`, `save_session_summary`
-- **resources** = read-only context (GET) → `rubric://{role}`, `question://{id}`, your resume / a JD
-- **prompts** = reusable interaction templates → `behavioral_interview(role, seniority)`,
-  `evaluate_answer(question, answer, rubric)`
-
-Picking the right bucket is the same lesson as Phase 2 of `mcp-helpdesk`. A question bank is **context
-you read** (resource); persisting an answer is an **action** (tool); the interview style is a
-**template** (prompt).
+Picking the right bucket is the core lesson: context you read is a resource, an action is a tool, an
+interaction style is a prompt.
 
 ## Stack
 
-- **MCP server** (`server/`): standalone **`fastmcp`** (3.x, same as `mcp-helpdesk`), decorator-based.
-- **Transport:** **stdio** first (simplest); Streamable HTTP later if you want multi-client.
-- **Framework client:** **Pydantic AI** as the MCP client + agent loop.
-- **Storage:** **Supabase** (Postgres + Auth + pgvector) is the production target — session state moves
-  to Postgres as the single source of truth, replacing the in-memory `SESSIONS` dict. The JSON question
-  bank (`server/data/questions.json`) is the pre-pivot skeleton, still in place.
-- **LLM:** same cheapest-Gemini-Flash-Lite setup as `mcp-helpdesk` (copy the `.env` + provider wiring).
-- **Audio:** STT/TTS behind a tiny adapter interface (`voice/adapters.py`). Now **cloud, not local** —
-  OpenAI Whisper for STT, OpenAI TTS for output. That the swap was cheap is the adapter seam paying off.
+- **Backend:** Python — FastAPI + Pydantic AI (agent loop) + FastMCP 3.x (external server surface).
+- **Storage:** **Supabase** (Postgres + Auth; pgvector available but **not used** — grading is grounded
+  in authored reference briefs, not RAG). Interview state is a Postgres row (SQLAlchemy models in
+  `server/db/models.py`); `message_history` is stored as JSONB via pydantic-ai serialization. Alembic
+  migrations live in `server/db/migrations/`, including RLS policies and the profile-row trigger. The
+  JSON question bank (`server/data/questions.json`) and old session files are pre-pivot leftovers.
+- **LLM:** cheapest-Gemini setup. **Interviewer** = `gemini-3.1-flash-lite` (`USE_MODEL` in
+  `pydantic_agent.py`). **Grader** = `gemini-3.5-flash-lite` (`GRADER_MODEL` in `grading.py`,
+  overridable via `.env` to a stronger id — grading gets its own, stronger-than-interviewer model).
+- **Grading grounding:** per-question authored **reference briefs** (`server/data/reference_briefs/`,
+  a `reference://` resource) — leveling bands + concept anchors, written in-house. Deterministic
+  `question_id → brief`; no semantic retrieval.
+- **Seniority-aware:** entry/mid/senior get different questions and level-calibrated grading.
+- **Audio (cloud, behind `voice/adapters.py` + `client/src/voice/`):** STT = OpenAI **`whisper-1`**;
+  TTS = OpenAI **`tts-1`** via the `/api/tts` proxy, engine-switchable with a free browser
+  `SpeechSynthesis` fallback. That swapping local→cloud was cheap is the adapter seam paying off.
+- **Deploy target:** SPA on Vercel (`vercel.json` SPA rewrite + `VITE_*` vars) · FastAPI on
+  Render/Railway/Fly · Supabase managed.
 
-## Cost guardrails (apply from day one — same as `mcp-helpdesk`)
+## Cost guardrails (apply from day one)
 
 - Cap `max_output_tokens` and the agent's `request_limit` — a voice loop that never ends is a runaway.
 - Log token counts + latency per turn.
-- STT/TTS are now **paid cloud calls** (OpenAI) — keep the Gemini Spend Cap in place and watch audio spend.
-
-## Phase roadmap (see build plan for detail)
-
-- **Phase 0:** one-tool FastMCP server over stdio (`next_question`), discovered via `--list`. Skeleton.
-- **Phase 1:** the real interview tools/resources against the JSON bank (`record_answer`, `rubric://`).
-- **Phase 2:** the `behavioral_interview` prompt + `evaluate_answer` prompt — the reusable templates.
-- **Phase 3:** Pydantic AI drives the **multi-turn** interview loop, text-only, at the terminal.
-- **Phase 4 (the new idea):** wrap the terminal I/O with STT (input) and TTS (output) adapters.
-- **Phase 5:** polish, session review/scoring. Grading is grounded in authored per-question
-  **reference briefs**, not RAG/pgvector — semantic retrieval is deferred.
-
-When starting work, identify the active phase and stay in its scope.
+- STT/TTS and every grade are paid cloud calls — keep the Gemini spend cap in place and watch spend.
+  Paid endpoints (`/api/transcribe`, `/api/tts`) are wallet-gated behind `require_user`; never leave a
+  proxy open — an open proxy is a stranger's OpenAI bill.
 
 ## Working conventions
 
-- **Verify live API shapes** (FastMCP 3.x, Pydantic AI MCP client) before relying on signatures —
-  same caution as `mcp-helpdesk`. Cross-check that repo's `server/mcp_server.py` and
-  `server/pydantic_agent.py` for the exact working call shapes; they're the reference implementation.
-- **Text before audio, always.** If a bug can be reproduced by typing, don't involve the microphone.
-- **Learning-first:** small throwaway experiments encouraged; leave short design notes for the write-up
-  (especially the "STT/TTS are just edge adapters" realization — that's the headline lesson).
+**Verify before asserting.** Confirm live API shapes (FastMCP 3.x, Pydantic AI) before relying on
+signatures — cross-check `../mcp-helpdesk/server` as the reference. Re-Read a file before quoting a
+constant or model id in prose; in-context values go stale after edits.
+
+**Implement, don't scaffold.** Deliver complete, working changes and edit the files directly. The old
+TODO-scaffold workflow is retired (some file headers still say "SCAFFOLD" — ignore that framing).
+
+**Text before audio.** If a bug can be reproduced by typing, don't involve the microphone.
+
+**Vocabulary:** the thing conducted is an **interview**. "Session" means exactly one thing — a
+SQLAlchemy DB session, the variable `db`. `interview_id` on the wire.
+
+### Backend
+
+Backend coding conventions live in **[`.claude/docs/backend-conventions.md`](.claude/docs/backend-conventions.md)** —
+drop-indirection, DB schema rules, server-side filtering, guard params, wallet-gating, and vocabulary.
+Read it before working in `server/`.
+
+### Frontend / TypeScript
+
+Frontend coding conventions live in **[`.claude/docs/frontend-conventions.md`](.claude/docs/frontend-conventions.md)** —
+4-space indent, the constants module, the RTK Query hook rule, layout-route guards, extraction rules,
+modal/toast/skeleton/icon/date conventions, dynamic interview length, and the npm-install gotcha. Read
+it before working in `client/`.
+
+The user's auto-memory (`MEMORY.md` + files) is the fuller, authoritative record of these preferences,
+with the reasoning behind each. Prefer it when a convention here is ambiguous.
 
 ## Commands
 
 See the `run-interview-helper` skill for how to start the MCP server, the agent, and the
-backend/frontend dev servers — including the required `.env` keys.
+backend (`:8000`) / frontend (`:6173`) dev servers, plus the grading smoke test and required `.env`
+keys (`GEMINI_API_KEY`, `OPENAI_API_KEY`, `DATABASE_URL`, `SUPABASE_URL` on the server; `VITE_*` on the
+client).
