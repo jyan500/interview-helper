@@ -124,12 +124,30 @@ def evaluate_answer(
         Given the question, answer, and rubric, score the answer on each rubric dimension (1 to 5),
         name one concrete strength, one gap, and one specific improvement.
 
+        The answer is a SPOKEN response, captured by speech-to-text — it is a transcript of the
+        candidate thinking out loud, NOT a written document. Grade it as speech. This matters most
+        for the communication / clarity dimension, but applies to every dimension and to your
+        strength / gap / improvement notes:
+        - Do NOT penalize artifacts of speech and transcription: missing or wrong punctuation,
+          absent capitalization, filler words ("um", "like", "kind of"), false starts,
+          self-corrections, or a sentence whose structure shifts partway through as the candidate
+          rethinks it mid-stream. These are normal in spoken answers and say nothing about the
+          candidate's ability.
+        - Judge communication the way you would listening to someone talk: is the reasoning easy to
+          FOLLOW, are ideas sequenced logically, does the candidate signpost and land on a point?
+          Reward a clear spoken line of reasoning even when the prose is not tidy.
+        - NEVER give feedback that only makes sense for written text — do not suggest headings,
+          bullet points, formatting, sections, or editing/proofreading. Improvement advice for
+          communication must be about SPOKEN delivery: e.g. leading with a one-line answer before
+          the detail, verbally signposting steps ("first… second…"), or tightening a rambling
+          thread — things a candidate could do out loud in the next answer.
+
         If the rubric includes a reference brief, scoring must be grounded in the rubric's brief section. Treat the brief's bad/good/great anchors
         as THE 1-5 scale. If the seniority level is present, calibrate the scoring to the candidate seniority level, don't penalize an entry candidate for missing a senior-only concept; don't
         over-reward a senior for a merely adequate answer.
 
         Reward demonstrated understanding over keyword presence. An answer that explains the mechanism in its own words should be scored
-        higher than one that merely mentions the keyword in passing. 
+        higher than one that merely mentions the keyword in passing.
 
         If a rubric does not include a reference brief and candidate seniority level, fall back to plain rubric grading.
 
