@@ -43,6 +43,7 @@
  */
 import { Navigate, Outlet, useLocation } from "react-router";
 import { useAuth } from "./AuthProvider";
+import IdentitySync from "../components/IdentitySync";
 
 export default function ProtectedRoute() {
     const { session, loading } = useAuth();
@@ -56,7 +57,15 @@ export default function ProtectedRoute() {
         )
     }
     if (!session){
-        return <Navigate to="/login" replace state={{from: location.pathname }}/> 
+        return <Navigate to="/login" replace state={{from: location.pathname }}/>
     }
-    return <Outlet />;
+    // Authenticated: keep the `user` identity slice (initials + avatar) in sync for every
+    // <UserAvatar> below, and render the matched child. IdentitySync mounts here — not higher —
+    // so its /api/profile query only ever runs for a signed-in user.
+    return (
+        <>
+            <IdentitySync />
+            <Outlet />
+        </>
+    );
 }

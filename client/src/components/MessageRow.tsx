@@ -9,6 +9,7 @@
  */
 import type { ReactNode } from "react";
 import { Sparkle } from "@phosphor-icons/react";
+import UserAvatar from "./UserAvatar";
 
 type Props = {
     who: "interviewer" | "you";
@@ -23,10 +24,18 @@ export default function MessageRow({ who, kicker, text, timestamp, maxWidth = 56
     const isYou = who === "you";
     return (
         <div className="flex gap-3">
-            {/* Avatar — 30px square, AI star for the interviewer, initials for you */}
-            <div className="flex h-[30px] w-[30px] flex-none items-center justify-center rounded-md border border-neutral-700 text-accent-300">
-                {isYou ? <span className="text-[11px] text-neutral-300">JY</span> : <Sparkle size={15} weight="regular" />}
-            </div>
+            {/* Avatar — 30px square, AI star for the interviewer, the user's picture-or-initials for you
+                (UserAvatar reads the identity from the store, so no avatar prop is threaded in here). */}
+            {isYou ? (
+                <UserAvatar
+                    className="h-[30px] w-[30px] border-neutral-700"
+                    textClassName="text-[11px] text-neutral-300"
+                />
+            ) : (
+                <div className="flex h-[30px] w-[30px] flex-none items-center justify-center rounded-md border border-neutral-700 text-accent-300">
+                    <Sparkle size={15} weight="regular" />
+                </div>
+            )}
 
             <div className="flex flex-col gap-2" style={{ maxWidth }}>
                 <div

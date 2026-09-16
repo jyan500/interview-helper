@@ -933,3 +933,76 @@ one still surfaces. No schema change, no abandon flag.
 there (the resumable-row highlight would need the table wired to real data, a separate effort). A
 `/session` hard-refresh intentionally bounces home (see the SessionLayout refresh guard) rather than
 self-recovering in place — the banner offers a clean resume; no deep-link `/session/:id` recovery yet.
+
+### Profile pictures — ✅ IMPLEMENTED (branch `profile-picture-upload`)
+
+*Feature (not a numbered phase). Backend `py_compile` + app-import/route-registration clean; alembic
+chain single-headed at `b7e3f1c9a204`; client `npx tsc --noEmit` clean. Live end-to-end (a real
+upload against Supabase Storage) still to run — it needs the storage bucket/policy script applied and
+the avatar column migrated first (see below).*
+
+**The idea:** a user can upload a profile picture on a new **`/settings`** page (reached from the
+account avatar in the nav), and it then shows **everywhere the initials otherwise show** — the nav, the
+session participant cell, and the "You" transcript rows. No picture → initials, unchanged.
+
+**Storage decision (resolved): client-direct Supabase Storage.** The image bytes go straight from the
+SPA to a public `avatars` bucket via supabase-js (the same client used for auth) — NOT proxied through
+FastAPI, NOT stored as bytea. This is the one place the SPA talks to Supabase for something other than
+auth, and a considered exception to "all data through FastAPI": a profile picture isn't interview data,
+it's a public image, and Storage is the door built for it. The backend still owns the POINTER and
+validates it.
+
+**Backend (`server/`):**
+- `db/models.py` — `Profile.avatar_url` (nullable `String(512)`): the public object URL, or NULL = no
+  picture. The bytes live in Storage; this column is just the pointer the SPA renders in an `<img>`.
+- `db/migrations/versions/b7e3f1c9a204_profile_avatar_url.py` — adds the column (down_revision
+  `d4a2c6e8b135`). Column only — the storage side is deliberately NOT in the Alembic chain.
+- **`db/policies/storage_avatars_bucket.sql` (NEW folder `db/policies/`)** — the `avatars` bucket +
+  a `FOR ALL` `storage.objects` policy confining a user to their own `<uid>/` folder (the
+  `(storage.foldername(name))[1] = auth.uid()` pattern). **Must be `FOR ALL`, not write-only** — even
+  a public bucket's upload needs the `authenticated` role to SELECT the row it writes (storage-api's
+  `INSERT ... RETURNING` / upsert), so write-only policies fail the upload with a misleading "new row
+  violates RLS." **Run once in the Supabase SQL editor**,
+  not via Alembic: it's DDL against the `storage` schema (owned by `supabase_storage_admin`), which the
+  pooler's `postgres` role may lack privilege for — a failure mid-migration would roll back the column
+  too. Idempotent. Kept in a `policies/` folder, not `migrations/`, because it's out-of-band one-time
+  setup, not a versioned schema change.
+- `tools/interview.py` — `get_profile` now returns `avatar_url`; **`set_profile_avatar(profile_id,
+  avatar_url)`** (NEW) sets OR clears it. Split out from `set_profile_defaults` on purpose: role/level
+  use None = "leave alone", but clearing the avatar IS setting None, so the meanings would collide — a
+  dedicated helper has no "leave alone" case and stays sentinel-free.
+- `api.py` — the avatar is a **singleton sub-resource** with its own verbs: **`PUT /api/profile/avatar`**
+  (set/replace — idempotent, covers first upload and replacement) and **`DELETE /api/profile/avatar`**
+  (remove). `PATCH /api/profile` is untouched (role/level only). PUT **validates** the URL against
+  `AVATAR_URL_PREFIX = <SUPABASE_URL>/storage/v1/object/public/avatars/` (+ ≤512 chars): a PUT body is
+  a string a hostile client could set to anything, and it's later rendered in an `<img src>`, so
+  pinning the prefix means a user can only point their avatar at a file they were allowed to upload.
+
+**Frontend (`client/src/`):**
+- **The identity lives in a Redux slice, not props** (`userSlice.ts` — `{ initials, avatarUrl }`). One
+  writer, **`components/IdentitySync.tsx`**, mounted in `ProtectedRoute`'s authenticated branch, mirrors
+  initials (from the Supabase session) + `avatar_url` (from `useGetProfileQuery`) into the slice; every
+  avatar reads it with a selector. `store.ts` gains the `user` reducer + typed `useAppDispatch`/
+  `useAppSelector`. This replaced an earlier prop-drilling pass (avatarUrl threaded through
+  VoiceColumn/ParticipantCell/TextColumn/MessageRow) — the slice is why none of that plumbing exists.
+- `components/Avatar.tsx` (NEW, dumb) — picture-or-initials box; sizing/framing per call site.
+  `components/UserAvatar.tsx` (NEW, store-connected) — self-supplies from the slice; call sites render
+  `<UserAvatar className=… textClassName=… />` and thread nothing. `MessageRow` ("You" rows),
+  `SessionPage` `ParticipantCell`, and `AppNav` (linking to `/settings`) all use it; the hardcoded
+  `"JY"` in MessageRow is gone.
+- `pages/SettingsPage.tsx` (NEW) + `/settings` route (in `ProtectedRoute`). Pick → `validateAvatarFile`
+  → `supabase.storage.upload(<uid>/avatar, { upsert, contentType })` → `getPublicUrl` (+ `?v=` cache
+  bust) → `useSetAvatarMutation` (PUT). Remove → `useDeleteAvatarMutation` (DELETE the pointer first,
+  then best-effort delete the object). **One flow flag** (`busy`) spans the whole pipeline. The Profile
+  tag invalidates → IdentitySync re-syncs → every avatar updates with no manual refetch.
+- `api.ts` — `ProfileData.avatar_url`; `useSetAvatarMutation` (PUT) + `useDeleteAvatarMutation`
+  (DELETE), both invalidating `Profile`. `helpers.ts` — `avatarObjectPath` + `validateAvatarFile`
+  (pure). `constants.ts` — `AVATAR_BUCKET` / `AVATAR_MAX_BYTES` / `AVATAR_ACCEPTED_TYPES`.
+
+**To finish before it works live:** (1) apply migration `b7e3f1c9a204` (`alembic upgrade head`);
+(2) run `db/policies/storage_avatars_bucket.sql` in the Supabase SQL editor. Both are one-time.
+
+**Deferred / not gaps:** SettingsPage holds only the picture for now (display-name/role editing could
+join it later); no server-side image resize/reencode (a 2 MB client cap + `contentType` only); the
+`?v=` cache-bust reuses one fixed object path rather than unique filenames (so no orphan cleanup
+needed).

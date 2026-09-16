@@ -6,9 +6,10 @@
  * DESIGN/LAYOUT ONLY: `signOut` is wired (it already worked pre-redesign), but the
  * links are plain routes — the nav itself carries no interview state.
  */
-import { NavLink } from "react-router";
+import { Link, NavLink } from "react-router";
 import { useAuth } from "../auth/AuthProvider";
 import Button from "./Button";
+import UserAvatar from "./UserAvatar";
 
 // NavLink hands its className a { isActive } flag; the active link takes ink + an accent
 // underline, the inactive one the muted neutral-400 — matching the mock exactly.
@@ -38,6 +39,14 @@ export default function AppNav() {
             </div>
 
             <div className="flex items-center gap-[14px] text-[13px] text-neutral-300">
+                {/* The account avatar (picture-or-initials) doubles as the entry to the settings page,
+                    where the profile picture is changed. UserAvatar self-supplies from the store. */}
+                <Link to="/settings" aria-label="Account settings" title="Account settings" className="rounded-md">
+                    <UserAvatar
+                        className="h-[30px] w-[30px] border-neutral-700 transition-colors hover:border-accent"
+                        textClassName="text-[11px] text-neutral-300"
+                    />
+                </Link>
                 <span>{session?.user.email ?? "you@example.com"}</span>
                 <Button variant="secondary" className="text-[13px]" onClick={() => signOut()}>
                     Sign out

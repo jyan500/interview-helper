@@ -135,6 +135,21 @@ export const MIC_LEVEL_CEIL_DB = -10;
 export const MIC_SILENCE_LEVEL = 0.05;
 export const MIC_SILENCE_MS = 2500;
 
+/**
+ * Profile pictures — the client-direct Supabase Storage upload (see SettingsPage + supabase.ts).
+ *
+ *   AVATAR_BUCKET         — the public Storage bucket name; must match the one created by
+ *                           server/db/policies/storage_avatars_bucket.sql. The object path is
+ *                           `<uid>/avatar` (avatarObjectPath in helpers.ts), and storage RLS lets a
+ *                           user write only under their own `<uid>/` folder.
+ *   AVATAR_MAX_BYTES      — client-side size cap (2 MB). A pre-flight guard so we never push a huge
+ *                           file at Storage; the real limits are the bucket's, this is just courtesy.
+ *   AVATAR_ACCEPTED_TYPES — the image MIME types we accept, doubling as the <input accept> list.
+ */
+export const AVATAR_BUCKET = "avatars";
+export const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
+export const AVATAR_ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+
 export const PAGE_SIZE = 12
 // The shimmer look for loading placeholders — animation + shape + fill only. Each consumer adds its
 // own height (and inline-block/width) so one bar's dimensions don't leak into every skeleton.

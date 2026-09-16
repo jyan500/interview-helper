@@ -27,13 +27,13 @@ import { useNavigate } from "react-router";
 import { Gear, Microphone, PencilSimple, SpeakerHigh, Sparkle } from "@phosphor-icons/react";
 import type { Icon } from "@phosphor-icons/react";
 import MessageRow from "../components/MessageRow";
+import UserAvatar from "../components/UserAvatar";
 import LoadingDots from "../components/LoadingDots";
 import SettingsModal from "../components/SettingsModal";
 import Button from "../components/Button";
-import { useAuth } from "../auth/AuthProvider";
 import { useGetScorecardMutation, useLazyGetResumeQuery, useSubmitAnswerMutation } from "../api";
 import { useSessionNav } from "./SessionLayout";
-import { initialsFrom, loadStoredMicDeviceId, saveStoredMicDeviceId } from "../helpers";
+import { loadStoredMicDeviceId, saveStoredMicDeviceId } from "../helpers";
 import { useAudioInputDevices, useElapsedClock, useNoInputPrompt, useSpeaking } from "../hooks";
 import {
     pickPreferredVoice,
@@ -65,7 +65,6 @@ const DEFAULT_MIC_OPTION: MicOption = { value: "", label: "System default" };
    ══════════════════════════════════════════════════════════════════════ */
 export default function SessionPage() {
     const navigate = useNavigate();
-    const { session } = useAuth();
     const nav = useSessionNav();
 
     // interviewId is a stable guard param (it never changes for this mounted session), so we read it
@@ -364,7 +363,6 @@ export default function SessionPage() {
     // A real elapsed-time clock (replaces the mock "08:42"), started at mount — see useElapsedClock.
     const clock = useElapsedClock();
 
-    const initials = initialsFrom(session?.user?.user_metadata?.display_name, session?.user?.email);
 
     // System default first, then one option per detected mic (real label once permission lands).
     const micOptions: MicOption[] = useMemo(
@@ -402,7 +400,6 @@ export default function SessionPage() {
             <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[1fr_300px]">
                 {mode === "voice" ? (
                     <VoiceColumn
-                        initials={initials}
                         question={currentQuestion}
                         listening={listening}
                         userSpeaking={userSpeaking}
@@ -467,7 +464,6 @@ export default function SessionPage() {
    Voice mode — centre column (mock 2a), wired
    ══════════════════════════════════════════════════════════════════════ */
 function VoiceColumn({
-    initials,
     question,
     listening,
     userSpeaking,
@@ -487,7 +483,6 @@ function VoiceColumn({
     onSwitch,
     onEnd,
 }: {
-    initials: string;
     question?: Line;
     listening: boolean;
     userSpeaking: boolean;
@@ -525,7 +520,6 @@ function VoiceColumn({
                 sound: "You" on real mic input (hark), the interviewer while its TTS plays. */}
             <div className="grid w-[640px] max-w-full grid-cols-2 rounded-md border border-divider">
                 <ParticipantCell
-                    initials={initials}
                     name="You"
                     role="Candidate"
                     speaking={userSpeaking}
@@ -631,7 +625,6 @@ function micLabel(listening: boolean, voiceMode: TurnMode): string {
 }
 
 function ParticipantCell({
-    initials,
     ai,
     name,
     role,
@@ -639,7 +632,6 @@ function ParticipantCell({
     className = "",
     footer = null,
 }: {
-    initials?: string;
     ai?: boolean;
     name: string;
     role: string;
@@ -656,14 +648,14 @@ function ParticipantCell({
     const StatusIcon: Icon = ai ? SpeakerHigh : Microphone;
     return (
         <div className={"flex flex-col items-center gap-3 px-[22px] py-[26px] " + className}>
-            <div
-                className={
-                    "flex h-16 w-16 items-center justify-center rounded-md border " +
-                    (ai ? "border-accent text-accent-300" : "border-neutral-700 text-neutral-400")
-                }
-            >
-                {ai ? <Sparkle size={26} weight="regular" /> : <span className="font-heading text-[22px]">{initials}</span>}
-            </div>
+            {ai ? (
+                <div className="flex h-16 w-16 items-center justify-center rounded-md border border-accent text-accent-300">
+                    <Sparkle size={26} weight="regular" />
+                </div>
+            ) : (
+                // The candidate's picture-or-initials, self-supplied from the store (no prop threading).
+                <UserAvatar className="h-16 w-16 border-neutral-700 text-neutral-400" textClassName="font-heading text-[22px]" />
+            )}
             <div className="text-center">
                 <div className="font-heading text-[19px]">{name}</div>
                 <div className="text-[12.5px] text-neutral-400">{role}</div>
