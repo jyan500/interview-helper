@@ -44,6 +44,10 @@ export default function SettingsPage() {
     // The just-saved CDN URL, held only until the profile query refetches to it. It bridges the gap
     // between "PUT returned" and "profile/CDN caught up", so the avatar never flashes back to default.
     const [pendingUrl, setPendingUrl] = useState<string | null>(null);
+    // The mirror of pendingUrl for the REMOVE case: after a delete, the profile query still holds the
+    // old URL for a beat, so without this the picture lingers after the spinner clears. This suppresses
+    // the saved avatar immediately, and clears itself once the refetch confirms avatar_url is null.
+    const [justRemoved, setJustRemoved] = useState(false);
     const inputRef = useRef<HTMLInputElement | null>(null);
 
     useEffect(() => {
@@ -53,10 +57,16 @@ export default function SettingsPage() {
     }, [previewUrl]);
 
     const initials = initialsFrom(session?.user?.user_metadata?.display_name, session?.user?.email);
+    // The saved picture, unless we've just removed it (in which case treat it as already gone, ahead of
+    // the profile refetch confirming it) — the single source both the preview and the button state read.
+    const savedAvatar = justRemoved ? null : profile?.avatar_url ?? null;
     // What the big preview shows, in priority order: the just-picked file, else the just-saved image
     // (while the profile query catches up), else the saved picture, else initials.
-    const displayUrl = previewUrl ?? pendingUrl ?? profile?.avatar_url ?? null;
-    const hasSavedPicture = Boolean(profile?.avatar_url);
+    const displayUrl = previewUrl ?? pendingUrl ?? savedAvatar;
+    // Whether a picture is saved OR mid-save — includes pendingUrl so the button text ("Choose a
+    // different image") and the Remove button don't briefly revert in the gap between the spinner
+    // clearing and the profile query refetching to the new URL.
+    const hasSavedPicture = Boolean(pendingUrl ?? savedAvatar);
 
     // After a save produces `pendingUrl`, PRELOAD that exact image; only once it's decoded (or fails)
     // do we drop the local preview and stop the spinner. This is what removes the flash: the picked
@@ -80,6 +90,12 @@ export default function SettingsPage() {
         if (pendingUrl && profile?.avatar_url === pendingUrl) setPendingUrl(null);
     }, [pendingUrl, profile?.avatar_url]);
 
+    // Mirror of the above for removal: once the refetch confirms there's no avatar, drop the optimistic
+    // flag (they're now the same state, so this is invisible).
+    useEffect(() => {
+        if (justRemoved && !profile?.avatar_url) setJustRemoved(false);
+    }, [justRemoved, profile?.avatar_url]);
+
     function clearSelection() {
         if (previewUrl) URL.revokeObjectURL(previewUrl);
         setPreviewUrl(null);
@@ -97,6 +113,7 @@ export default function SettingsPage() {
             return;
         }
         if (previewUrl) URL.revokeObjectURL(previewUrl);
+        setJustRemoved(false); // picking a new image supersedes a pending removal
         setFile(picked);
         setPreviewUrl(URL.createObjectURL(picked));
     }
@@ -143,6 +160,9 @@ export default function SettingsPage() {
             }
             toast("Profile picture removed", { variant: "success" });
             clearSelection();
+            // Hide the picture NOW, without waiting for the profile refetch to report avatar_url=null —
+            // otherwise it lingers for a beat after the spinner clears (the effect above resets this).
+            setJustRemoved(true);
         } catch {
             toast("Couldn't remove your picture. Try again.", { variant: "error" });
         } finally {
