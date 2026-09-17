@@ -66,6 +66,104 @@
           "level": "mid",
           "text": "How would you design a video streaming platform like YouTube? Walk me through your approach.",
           "tags": ["system-design", "scalability", "storage"]
+        },
+        {
+          "id": "sd-dropbox",
+          "type": "system-design",
+          "level": "mid",
+          "text": "How would you design a file storage and sync service like Dropbox? Walk me through your approach.",
+          "tags": ["system-design", "storage", "scalability"]
+        },
+        {
+          "id": "sd-gopuff",
+          "type": "system-design",
+          "level": "mid",
+          "text": "How would you design a local delivery service like Gopuff? Walk me through your approach.",
+          "tags": ["system-design", "geospatial", "consistency"]
+        },
+        {
+          "id": "sd-tinder",
+          "type": "system-design",
+          "level": "mid",
+          "text": "How would you design a dating app like Tinder? Walk me through your approach.",
+          "tags": ["system-design", "geospatial", "consistency"]
+        },
+        {
+          "id": "sd-leetcode",
+          "type": "system-design",
+          "level": "mid",
+          "text": "How would you design an online coding-judge platform like LeetCode? Walk me through your approach.",
+          "tags": ["system-design", "isolation", "scalability"]
+        },
+        {
+          "id": "sd-fb-live-comments",
+          "type": "system-design",
+          "level": "mid",
+          "text": "How would you design a real-time live-comments system for a live video like Facebook Live? Walk me through your approach.",
+          "tags": ["system-design", "real-time", "scalability"]
+        },
+        {
+          "id": "sd-top-k",
+          "type": "system-design",
+          "level": "senior",
+          "text": "How would you design a service that returns the top-K most-viewed videos over a time window? Walk me through your approach.",
+          "tags": ["system-design", "stream-processing", "scalability"]
+        },
+        {
+          "id": "sd-uber",
+          "type": "system-design",
+          "level": "senior",
+          "text": "How would you design a ride-hailing service like Uber? Walk me through your approach.",
+          "tags": ["system-design", "geospatial", "consistency"]
+        },
+        {
+          "id": "sd-web-crawler",
+          "type": "system-design",
+          "level": "mid",
+          "text": "How would you design a large-scale web crawler? Walk me through your approach.",
+          "tags": ["system-design", "scalability", "fault-tolerance"]
+        },
+        {
+          "id": "sd-ad-click-aggregator",
+          "type": "system-design",
+          "level": "senior",
+          "text": "How would you design a real-time ad click aggregator? Walk me through your approach.",
+          "tags": ["system-design", "stream-processing", "idempotency"]
+        },
+        {
+          "id": "sd-fb-post-search",
+          "type": "system-design",
+          "level": "mid",
+          "text": "How would you design full-text search over social media posts like Facebook post search? Walk me through your approach.",
+          "tags": ["system-design", "search", "scalability"]
+        },
+        {
+          "id": "ai-workflow",
+          "type": "behavioral",
+          "level": "mid",
+          "text": "Beyond basic prompting, what does your AI-assisted development workflow look like? Walk me through how you actually ship with an AI agent.",
+          "tags": ["ai-collaboration", "workflow"]
+        },
+        {
+          "id": "ai-code-quality",
+          "type": "behavioral",
+          "level": "mid",
+          "text": "How do you keep code quality high when a lot of your code is AI-generated?",
+          "tags": ["ai-collaboration", "code-quality"]
+        },
+        {
+          "id": "ai-testing",
+          "type": "technical",
+          "level": "mid",
+          "text": "How do you test AI-generated code?",
+          "tags": ["ai-collaboration", "testing"]
+        },
+        {
+          "id": "ai-token-spend",
+          "type": "behavioral",
+          "level": "mid",
+          "text": "How do you keep token spend low when working with AI coding agents?",
+          "tags": ["ai-collaboration", "cost"]
         }
       ]
     },
@@ -80,6 +178,13 @@
         "scale": "1 (poor) to 5 (excellent) per dimension"
       },
       "questions": [
+        {
+          "id": "be-2",
+          "type": "system-design",
+          "level": "senior",
+          "text": "How would you design a rate limiter for a public API? Walk me through your approach.",
+          "tags": ["system-design", "scalability"]
+        },
         {
           "id": "sd-bitly",
           "type": "system-design",
@@ -114,6 +219,104 @@
           "level": "mid",
           "text": "How would you design a video streaming platform like YouTube? Walk me through your approach.",
           "tags": ["system-design", "scalability", "storage"]
+        },
+        {
+          "id": "sd-dropbox",
+          "type": "system-design",
+          "level": "mid",
+          "text": "How would you design a file storage and sync service like Dropbox? Walk me through your approach.",
+          "tags": ["system-design", "storage", "scalability"]
+        },
+        {
+          "id": "sd-gopuff",
+          "type": "system-design",
+          "level": "mid",
+          "text": "How would you design a local delivery service like Gopuff? Walk me through your approach.",
+          "tags": ["system-design", "geospatial", "consistency"]
+        },
+        {
+          "id": "sd-tinder",
+          "type": "system-design",
+          "level": "mid",
+          "text": "How would you design a dating app like Tinder? Walk me through your approach.",
+          "tags": ["system-design", "geospatial", "consistency"]
+        },
+        {
+          "id": "sd-leetcode",
+          "type": "system-design",
+          "level": "mid",
+          "text": "How would you design an online coding-judge platform like LeetCode? Walk me through your approach.",
+          "tags": ["system-design", "isolation", "scalability"]
+        },
+        {
+          "id": "sd-fb-live-comments",
+          "type": "system-design",
+          "level": "mid",
+          "text": "How would you design a real-time live-comments system for a live video like Facebook Live? Walk me through your approach.",
+          "tags": ["system-design", "real-time", "scalability"]
+        },
+        {
+          "id": "sd-top-k",
+          "type": "system-design",
+          "level": "senior",
+          "text": "How would you design a service that returns the top-K most-viewed videos over a time window? Walk me through your approach.",
+          "tags": ["system-design", "stream-processing", "scalability"]
+        },
+        {
+          "id": "sd-uber",
+          "type": "system-design",
+          "level": "senior",
+          "text": "How would you design a ride-hailing service like Uber? Walk me through your approach.",
+          "tags": ["system-design", "geospatial", "consistency"]
+        },
+        {
+          "id": "sd-web-crawler",
+          "type": "system-design",
+          "level": "mid",
+          "text": "How would you design a large-scale web crawler? Walk me through your approach.",
+          "tags": ["system-design", "scalability", "fault-tolerance"]
+        },
+        {
+          "id": "sd-ad-click-aggregator",
+          "type": "system-design",
+          "level": "senior",
+          "text": "How would you design a real-time ad click aggregator? Walk me through your approach.",
+          "tags": ["system-design", "stream-processing", "idempotency"]
+        },
+        {
+          "id": "sd-fb-post-search",
+          "type": "system-design",
+          "level": "mid",
+          "text": "How would you design full-text search over social media posts like Facebook post search? Walk me through your approach.",
+          "tags": ["system-design", "search", "scalability"]
+        },
+        {
+          "id": "ai-workflow",
+          "type": "behavioral",
+          "level": "mid",
+          "text": "Beyond basic prompting, what does your AI-assisted development workflow look like? Walk me through how you actually ship with an AI agent.",
+          "tags": ["ai-collaboration", "workflow"]
+        },
+        {
+          "id": "ai-code-quality",
+          "type": "behavioral",
+          "level": "mid",
+          "text": "How do you keep code quality high when a lot of your code is AI-generated?",
+          "tags": ["ai-collaboration", "code-quality"]
+        },
+        {
+          "id": "ai-testing",
+          "type": "technical",
+          "level": "mid",
+          "text": "How do you test AI-generated code?",
+          "tags": ["ai-collaboration", "testing"]
+        },
+        {
+          "id": "ai-token-spend",
+          "type": "behavioral",
+          "level": "mid",
+          "text": "How do you keep token spend low when working with AI coding agents?",
+          "tags": ["ai-collaboration", "cost"]
         }
       ]
     },
@@ -127,7 +330,113 @@
         ],
         "scale": "1 (poor) to 5 (excellent) per dimension"
       },
-      "questions": []
+      "questions": [
+        {
+          "id": "fe-hover-scale",
+          "type": "technical",
+          "level": "mid",
+          "text": "Build a button that scales up on hover, efficiently. Why is your approach the efficient one, and what do the wrong approaches cost?",
+          "tags": ["frontend", "css", "performance"]
+        },
+        {
+          "id": "ai-workflow",
+          "type": "behavioral",
+          "level": "mid",
+          "text": "Beyond basic prompting, what does your AI-assisted development workflow look like? Walk me through how you actually ship with an AI agent.",
+          "tags": ["ai-collaboration", "workflow"]
+        },
+        {
+          "id": "ai-code-quality",
+          "type": "behavioral",
+          "level": "mid",
+          "text": "How do you keep code quality high when a lot of your code is AI-generated?",
+          "tags": ["ai-collaboration", "code-quality"]
+        },
+        {
+          "id": "ai-testing",
+          "type": "technical",
+          "level": "mid",
+          "text": "How do you test AI-generated code?",
+          "tags": ["ai-collaboration", "testing"]
+        },
+        {
+          "id": "ai-token-spend",
+          "type": "behavioral",
+          "level": "mid",
+          "text": "How do you keep token spend low when working with AI coding agents?",
+          "tags": ["ai-collaboration", "cost"]
+        },
+        {
+          "id": "fe-design-system",
+          "type": "system-design",
+          "level": "senior",
+          "text": "What makes a good design system?",
+          "tags": ["frontend", "architecture", "design-system"]
+        },
+        {
+          "id": "fe-box-model",
+          "type": "technical",
+          "level": "entry",
+          "text": "Explain the CSS box model.",
+          "tags": ["frontend", "css"]
+        },
+        {
+          "id": "fe-css-specificity",
+          "type": "technical",
+          "level": "mid",
+          "text": "How does CSS specificity work?",
+          "tags": ["frontend", "css"]
+        },
+        {
+          "id": "fe-responsive-design",
+          "type": "technical",
+          "level": "mid",
+          "text": "What are the core principles of responsive design?",
+          "tags": ["frontend", "css", "accessibility"]
+        },
+        {
+          "id": "fe-event-loop",
+          "type": "technical",
+          "level": "mid",
+          "text": "Give a high-level overview of the JavaScript event loop.",
+          "tags": ["frontend", "javascript"]
+        },
+        {
+          "id": "fe-debug-react",
+          "type": "technical",
+          "level": "mid",
+          "text": "How would you debug a slow React app?",
+          "tags": ["frontend", "performance", "react"]
+        },
+        {
+          "id": "fe-object-vs-map",
+          "type": "technical",
+          "level": "entry",
+          "text": "What is the difference between an Object and a Map in JavaScript, and when would you choose each?",
+          "tags": ["frontend", "javascript"]
+        },
+        {
+          "id": "fe-weakmap-gc",
+          "type": "technical",
+          "level": "senior",
+          "text": "Explain the difference between Map and WeakMap, and how garbage collection fits in.",
+          "tags": ["frontend", "javascript", "memory"]
+        },
+        {
+          "id": "fe-scale-frontend",
+          "type": "system-design",
+          "level": "senior",
+          "text": "How would you scale a frontend application from 1,000 to 100,000 daily users?",
+          "tags": ["frontend", "architecture", "scalability"]
+        },
+        {
+          "id": "fe-llm-chatbot-protocol",
+          "type": "system-design",
+          "level": "mid",
+          "text": "What protocol would you use to integrate an LLM-powered chatbot into a frontend application, and why?",
+          "tags": ["frontend", "real-time", "ai-collaboration"]
+        }
+      ]
     },
     "product-manager": {
       "rubric": {
