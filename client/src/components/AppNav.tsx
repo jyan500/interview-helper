@@ -47,7 +47,7 @@ export default function AppNav() {
                         textClassName="text-[11px] text-neutral-300"
                     />
                 </Link>
-                <span>{session?.user.email ?? "you@example.com"}</span>
+                <span>{session?.user?.user_metadata?.display_name ?? ""}</span>
                 <Button variant="secondary" className="text-[13px]" onClick={() => signOut()}>
                     Sign out
                 </Button>

@@ -9,19 +9,11 @@
 import { useForm } from "react-hook-form";
 import { useNavigate } from "react-router";
 import { supabase } from "../supabase";
+import { passwordStrength } from "../helpers";
 import AuthCard, { StrengthMeter } from "../components/AuthCard";
 import Button from "../components/Button";
 
 type Fields = { password: string; confirmPassword: string };
-
-function passwordStrength(pw: string): { score: number; label: string } {
-    if (!pw) return { score: 0, label: "" };
-    let score = 0;
-    if (pw.length >= 10) score++;
-    if (/\d/.test(pw)) score++;
-    if (/[^A-Za-z0-9]/.test(pw) || (/[a-z]/.test(pw) && /[A-Z]/.test(pw))) score++;
-    return { score, label: ["Too short", "Weak", "Fair", "Strong"][score] };
-}
 
 export default function ResetPasswordPage() {
     const {

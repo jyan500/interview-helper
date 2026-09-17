@@ -2,11 +2,14 @@
  * Create account — Nocturne mock 4b. Restyled onto the 440px auth card; the FORM LOGIC
  * is unchanged from the pre-redesign page.
  *
- * Logic recap (see git history for the long version): supabase.auth.signUp with
- * display_name in options.data (a trigger copies it into public.profiles). Success has
- * two shapes — data.session set (signed in, navigate home) or null (email confirmation
- * needed, show the check-your-email note). Do not special-case "already registered";
- * Supabase deliberately returns a normal success so the form can't enumerate accounts.
+ * Logic recap (see git history for the long version): supabase.auth.signUp with the name
+ * in options.data (a trigger copies display_name into public.profiles). We capture FIRST +
+ * LAST name (option A, matching the settings Name card) and store three keys: first_name,
+ * last_name, and the combined display_name the trigger/initials/greeting read — see
+ * displayNameFrom. Success has two shapes — data.session set (signed in, navigate home) or
+ * null (email confirmation needed, show the check-your-email note). Do not special-case
+ * "already registered"; Supabase deliberately returns a normal success so the form can't
+ * enumerate accounts.
  *
  * NEW here vs. the old page: the 3-segment strength meter (design element), driven by a
  * trivial score over the live password value.
@@ -15,6 +18,7 @@ import { useForm } from "react-hook-form";
 import { Link, useNavigate } from "react-router";
 import { useState } from "react";
 import { supabase } from "../supabase";
+import { displayNameFrom, passwordStrength } from "../helpers";
 import AuthCard, { Brand, StrengthMeter } from "../components/AuthCard";
 import Button from "../components/Button";
 
@@ -22,18 +26,9 @@ type SignupFields = {
     email: string;
     password: string;
     confirmPassword: string;
-    displayName: string;
+    firstName: string;
+    lastName: string;
 };
-
-// Trivial local strength score (0–3) for the meter — length, a digit, a symbol/caps mix.
-function passwordStrength(pw: string): { score: number; label: string } {
-    if (!pw) return { score: 0, label: "" };
-    let score = 0;
-    if (pw.length >= 10) score++;
-    if (/\d/.test(pw)) score++;
-    if (/[^A-Za-z0-9]/.test(pw) || (/[a-z]/.test(pw) && /[A-Z]/.test(pw))) score++;
-    return { score, label: ["Too short", "Weak", "Fair", "Strong"][score] };
-}
 
 export default function SignupPage() {
     const {
@@ -49,10 +44,14 @@ export default function SignupPage() {
     const strength = passwordStrength(watch("password") || "");
 
     async function onSubmit(values: SignupFields) {
+        const first = values.firstName.trim();
+        const last = values.lastName.trim();
         const { data, error } = await supabase.auth.signUp({
             email: values.email,
             password: values.password,
-            options: { data: { display_name: values.displayName } },
+            options: {
+                data: { first_name: first, last_name: last, display_name: displayNameFrom(first, last) },
+            },
         });
         if (error) {
             setError("root", { message: error.message });
@@ -76,14 +75,25 @@ export default function SignupPage() {
             </p>
 
             <form onSubmit={handleSubmit(onSubmit)} className="mt-6 flex flex-col gap-4">
-                <div className="field">
-                    <label>Display name</label>
-                    <input
-                        className="input"
-                        placeholder="How the interviewer addresses you"
-                        {...register("displayName", { required: "Display name is required" })}
-                    />
-                    {errors.displayName && <p className="mt-1 text-[12.5px] text-gap">{errors.displayName.message}</p>}
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div className="field">
+                        <label>First name</label>
+                        <input
+                            className="input"
+                            placeholder="First name"
+                            {...register("firstName", { required: "First name is required" })}
+                        />
+                        {errors.firstName && <p className="mt-1 text-[12.5px] text-gap">{errors.firstName.message}</p>}
+                    </div>
+                    <div className="field">
+                        <label>Last name</label>
+                        <input
+                            className="input"
+                            placeholder="Last name"
+                            {...register("lastName", { required: "Last name is required" })}
+                        />
+                        {errors.lastName && <p className="mt-1 text-[12.5px] text-gap">{errors.lastName.message}</p>}
+                    </div>
                 </div>
 
                 <div className="field">

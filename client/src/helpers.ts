@@ -117,3 +117,44 @@ export function formatScore(overall: number): string {
 export function optionFromSlug(slug: string | null): SelectOption | null {
     return slug ? { value: slug, label: slug } : null;
 }
+
+/**
+ * The 0–3 password strength score + its label for the 3-segment <StrengthMeter> — length, a digit, a
+ * symbol/mixed-case bonus. Shared by every place a new password is chosen (signup, reset, the settings
+ * password card) so the meter reads identically across them. Purely presentational (never gates submit).
+ */
+export function passwordStrength(pw: string): { score: number; label: string } {
+    if (!pw) return { score: 0, label: "" };
+    let score = 0;
+    if (pw.length >= 10) score++;
+    if (/\d/.test(pw)) score++;
+    if (/[^A-Za-z0-9]/.test(pw) || (/[a-z]/.test(pw) && /[A-Z]/.test(pw))) score++;
+    return { score, label: ["Too short", "Weak", "Fair", "Strong"][score] };
+}
+
+/**
+ * First/last name out of a Supabase auth `user_metadata` blob, for pre-filling the settings name form.
+ * Prefers the explicit `first_name`/`last_name` the settings page writes; falls back to SPLITTING the
+ * single `display_name` that signup captured (first word -> first name, the rest -> last name) so a
+ * user who only ever set a display name still opens the form pre-filled. Empty strings when unset.
+ */
+export function deriveName(
+    meta?: { first_name?: string; last_name?: string; display_name?: string } | null,
+): { firstName: string; lastName: string } {
+    if (meta?.first_name || meta?.last_name) {
+        return { firstName: meta.first_name ?? "", lastName: meta.last_name ?? "" };
+    }
+    const display = (meta?.display_name ?? "").trim();
+    if (!display) return { firstName: "", lastName: "" };
+    const parts = display.split(/\s+/);
+    return { firstName: parts[0] ?? "", lastName: parts.slice(1).join(" ") };
+}
+
+/**
+ * The combined "First Last" display name we keep in sync alongside first_name/last_name (option A):
+ * the Supabase dashboard's Display Name column reads user_metadata.display_name, and the app's initials
+ * (initialsFrom) + dashboard greeting still read it too. Collapses to just whichever half is present.
+ */
+export function displayNameFrom(firstName: string, lastName: string): string {
+    return `${firstName.trim()} ${lastName.trim()}`.trim();
+}
