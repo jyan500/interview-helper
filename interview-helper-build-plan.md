@@ -411,8 +411,10 @@ get different questions and level-calibrated feedback).
 
 ## CURRENT STATUS (resume point)
 
-*Last updated 2026-08-27. Branch: `neural-tts` (Phase F complete). Phases A–F all ✅; **Phase G
-(production hardening & deploy) is the next phase.***
+*Last updated 2026-09-17. Branch: `increasing-question-bank-and-frontend-changes`. Phases A–F all ✅;
+**Phase G (production hardening & deploy) is the next phase.*** Recent post-F work (profile picture,
+settings page, and the question-bank + roles expansion) is logged in dated `###` sections at the END
+of this file.*
 
 ### Phase A — ✅ COMPLETE (all verified against the live Supabase DB)
 
@@ -1041,3 +1043,71 @@ form/data/save with **one busy flag** apiece; nothing is threaded between them.
 **No backend/DB change** — names live in `user_metadata`; `profiles.display_name` (set by the signup
 trigger, unread by the client) is intentionally left as-is. **Deferred:** email change relies on
 Supabase's default confirmation email templates/redirect being configured for the deployed domain.
+
+### Question bank + roles expansion (system design) — ✅ (branch `increasing-question-bank-and-frontend-changes`, 2026-09-17)
+
+Grew the bank from 5 questions / 2 roles to **20 questions / 4 roles**, all data-driven (no client
+change — roles come from `GET /api/roles`, questions from the same tools).
+
+- **Two new roles in `questions.json`:** `fullstack-engineer` (rubric: Requirements & scoping /
+  Technical depth / Tradeoff reasoning / Communication & structure) and `frontend-engineer` (rubric:
+  Clarity / Technical depth / Tradeoff reasoning / UX & accessibility awareness).
+- **15 `system-design` questions** adapted from ALL 16 FREE HelloInterview problem breakdowns
+  (`/learn/system-design/in-a-hurry/problem-breakdowns`), reworded like the existing `be-2` rate
+  limiter. The 16th free problem, the rate limiter itself, was ALREADY in the bank as `be-2` — so
+  instead of duplicating it we attached `be-2` to `fullstack-engineer` too. New slugs: `sd-bitly`
+  (entry); `sd-ticketmaster`, `sd-fb-news-feed`, `sd-whatsapp`, `sd-youtube`, `sd-dropbox`,
+  `sd-gopuff`, `sd-tinder`, `sd-leetcode`, `sd-fb-live-comments`, `sd-web-crawler`, `sd-fb-post-search`
+  (mid); `sd-top-k`, `sd-uber`, `sd-ad-click-aggregator` (senior — the genuinely harder,
+  data-intensive/consistency-heavy ones). Levels follow "mostly mid, simplest = entry, hardest =
+  senior"; the at-or-below filter means an entry interview draws only `sd-bitly`, a mid interview
+  draws the entry+mid set, a senior interview draws everything.
+- **N:N mapping:** each SD question is authored under BOTH `backend-engineer` and `fullstack-engineer`
+  in the JSON, so the seed reuses the question row by slug and adds a second `question_roles` pairing.
+  Final counts: backend-engineer = 18 questions (3 original + 15 SD), fullstack-engineer = 16 (15 SD +
+  the shared `be-2`). Frontend candidates getting non-frontend SD questions was the thing we AVOIDED —
+  `frontend-engineer` is intentionally created EMPTY.
+- **15 reference briefs** (`data/reference_briefs/sd-*.md`, ~4.3–4.9k chars each), each in the `be-2`
+  house style — capability-phrased anchors, a bad/good/great gradation, and per-level bars — with each
+  article's bad/good/great solutions adapted (in our own words, not copied) into the leveling: entry
+  lenient on "bad" answers, senior must reach "great" and drive the tradeoffs.
+- **Seeded + verified in two passes:** first batch `roles=2, questions=5, question_roles=10, briefs=5,
+  dimensions=8, tags=4`; second batch `questions=10, question_roles=21 (10 SD × 2 roles + be-2→
+  fullstack), briefs=10, tags=6`. Read-path smoke tests confirmed both rubrics, `next_question` per
+  level, the empty frontend role, and every brief loading.
+
+All 16 free HelloInterview problems are now represented; further SD growth would be the PREMIUM/locked
+HelloInterview problems (not accessible). `frontend-engineer` was seeded EMPTY in this pass and is
+populated in the next section.
+
+### Frontend questions + shared AI-collaboration questions — ✅ (branch `increasing-question-bank-and-frontend-changes`, 2026-09-17)
+
+Populated the previously-empty `frontend-engineer` role with 15 questions, and shared the 4
+AI-workflow ones onto backend + full-stack too (per user request). Bank is now
+**35 questions across 4 roles** (backend-engineer=22, fullstack-engineer=20, frontend-engineer=15,
+product-manager=2; counts overlap because SD + AI questions are N:N).
+
+- **Source:** the Medium article "Top 15 Frontend Interview Questions for 2026" (Priyansh). 
+  Each question ships with an answer, and the
+  article's own "the definition gets a passing grade, the tradeoff gets the offer" framing maps
+  directly onto our good-vs-great gradation.
+- **11 frontend-only questions** (`fe-*`): `fe-hover-scale`, `fe-design-system`, `fe-box-model`,
+  `fe-css-specificity`, `fe-responsive-design`, `fe-event-loop`, `fe-debug-react`, `fe-object-vs-map`,
+  `fe-weakmap-gc`, `fe-scale-frontend`, `fe-llm-chatbot-protocol`. Levels: `fe-box-model` +
+  `fe-object-vs-map` = entry (fundamentals, so an entry frontend interview isn't empty);
+  `fe-design-system` + `fe-weakmap-gc` + `fe-scale-frontend` = senior; rest mid.
+- **4 shared AI-collaboration questions** (`ai-*`, type mostly `behavioral`, level mid): `ai-workflow`,
+  `ai-code-quality`, `ai-testing`, `ai-token-spend`. Authored under frontend + backend + fullstack in
+  the JSON → N:N (`question_roles=23` on seed = 11 frontend-only + 4 AI × 3 roles). These are
+  role-agnostic judgment questions. NOTE: Q1 (hover/rendering) stayed frontend-only — it's a CSS
+  rendering question, not an AI-workflow one, despite sitting in the article's "AI" section.
+- **15 reference briefs** (`data/reference_briefs/{fe,ai}-*.md`) in the `be-2` house style. New
+  `question_types`: none (reused behavioral/technical/system-design). New tag `ai-collaboration`
+  groups the AI questions.
+- **Seeded + verified:** `python -m db.seed` → `questions=15, question_roles=23, briefs=15, tags=14`.
+  Smoke test confirmed frontend has all 15, the AI questions on all three roles, `next_question`
+  entry→`fe-box-model`, and every brief loading.
+
+**RESOLVED:** the earlier "`frontend-engineer` is empty / interview immediately exhausted" gap is
+gone — the role now has entry/mid/senior questions. Remaining bank growth = premium HelloInterview
+problems (not accessible) or more frontend depth if desired.
