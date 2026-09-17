@@ -31,8 +31,103 @@
           "level": "mid",
           "text": "Explain the difference between optimistic and pessimistic locking, and when you'd choose each.",
           "tags": ["databases", "concurrency"]
+        },
+        {
+          "id": "sd-bitly",
+          "type": "system-design",
+          "level": "entry",
+          "text": "How would you design a URL shortener like Bitly? Walk me through your approach.",
+          "tags": ["system-design", "scalability", "caching"]
+        },
+        {
+          "id": "sd-ticketmaster",
+          "type": "system-design",
+          "level": "mid",
+          "text": "How would you design a ticket-booking system like Ticketmaster? Walk me through your approach.",
+          "tags": ["system-design", "concurrency", "consistency"]
+        },
+        {
+          "id": "sd-fb-news-feed",
+          "type": "system-design",
+          "level": "mid",
+          "text": "How would you design a social media news feed like Facebook's? Walk me through your approach.",
+          "tags": ["system-design", "scalability", "caching"]
+        },
+        {
+          "id": "sd-whatsapp",
+          "type": "system-design",
+          "level": "mid",
+          "text": "How would you design a real-time chat system like WhatsApp? Walk me through your approach.",
+          "tags": ["system-design", "real-time", "scalability"]
+        },
+        {
+          "id": "sd-youtube",
+          "type": "system-design",
+          "level": "mid",
+          "text": "How would you design a video streaming platform like YouTube? Walk me through your approach.",
+          "tags": ["system-design", "scalability", "storage"]
         }
       ]
+    },
+    "fullstack-engineer": {
+      "rubric": {
+        "dimensions": [
+          "Requirements & scoping",
+          "Technical depth / correctness",
+          "Tradeoff reasoning",
+          "Communication & structure"
+        ],
+        "scale": "1 (poor) to 5 (excellent) per dimension"
+      },
+      "questions": [
+        {
+          "id": "sd-bitly",
+          "type": "system-design",
+          "level": "entry",
+          "text": "How would you design a URL shortener like Bitly? Walk me through your approach.",
+          "tags": ["system-design", "scalability", "caching"]
+        },
+        {
+          "id": "sd-ticketmaster",
+          "type": "system-design",
+          "level": "mid",
+          "text": "How would you design a ticket-booking system like Ticketmaster? Walk me through your approach.",
+          "tags": ["system-design", "concurrency", "consistency"]
+        },
+        {
+          "id": "sd-fb-news-feed",
+          "type": "system-design",
+          "level": "mid",
+          "text": "How would you design a social media news feed like Facebook's? Walk me through your approach.",
+          "tags": ["system-design", "scalability", "caching"]
+        },
+        {
+          "id": "sd-whatsapp",
+          "type": "system-design",
+          "level": "mid",
+          "text": "How would you design a real-time chat system like WhatsApp? Walk me through your approach.",
+          "tags": ["system-design", "real-time", "scalability"]
+        },
+        {
+          "id": "sd-youtube",
+          "type": "system-design",
+          "level": "mid",
+          "text": "How would you design a video streaming platform like YouTube? Walk me through your approach.",
+          "tags": ["system-design", "scalability", "storage"]
+        }
+      ]
+    },
+    "frontend-engineer": {
+      "rubric": {
+        "dimensions": [
+          "Clarity of communication",
+          "Technical depth / correctness",
+          "Tradeoff reasoning",
+          "User experience & accessibility awareness"
+        ],
+        "scale": "1 (poor) to 5 (excellent) per dimension"
+      },
+      "questions": []
     },
     "product-manager": {
       "rubric": {

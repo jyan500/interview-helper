@@ -411,8 +411,10 @@ get different questions and level-calibrated feedback).
 
 ## CURRENT STATUS (resume point)
 
-*Last updated 2026-08-27. Branch: `neural-tts` (Phase F complete). Phases A–F all ✅; **Phase G
-(production hardening & deploy) is the next phase.***
+*Last updated 2026-09-17. Branch: `increasing-question-bank-and-frontend-changes`. Phases A–F all ✅;
+**Phase G (production hardening & deploy) is the next phase.*** Recent post-F work (profile picture,
+settings page, and the question-bank + roles expansion) is logged in dated `###` sections at the END
+of this file.*
 
 ### Phase A — ✅ COMPLETE (all verified against the live Supabase DB)
 
@@ -1041,3 +1043,34 @@ form/data/save with **one busy flag** apiece; nothing is threaded between them.
 **No backend/DB change** — names live in `user_metadata`; `profiles.display_name` (set by the signup
 trigger, unread by the client) is intentionally left as-is. **Deferred:** email change relies on
 Supabase's default confirmation email templates/redirect being configured for the deployed domain.
+
+### Question bank + roles expansion (system design) — ✅ (branch `increasing-question-bank-and-frontend-changes`, 2026-09-17)
+
+Grew the bank from 5 questions / 2 roles to 10 / 4, all data-driven (no client change — roles come
+from `GET /api/roles`, questions from the same tools).
+
+- **Two new roles in `questions.json`:** `fullstack-engineer` (rubric: Requirements & scoping /
+  Technical depth / Tradeoff reasoning / Communication & structure) and `frontend-engineer` (rubric:
+  Clarity / Technical depth / Tradeoff reasoning / UX & accessibility awareness).
+- **Five new `system-design` questions** adapted from the FREE HelloInterview problem breakdowns
+  (`/learn/system-design/in-a-hurry/problem-breakdowns`), reworded like the existing `be-2` rate
+  limiter: `sd-bitly` (entry), `sd-ticketmaster`, `sd-fb-news-feed`, `sd-whatsapp`, `sd-youtube`
+  (mid). Levels follow the "mostly mid, simplest = entry" rule; the at-or-below filter means a mid
+  interview draws all five, an entry interview draws only `sd-bitly`.
+- **N:N mapping:** each SD question is authored under BOTH `backend-engineer` and `fullstack-engineer`
+  in the JSON, so the seed reuses the question row by slug and adds a second `question_roles` pairing
+  (`question_roles=10` on seed = 5 questions × 2 roles). Frontend candidates get non-frontend SD
+  questions was the thing we AVOIDED — `frontend-engineer` is intentionally created EMPTY for now.
+- **Five reference briefs** (`data/reference_briefs/sd-*.md`), each in the `be-2` house style —
+  capability-phrased anchors, a bad/good/great gradation, and per-level bars — with the article's
+  bad/good/great solutions adapted (in our own words, not copied) into the leveling: entry lenient on
+  "bad" answers, senior must reach "great" and drive the tradeoffs.
+- **Seeded + verified:** `python -m db.seed` reported `roles=2, questions=5, question_roles=10,
+  briefs=5, dimensions=8, tags=4`. Read-path smoke test confirmed both rubrics, `next_question` for
+  fullstack at entry/mid, the empty frontend role, and brief lookups.
+
+**KNOWN GAP (by design decision):** `frontend-engineer` has zero questions, so starting an interview
+for it is immediately `exhausted`. It was added now so the role exists; frontend-specific questions
+come later. Consider a starter behavioral/technical question or two if the empty role ships to users.
+**Remaining free HelloInterview problems (11)** — gopuff, tinder, leetcode, youtube-top-k, uber,
+web-crawler, ad-click-aggregator, fb-post-search, fb-live-comments — can be authored the same way.
