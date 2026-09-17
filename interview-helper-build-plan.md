@@ -1002,7 +1002,42 @@ validates it.
 **To finish before it works live:** (1) apply migration `b7e3f1c9a204` (`alembic upgrade head`);
 (2) run `db/policies/storage_avatars_bucket.sql` in the Supabase SQL editor. Both are one-time.
 
-**Deferred / not gaps:** SettingsPage holds only the picture for now (display-name/role editing could
-join it later); no server-side image resize/reencode (a 2 MB client cap + `contentType` only); the
-`?v=` cache-bust reuses one fixed object path rather than unique filenames (so no orphan cleanup
-needed).
+**Deferred / not gaps:** no server-side image resize/reencode (a 2 MB client cap + `contentType`
+only); the `?v=` cache-bust reuses one fixed object path rather than unique filenames (so no orphan
+cleanup needed).
+
+### Settings page — full account settings — ✅ (branch `settings-page`, 2026-09-17)
+
+SettingsPage went from picture-only to a full account page. It's now a thin **shell** (`pages/
+SettingsPage.tsx`) stacking three self-contained cards under `components/settings/`, each owning its own
+form/data/save with **one busy flag** apiece; nothing is threaded between them.
+
+- `SettingsCard.tsx` — the shared card chrome + heading (+ optional description); dumb, takes children.
+- `AvatarCard.tsx` — the pre-existing avatar upload logic, lifted verbatim into its own card (behaviour
+  unchanged: client-direct Storage upload → PUT `/api/profile/avatar`; the `saving` flow flag).
+- `AccountCard.tsx` — name + email + password in **ONE form**, all landing in a **single
+  `supabase.auth.updateUser({ data, email, password })`** call (Supabase auth, client-direct; NO
+  FastAPI hop — these are auth-user attributes). Name/email pre-filled via `deriveName`/current email
+  (ref-guarded seed); password fields start blank. On Save:
+  - **Name (option A, always sent, idempotent):** `data.first_name` + `data.last_name` **and** the
+    combined `display_name` kept in sync (`displayNameFrom`), so the Supabase dashboard column and the
+    app's initials (`initialsFrom`) + dashboard greeting keep working. USER_UPDATED → AuthProvider
+    mirror → IdentitySync → nav initials refresh, no manual refetch.
+  - **Email:** included ONLY when it changed (else the confirmation email would re-fire). Does NOT
+    change immediately — shows a "confirmation link sent" note, never touches `session.user.email`.
+  - **Password: OPTIONAL** — blank = untouched, and the whole group is skipped. When a new password is
+    typed, the CURRENT password becomes required and is **verified by re-running `signInWithPassword`**
+    first (a wrong one errors "Current password is incorrect" and nothing changes; a correct one just
+    refreshes the session in place), then the new password rides along in the same updateUser. Shared
+    `StrengthMeter` (shown only once typing starts). One `isSubmitting` flag spans verify + update.
+    *(This replaced an earlier split into NameCard/EmailCard/PasswordCard — combined per user request.)*
+- `DefaultsCard.tsx` — **our backend**: the dashboard's role/level pickers as a standalone save-default
+  form (`useUpdateProfileMutation` → PATCH `/api/profile`); same default the dashboard's "Set as
+  default" writes, pre-filled from `useGetProfileQuery` (ref-guarded seed).
+- **SignupPage** now collects **First + Last name** (both required) too, storing the same three keys.
+- Shared pure helpers in `helpers.ts`: `passwordStrength` (also **deduped** out of SignupPage +
+  ResetPasswordPage), `deriveName`, `displayNameFrom`. `tsc && vite build` clean.
+
+**No backend/DB change** — names live in `user_metadata`; `profiles.display_name` (set by the signup
+trigger, unread by the client) is intentionally left as-is. **Deferred:** email change relies on
+Supabase's default confirmation email templates/redirect being configured for the deployed domain.
