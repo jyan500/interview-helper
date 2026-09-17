@@ -13,10 +13,14 @@ import UserAvatar from "./UserAvatar";
 
 // NavLink hands its className a { isActive } flag; the active link takes ink + an accent
 // underline, the inactive one the muted neutral-400 — matching the mock exactly.
+// Both states carry the same border-b-2 (transparent underline when inactive) so switching
+// the active tab never jumps the links horizontally. The group is baseline-aligned with the
+// brand so the link text sits on the "Interview Helper" baseline.
 function navLinkClass({ isActive }: { isActive: boolean }) {
+    const base = "border-b-2 pb-0.5";
     return isActive
-        ? "text-ink border-b-2 border-accent pb-0.5"
-        : "text-neutral-400 hover:text-accent";
+        ? `${base} text-ink border-accent`
+        : `${base} text-neutral-400 border-transparent hover:text-accent`;
 }
 
 export default function AppNav() {
@@ -24,11 +28,11 @@ export default function AppNav() {
 
     return (
         <nav className="nav flex h-[58px] items-center justify-between border-b border-divider px-7">
-            <div className="flex items-center gap-[26px]">
+            <div className="flex items-baseline gap-[26px]">
                 <span className="font-heading text-[20px] font-medium tracking-[0.02em]">
                     Interview Helper
                 </span>
-                <div className="flex gap-[18px] text-sm">
+                <div className="flex items-baseline gap-[18px] text-sm">
                     <NavLink to="/" end className={navLinkClass}>
                         Dashboard
                     </NavLink>
