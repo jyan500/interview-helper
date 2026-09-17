@@ -2,10 +2,13 @@
  * The Supabase browser client — ONE instance for the whole app.
  *
  * This object is the frontend's entire relationship with Supabase, and it is worth being
- * precise about how small that relationship is: we use it for AUTH ONLY. It can also query
- * tables directly (that's the PostgREST "Data API" your RLS policies guard), and we
- * deliberately don't — every piece of interview data comes from FastAPI, which owns the
- * rules. See the Phase B notes in server/api.py for why that split is the design.
+ * precise about how small that relationship is: we use it for AUTH, plus ONE narrow bit of
+ * STORAGE — uploading the profile picture (see SettingsPage). It can also query tables directly
+ * (that's the PostgREST "Data API" your RLS policies guard), and we deliberately don't — every
+ * piece of INTERVIEW data comes from FastAPI, which owns the rules. See the Phase B notes in
+ * server/api.py for why that split is the design. The avatar is the one exception, and a
+ * considered one: it isn't interview data, it's a public image, and Storage (guarded by its own
+ * bucket RLS — server/db/policies/storage_avatars_bucket.sql) is the door built for exactly that.
  *
  * WHAT IT DOES FOR YOU, and why you should not reimplement any of it:
  *   - signs in / signs up against Supabase Auth

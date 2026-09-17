@@ -111,7 +111,7 @@ from grading import aggregate, grade_one, turn_agent
 from prompts import behavioral_interview
 # Phase B — identity. `require_user` turns the Authorization header into a user id (or 401);
 # `require_ownership` is the second, separate question (403). See auth.py.
-from auth import require_ownership, require_user
+from auth import SUPABASE_URL, require_ownership, require_user
 from db.engine import engine
 from tools.interview import (
     create_interview,
@@ -128,6 +128,7 @@ from tools.interview import (
     record_answer,
     save_interview_state,
     save_scorecard,
+    set_profile_avatar,
     set_profile_defaults,
 )
 from tools.questions import (
@@ -190,6 +191,15 @@ class ScorecardRequest(BaseModel):
 class ProfileUpdate(BaseModel):
     role: str | None = None
     level: str | None = None
+
+
+# PUT /api/profile/avatar body — the profile picture's public URL, uploaded client-direct to the
+# Supabase Storage `avatars` bucket. The avatar is its own sub-resource (PUT to set/replace, DELETE
+# to remove) rather than a field on ProfileUpdate, so there's no "leave it alone" ambiguity — the
+# route always writes exactly what it's given. The URL is VALIDATED against our own bucket before
+# it's stored (see AVATAR_URL_PREFIX / put_profile_avatar).
+class AvatarUpdate(BaseModel):
+    avatar_url: str
 
 
 # Phase F — the /api/tts request. Unlike /api/transcribe (whose request is raw multipart audio,
@@ -915,6 +925,43 @@ async def update_profile(
     user_id: str = Depends(require_user),
 ) -> dict:
     result = await set_profile_defaults(user_id, role_slug=body.role, level_slug=body.level)
+    if not result["ok"]:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+# The only avatar_url the backend will store: a PUBLIC object URL under OUR OWN Storage `avatars`
+# bucket. The browser uploads client-direct (storage RLS lets it write only under its own <uid>/
+# folder), then PUTs the resulting public URL here — but a PUT body is just a string a hostile client
+# could set to anything, and this value is later rendered in an <img src>. Pinning it to this prefix
+# means a user can only ever point their avatar at a file they were actually allowed to upload, not at
+# an arbitrary third-party URL. SUPABASE_URL comes from auth.py already stripped of a trailing slash.
+AVATAR_URL_PREFIX = f"{SUPABASE_URL}/storage/v1/object/public/avatars/"
+AVATAR_URL_MAX_LEN = 512  # matches profiles.avatar_url's column width
+
+
+# The profile picture as its own sub-resource. PUT sets/replaces it (idempotent — the client uploads
+# to Storage, then hands us the URL, whether or not one existed before); DELETE removes it. Both are
+# owner-scoped the same way as the rest of the profile routes: the VERIFIED uid is the only id
+# touched, so there's nothing to authorize separately.
+@app.put("/api/profile/avatar")
+async def put_profile_avatar(
+    body: AvatarUpdate,
+    user_id: str = Depends(require_user),
+) -> dict:
+    url = body.avatar_url
+    # Guard the pointer (see AVATAR_URL_PREFIX): reject anything that isn't a public URL in our bucket.
+    if len(url) > AVATAR_URL_MAX_LEN or not url.startswith(AVATAR_URL_PREFIX):
+        raise HTTPException(status_code=400, detail="avatar_url must be a public URL in the avatars bucket")
+    result = await set_profile_avatar(user_id, url)
+    if not result["ok"]:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.delete("/api/profile/avatar")
+async def delete_profile_avatar(user_id: str = Depends(require_user)) -> dict:
+    result = await set_profile_avatar(user_id, None)
     if not result["ok"]:
         raise HTTPException(status_code=400, detail=result["error"])
     return result

@@ -8,6 +8,7 @@ import SessionPage from "./pages/SessionPage";
 import SessionLayout from "./pages/SessionLayout";
 import InterviewsPage from "./pages/InterviewsPage";
 import InterviewDetailPage from "./pages/InterviewDetailPage";
+import SettingsPage from "./pages/SettingsPage";
 import { AuthProvider } from "./auth/AuthProvider";
 import { ToastProvider } from "./toast/ToastProvider";
 import LoginPage from "./auth/LoginPage";
@@ -68,6 +69,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                             </Route>
                             <Route path="/interviews" element={<InterviewsPage />} />
                             <Route path="/interviews/:id" element={<InterviewDetailPage />} />
+                            <Route path="/settings" element={<SettingsPage />} />
                         </Route>
 
                         {/* anything else -> home, which is itself gated. `replace` so a

@@ -3,7 +3,12 @@
  * network, no module state — so they're trivial to reuse and to reason about.
  */
 import type { SelectOption } from "./components/AsyncPaginateSelect";
-import { IGNORED_INTERVIEWS_STORAGE_KEY, MIC_DEVICE_STORAGE_KEY } from "./constants";
+import {
+    AVATAR_ACCEPTED_TYPES,
+    AVATAR_MAX_BYTES,
+    IGNORED_INTERVIEWS_STORAGE_KEY,
+    MIC_DEVICE_STORAGE_KEY,
+} from "./constants";
 
 /**
  * Two-letter initials for an avatar, derived from a display name or, failing that, an email.
@@ -17,6 +22,33 @@ export function initialsFrom(name?: string, email?: string): string {
     const parts = src.split(/\s+/);
     if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
     return src.slice(0, 2).toUpperCase();
+}
+
+/**
+ * The Storage object path for a user's avatar: `<uid>/avatar`. The FIRST path segment is the auth
+ * uid, which is exactly what the bucket's RLS policies compare against (they only permit a write
+ * where `(storage.foldername(name))[1] = auth.uid()`), so this is what confines an upload to the
+ * user's own folder. One fixed name per user (upsert overwrites the previous picture) — cache-busting
+ * is done on the URL, not by unique filenames (which would leave orphans).
+ */
+export function avatarObjectPath(uid: string): string {
+    return `${uid}/avatar`;
+}
+
+/**
+ * Pre-flight validation for a chosen avatar file — returns a human error string, or null when the
+ * file is acceptable. A courtesy check before we hand the file to Storage: the wrong type or an
+ * oversized image is caught here with a clear message instead of a raw Storage error. The real
+ * limits are the bucket's; these just mirror them (AVATAR_ACCEPTED_TYPES / AVATAR_MAX_BYTES).
+ */
+export function validateAvatarFile(file: File): string | null {
+    if (!AVATAR_ACCEPTED_TYPES.includes(file.type)) {
+        return "Please choose a JPEG, PNG, WebP, or GIF image.";
+    }
+    if (file.size > AVATAR_MAX_BYTES) {
+        return `That image is too large. Keep it under ${Math.round(AVATAR_MAX_BYTES / (1024 * 1024))} MB.`;
+    }
+    return null;
 }
 
 /**

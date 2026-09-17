@@ -727,6 +727,7 @@ async def get_profile(profile_id: str) -> dict:
         return {
             "status": "ok",
             "display_name": profile.display_name,
+            "avatar_url": profile.avatar_url,  # None => the client renders initials instead
             "role": ({"slug": profile.role.slug, "name": profile.role.name}
                      if profile.role is not None else None),
             "level": ({"slug": profile.level.slug, "name": profile.level.name}
@@ -763,6 +764,27 @@ async def set_profile_defaults(
             if level is None:
                 return {"ok": False, "error": f"unknown level: {level_slug}"}
             profile.level_id = level.id
+        await db.commit()
+        return {"ok": True}
+
+
+async def set_profile_avatar(profile_id: str, avatar_url: str | None) -> dict:
+    """Set or clear this user's profile picture URL — the avatar is a SINGLETON SUB-RESOURCE of the
+    profile with its own endpoints, so this backs BOTH sides of it: PUT /api/profile/avatar passes a
+    real URL (set/replace), DELETE passes None (remove). It's split out from set_profile_defaults on
+    purpose: role/level use a None = "leave alone" convention, but clearing the avatar IS setting it
+    to None, so the two meanings would collide. A dedicated endpoint has no "leave alone" case — it
+    always writes exactly the value it was given — which is what lets it stay sentinel-free.
+
+    The URL itself is validated by the route (it must point at our own Storage bucket) before we get
+    here, so this just writes it. Returns {"ok": True} or {"ok": False, "error": ...}."""
+    async with get_session() as db:
+        profile = (
+            await db.execute(select(Profile).where(Profile.id == profile_id))
+        ).scalar_one_or_none()
+        if profile is None:
+            return {"ok": False, "error": "profile not found"}
+        profile.avatar_url = avatar_url
         await db.commit()
         return {"ok": True}
 

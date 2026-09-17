@@ -195,6 +195,7 @@ export interface DashboardQuery {
 // kickoff form's pre-fill and the signal panel's initial role. Mirrors get_profile.
 export interface ProfileData {
     display_name: string | null;
+    avatar_url: string | null; // the profile picture's public URL, or null => render initials
     role: BasePageItem | null; // the default role as {slug, name}
     level: BasePageItem | null; // the default level as {slug, name}
 }
@@ -434,6 +435,20 @@ export const interviewApi = createApi({
             query: (body) => ({ url: "/profile", method: "PATCH", body }),
             invalidatesTags: ["Profile"],
         }),
+        // Set/replace the profile PICTURE. The file itself is uploaded client-direct to Supabase
+        // Storage (see SettingsPage); this only stores the resulting public URL. PUT because the
+        // avatar is a singleton sub-resource — idempotent whether it's the first upload or a replace.
+        // Invalidates Profile so every avatar on screen (nav, session) re-reads the new URL at once.
+        setAvatar: builder.mutation<{ ok: boolean }, string>({
+            query: (avatar_url) => ({ url: "/profile/avatar", method: "PUT", body: { avatar_url } }),
+            invalidatesTags: ["Profile"],
+        }),
+        // Remove the profile picture (fall back to initials). DELETE the sub-resource; same tag
+        // invalidation so the initials reappear everywhere without a manual refetch.
+        deleteAvatar: builder.mutation<{ ok: boolean }, void>({
+            query: () => ({ url: "/profile/avatar", method: "DELETE" }),
+            invalidatesTags: ["Profile"],
+        }),
         getLevel: builder.query<LevelPageItem, string>({
             query: (slug) => `/levels/${encodeURIComponent(slug)}`,
         }),
@@ -457,4 +472,6 @@ export const {
     useLazyGetInterviewedRolesQuery,
     useGetProfileQuery,
     useUpdateProfileMutation,
+    useSetAvatarMutation,
+    useDeleteAvatarMutation,
 } = interviewApi;

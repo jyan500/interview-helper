@@ -182,6 +182,16 @@ class Profile(Base, TimestampMixin):
     id: Mapped[uuid_pkg.UUID] = mapped_column(Uuid, primary_key=True)  # = auth.users.id
     display_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
+    # The user's profile picture — the PUBLIC URL of an object in the Supabase Storage `avatars`
+    # bucket (`<SUPABASE_URL>/storage/v1/object/public/avatars/<uid>/avatar?v=…`), or NULL when they
+    # haven't uploaded one (the UI falls back to their initials). We store the URL, not the bytes:
+    # the file lives in Storage (uploaded client-direct via supabase-js, the same client used for
+    # auth), and this column is just the pointer the SPA renders in an <img>. The backend never
+    # trusts an arbitrary URL here — PATCH /api/profile checks it points at our own bucket before
+    # writing it (see api.py), so this can only ever reference an object the user was allowed to
+    # upload under storage RLS. String(512): a public object URL plus the cache-busting `?v=` query.
+    avatar_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
     # THE DASHBOARD DEFAULT — the role/level this user usually practises, so the kickoff form
     # opens pre-filled and the signal panel opens scoped to it instead of making them re-pick
     # every visit. Both NULLABLE: a fresh profile has no default until the user sets one, and
