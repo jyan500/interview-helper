@@ -15,11 +15,15 @@ export default function Modal({
     onClose,
     title,
     children,
+    // The panel's width class. Defaults to the original fixed 440px; a content-heavy dialog (e.g. a
+    // paginated questions table) passes a wider one. Still a shell — only the frame size changes.
+    widthClass = "w-[440px]",
 }: {
     open: boolean;
     onClose: () => void;
     title: string;
     children: ReactNode;
+    widthClass?: string;
 }) {
     // Esc closes while open.
     useEffect(() => {
@@ -36,7 +40,7 @@ export default function Modal({
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
             <div
-                className="w-[440px] max-w-full rounded-md border border-divider bg-bg p-6"
+                className={`${widthClass} max-w-full rounded-md border border-divider bg-bg p-6`}
                 role="dialog"
                 aria-modal="true"
                 aria-label={title}

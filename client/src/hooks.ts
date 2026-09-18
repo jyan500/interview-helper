@@ -2,9 +2,11 @@
  * Small, reusable React hooks shared across pages. (Distinct from helpers.ts, which is pure,
  * React-free functions — anything that calls useState/useEffect/etc. lives here.)
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import hark from "hark";
 import { audioConstraints } from "./voice/helpers";
+import { useSaveQuestionsMutation } from "./api";
+import { useToast } from "./toast/ToastProvider";
 import {
     HARK_POLL_INTERVAL_MS,
     HARK_SPEAKING_THRESHOLD_DB,
@@ -14,6 +16,71 @@ import {
     MIC_SILENCE_MS,
     NO_INPUT_TIMEOUT_MS,
 } from "./constants";
+
+/**
+ * The staged "My questions" selection behind the QuestionsTable + SelectionBar (the dashboard section,
+ * the Add-question modal, and the Questions page all use it). Checkbox toggles are LOCAL until Save —
+ * the user reviews a running count first, then commits the whole edit in one batch.
+ *
+ * WHY TWO DELTA SETS (add / remove) instead of one "checked" set: the table is paginated, so at any
+ * moment we've only SEEN some rows — we can't hold "the full set of checked slugs". What we CAN track
+ * is what the user CHANGED relative to the server's saved truth: `add` = unsaved questions they ticked,
+ * `remove` = saved questions they unticked. By construction `add` only ever holds server-unsaved slugs
+ * and `remove` only server-saved ones (see toggle), which is what makes `selectedCount` exact:
+ *   selectedCount = savedTotal + add - remove
+ * where `savedTotal` is the count of already-saved matching questions (a mine=true query's `total`).
+ *
+ * `save()` sends the two deltas as one PUT batch, toasts, and clears them; the "Questions" tag
+ * invalidation then refetches every mounted list so the checkboxes reflect the new server truth.
+ */
+export function useQuestionSelection(savedTotal: number) {
+    const [add, setAdd] = useState<Set<string>>(new Set());
+    const [remove, setRemove] = useState<Set<string>>(new Set());
+    const [saveQuestions, { isLoading: saving }] = useSaveQuestionsMutation();
+    const { toast } = useToast();
+
+    // A row is checked if it's server-saved and NOT staged for removal, or unsaved and staged to add.
+    const isChecked = useCallback(
+        (slug: string, serverSelected: boolean) =>
+            serverSelected ? !remove.has(slug) : add.has(slug),
+        [add, remove],
+    );
+
+    // Flip a row. Toggling a server-saved row lives in `remove`; an unsaved row in `add` — so each set
+    // only ever holds slugs of its own kind, keeping selectedCount's arithmetic correct.
+    const toggle = useCallback((slug: string, serverSelected: boolean) => {
+        const setter = serverSelected ? setRemove : setAdd;
+        setter((prev) => {
+            const next = new Set(prev);
+            if (next.has(slug)) next.delete(slug);
+            else next.add(slug);
+            return next;
+        });
+    }, []);
+
+    const dirty = add.size > 0 || remove.size > 0;
+    const selectedCount = savedTotal + add.size - remove.size;
+
+    const reset = useCallback(() => {
+        setAdd(new Set());
+        setRemove(new Set());
+    }, []);
+
+    const save = useCallback(async () => {
+        try {
+            await saveQuestions({ add: [...add], remove: [...remove] }).unwrap();
+            reset();
+            toast("Saved your questions", { variant: "success" });
+        } catch {
+            toast("Couldn't save your questions. Try again.", { variant: "error" });
+        }
+    }, [add, remove, saveQuestions, reset, toast]);
+
+    return useMemo(
+        () => ({ isChecked, toggle, dirty, selectedCount, saving, reset, save }),
+        [isChecked, toggle, dirty, selectedCount, saving, reset, save],
+    );
+}
 
 /**
  * A running "mm:ss" clock that starts when the hook mounts and ticks every second. Used by the

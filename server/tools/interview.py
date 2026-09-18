@@ -53,6 +53,7 @@ from sqlalchemy import or_, select
 from db.engine import get_session
 from db.models import (
     Interview,
+    InterviewQuestion,
     Level,
     Profile,
     Question,
@@ -62,6 +63,10 @@ from db.models import (
     ScorecardEntryScore,
     Turn,
 )
+# build_interview_plan is the read-side helper that turns a role/level (+ the candidate's saved set)
+# into the ordered question plan we freeze onto the interview at kickoff. It lives in the questions
+# data-layer module, so importing it here keeps this module's data-layer-only posture (no MCP/LLM).
+from tools.questions import build_interview_plan
 
 # The shared score arithmetic (Phase C) — a pure leaf module, NOT grading.py. Importing from
 # grading here would pull the LLM stack (pydantic_agent, the model) into the data layer just to
@@ -107,19 +112,45 @@ async def create_interview(
         # enough that nobody guesses someone else's interview
         slug = uuid.uuid4().hex[:8]
 
-        db.add(
-            Interview(
-                slug=slug,
-                role_id=role_row.id,
-                level_id=level_row.id,
-                persona=persona,
-                message_history=[],   # the agent hasn't said anything yet
-                profile_id=profile_id,   # Phase B: whose interview this is (None = nobody's)
-            )
+        interview = Interview(
+            slug=slug,
+            role_id=role_row.id,
+            level_id=level_row.id,
+            persona=persona,
+            message_history=[],   # the agent hasn't said anything yet
+            profile_id=profile_id,   # Phase B: whose interview this is (None = nobody's)
         )
+        db.add(interview)
+        # FLUSH (not commit): the INSERT runs and `interview.id` is assigned, but the transaction
+        # stays open so the plan rows below land atomically with it. An interview is never valid
+        # without its frozen plan, so they must commit together or not at all.
+        await db.flush()
+
+        # MATERIALIZE THE PLAN — the ordered subset this interview will ask, from the candidate's
+        # saved "My questions" for this role+level, or a random default of increasing seniority when
+        # they've saved none. Frozen here so re-curating later can't move an in-flight interview.
+        plan, from_saved = await build_interview_plan(db, role_row, level_row, profile_id)
+        for position, question in enumerate(plan):
+            db.add(InterviewQuestion(
+                interview_id=interview.id, question_id=question.id, position=position,
+            ))
+
         await db.commit()
 
-        return {"ok": True, "interview_id": slug}
+        # first plan question — the CLIENT presents it (create_interview picks it, not the model),
+        # exactly as api.py used to take it from next_question. Safe to read after commit: the
+        # session is expire_on_commit=False (see db/engine.py).
+        first = plan[0] if plan else None
+        return {
+            "ok": True,
+            "interview_id": slug,
+            "plan_size": len(plan),
+            # False when the default fired — the route surfaces this so the SPA can tell the
+            # candidate a default set was chosen because they'd saved nothing.
+            "from_saved": from_saved,
+            "first_qid": first.slug if first is not None else None,
+            "first_qtext": first.text if first is not None else None,
+        }
 
 
 async def get_interview(interview_id: str) -> dict:
@@ -207,6 +238,19 @@ async def load_interview_state(interview_id: str) -> dict:
             asked_ids.add(interview.current_question.slug)
         for turn in interview.turns:
             asked_ids.add(turn.question.slug)
+
+        # THE FROZEN PLAN drives advancing now (not next_question walking the whole bank): the next
+        # question is the first one in the plan, by position, that hasn't been asked yet. None means
+        # the plan is exhausted, which is the ADVANCE branch's cue to END the interview. plan_questions
+        # is selectin-loaded and ordered by position, so this is a plain in-memory walk — no query.
+        next_planned_qid = None
+        next_planned_qtext = None
+        for planned in interview.plan_questions:
+            if planned.question.slug not in asked_ids:
+                next_planned_qid = planned.question.slug
+                next_planned_qtext = planned.question.text
+                break
+
         return {
             "ok": True,
             # Phase B — the owner, for require_ownership in /api/answer. RAW (a uuid.UUID or
@@ -227,6 +271,9 @@ async def load_interview_state(interview_id: str) -> dict:
             # is free. (`role` above is the same idea for the role dimension.)
             "level": interview.level.slug,
             "asked_ids": list(asked_ids),
+            # the next plan question to advance to (slug + text), or None when the plan is spent.
+            "next_planned_qid": next_planned_qid,
+            "next_planned_qtext": next_planned_qtext,
             "message_history": interview.message_history
         }
 

@@ -12,25 +12,33 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { useForm } from "react-hook-form";
+import { skipToken } from "@reduxjs/toolkit/query/react";
 import { useAuth } from "../auth/AuthProvider"
 import { useToast } from "../toast/ToastProvider";
 import {
     useGetMyInterviewsQuery,
     useGetProfileQuery,
+    useGetQuestionsQuery,
     useLazyGetLevelsQuery,
     useLazyGetRolesQuery,
     useStartInterviewMutation,
     useUpdateProfileMutation,
 } from "../api";
+import { useQuestionSelection } from "../hooks";
 import { ControlledAsyncPaginateSelect } from "../components/ControlledAsyncPaginateSelect";
 import type { SelectOption } from "../components/AsyncPaginateSelect";
 import AppNav from "../components/AppNav";
 import ResumeBanner from "../components/ResumeBanner";
 import InterviewsTable from "../components/InterviewsTable";
+import QuestionsTable from "../components/QuestionsTable";
+import SelectionBar from "../components/SelectionBar";
+import AddQuestionModal from "../components/AddQuestionModal";
+import Pagination from "../components/Pagination";
 import SignalPanel from "../components/SignalPanel";
 import Button from "../components/Button";
 import OverwriteInterviewModal from "../components/OverwriteInterviewModal";
 import StartingOverlay from "../components/StartingOverlay";
+import { PAGE_SIZE } from "../constants";
 
 // The kickoff form's shape — the same one App.tsx's legacy flow uses. Each field holds react-select's
 // Option ({ value: slug, label: name }) or null until picked; onStart unwraps `.value` to the slug the
@@ -144,6 +152,27 @@ export default function DashboardPage() {
         doStart({ role: roleValue, level: levelValue });
     }
 
+    // ── My questions ──────────────────────────────────────────────────────────────────────────
+    // The saved question set for the CURRENTLY-PICKED role+level — it tracks the pickers above, so
+    // changing the role/level re-scopes it. Skips (skipToken) until both are picked. `mine: true`
+    // returns only the user's saved questions; its `total` is the base for the SelectionBar's count.
+    // Every row here starts saved, so toggling one stages a REMOVAL, committed by Save. An empty set
+    // is fine — the interview then falls back to a default of 3 questions of increasing difficulty.
+    const roleSlug = roleValue?.value;
+    const levelSlug = levelValue?.value;
+    const canBrowse = Boolean(roleSlug && levelSlug);
+    const [myqPage, setMyqPage] = useState(1);
+    // a role/level change resets to page 1 so a change never leaves us on an out-of-range page.
+    useEffect(() => { setMyqPage(1); }, [roleSlug, levelSlug]);
+    const { data: myQuestions, isFetching: myqFetching } = useGetQuestionsQuery(
+        canBrowse
+            ? { role: roleSlug!, level: levelSlug!, mine: true, page: myqPage, size: PAGE_SIZE }
+            : skipToken,
+    );
+    const savedTotal = myQuestions?.total ?? 0;
+    const selection = useQuestionSelection(savedTotal);
+    const [addOpen, setAddOpen] = useState(false);
+
     return (
         <div className="min-h-screen bg-bg text-ink">
             {/* Confirm overwriting an unfinished interview (only reached when one exists). */}
@@ -154,6 +183,17 @@ export default function DashboardPage() {
             />
             {/* Blocks the page for BOTH start paths while the kickoff POST is in flight. */}
             {starting && <StartingOverlay />}
+
+            {/* Browse all role+level questions to add to the saved set. Mounted only while open, so
+                closing discards any unsaved staging. Reachable only once role+level are picked. */}
+            {addOpen && canBrowse && (
+                <AddQuestionModal
+                    role={roleSlug!}
+                    level={levelSlug!}
+                    savedTotal={savedTotal}
+                    onClose={() => setAddOpen(false)}
+                />
+            )}
 
             <AppNav />
 
@@ -232,6 +272,55 @@ export default function DashboardPage() {
                                 </Button>
                             </div>
                         </form>
+
+                        {/* My questions — the saved set for the currently-picked role+level (it tracks
+                            the pickers above). Check/uncheck to curate; "Add question" opens the full
+                            bank. An empty set is fine: the interview falls back to a 3-question default. */}
+                        <div className="rounded-md border border-divider px-[22px] pb-3 pt-[18px]">
+                            <div className="mb-2 flex items-center justify-between">
+                                <h2 className="font-heading text-[23px] font-medium">My questions</h2>
+                                <Button
+                                    variant="secondary"
+                                    className="text-[13px] disabled:opacity-50"
+                                    disabled={!canBrowse}
+                                    onClick={() => setAddOpen(true)}
+                                >
+                                    Add question
+                                </Button>
+                            </div>
+                            {!canBrowse ? (
+                                <p className="px-3 py-6 text-[13.5px] text-neutral-400">
+                                    Pick a role and level above to choose the questions you want to practise.
+                                </p>
+                            ) : (
+                                <>
+                                    <p className="mb-2 text-[13px] text-neutral-400">
+                                        These are the questions your next interview will ask. If you don't
+                                        pick any, we'll choose 3 of increasing difficulty for this role and level.
+                                    </p>
+                                    <QuestionsTable
+                                        questions={myQuestions?.items ?? []}
+                                        isChecked={selection.isChecked}
+                                        onToggle={selection.toggle}
+                                        loading={myqFetching}
+                                        skeletonRows={5}
+                                        emptyMessage="No saved questions yet — add some, or start and we'll pick 3 for you."
+                                    />
+                                    <Pagination
+                                        page={myQuestions?.page ?? myqPage}
+                                        totalPages={myQuestions?.pages ?? 0}
+                                        onPageChange={setMyqPage}
+                                    />
+                                    <SelectionBar
+                                        count={selection.selectedCount}
+                                        dirty={selection.dirty}
+                                        saving={selection.saving}
+                                        onSave={selection.save}
+                                        onReset={selection.reset}
+                                    />
+                                </>
+                            )}
+                        </div>
 
                         {/* Past interviews — the newest few, sharing InterviewsTable with the full
                             Interviews page. "View all" routes to that page. */}

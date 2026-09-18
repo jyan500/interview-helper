@@ -411,10 +411,10 @@ get different questions and level-calibrated feedback).
 
 ## CURRENT STATUS (resume point)
 
-*Last updated 2026-09-17. Branch: `increasing-question-bank-and-frontend-changes`. Phases A–F all ✅;
+*Last updated 2026-09-18. Branch: `allow-users-to-pick-questions-or-choose-random`. Phases A–F all ✅;
 **Phase G (production hardening & deploy) is the next phase.*** Recent post-F work (profile picture,
-settings page, and the question-bank + roles expansion) is logged in dated `###` sections at the END
-of this file.*
+settings page, the question-bank + roles expansion, and bounded interviews via saved "My questions" +
+a frozen per-interview plan) is logged in dated `###` sections at the END of this file.*
 
 ### Phase A — ✅ COMPLETE (all verified against the live Supabase DB)
 
@@ -1111,3 +1111,39 @@ product-manager=2; counts overlap because SD + AI questions are N:N).
 **RESOLVED:** the earlier "`frontend-engineer` is empty / interview immediately exhausted" gap is
 gone — the role now has entry/mid/senior questions. Remaining bank growth = premium HelloInterview
 problems (not accessible) or more frontend depth if desired.
+
+### Bounded interviews: saved "My questions" + a frozen plan — ✅ (branch `allow-users-to-pick-questions-or-choose-random`, 2026-09-18)
+
+The bank got large enough that "ask every question at or below the level" ran forever. Interviews now
+ask a **frozen, finite plan**; candidates curate a saved set, with a sensible default when they don't.
+
+- **Two new tables (`models.py` + migration `c7d9e1f3a5b2`, `down_revision=b7e3f1c9a204`, applied).**
+  `profile_questions(profile_id, question_id)` — the durable saved "My questions" set, a plain N:N with
+  **no role/level columns** (both derived by joining to the question). `interview_questions(interview_id,
+  question_id, position)` — the plan frozen at kickoff (the join table the `asked_question_ids` docstring
+  predicted). Both got owner RLS mirroring `interviews`/`turns`.
+- **Plan builder (`tools/questions.py`).** `next_question`'s role+at-or-below-level filter extracted to
+  `_filtered_questions_stmt`, reused by `build_interview_plan(db, role, level, profile_id) →
+  (questions, from_saved)`: the saved set for that role+level if any, else `_default_plan` — up to
+  `DEFAULT_PLAN_SIZE=3` of **increasing seniority** (one random per level band low→high, topped up from
+  the pool, re-sorted). Also `list_questions_page` (paginated browse, computes a per-row `selected`
+  flag; `mine=true` narrows to the saved set) and `save_saved_questions` (batch add/remove by slug).
+- **`create_interview`** now flushes, materializes the plan (`InterviewQuestion` rows), and returns
+  `first_qid`/`first_qtext`/`plan_size`/`from_saved`. **`load_interview_state`** exposes
+  `next_planned_qid`/`next_planned_qtext` (first plan question by position not yet asked). **`/api/answer`
+  advance** walks the plan instead of `next_question`; ends when it's spent. **`/api/interview`** takes no
+  new wire fields (server reads the saved set) and returns `default_selection`/`plan_size`. New routes:
+  `GET /api/questions` (Page[QuestionOut]), `PUT /api/profile/questions` ({add, remove} batch).
+- **Frontend.** `api.ts`: `QuestionItem`, `getQuestions` + `saveQuestions` hooks, `Questions` tag.
+  Reusable `QuestionsTable` (InterviewsTable design + checkbox column), `SelectionBar` (sticky
+  stage→Save bar), and a `useQuestionSelection` hook (add/remove deltas that survive paging;
+  `selectedCount = savedTotal + add − remove`; one batch Save + toast). Dashboard gained a **"My
+  questions"** section (scoped to the picked role+level) + an **Add-question modal**; new **`/questions`**
+  page (`AppNav` NavLink + protected route) scoped to the profile's default role (filters deferred).
+- **Verified:** migration applied; data-layer smoke tests (list/save/build_plan) and a full non-LLM
+  plan lifecycle (create → 3 increasing-seniority `interview_questions` → answer through → `done=True`
+  after the 3rd, not at exhaustion) pass against live Supabase; `tsc` + `vite build` clean.
+
+**Deferred / not gaps:** the `/questions` page has no role/level filter bar yet (handoff said later);
+`useQuestionSelection.selectedCount` trusts the `mine` query's `total`, refreshed on each Save via the
+`Questions` tag. No user-facing "Random N" control — random collapsed into the empty-set default.
