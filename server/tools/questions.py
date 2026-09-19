@@ -303,14 +303,15 @@ async def list_questions_page(
     level: str | None = None,
     profile_id=None,
     search: str | None = None,
-    mine: bool = False,
+    saved: bool | None = None,
 ):
     """A PAGE of bank questions for the browse UI — backs GET /api/questions.
 
-    Same server-side pagination as list_roles, over the role + at-or-below-level filter. `mine=True`
-    narrows to the caller's saved set; `search` matches question text. Every returned row carries a
-    computed `selected` flag (is it in this user's saved set) so the checkbox list renders correctly
-    on the "all questions" view too. An unknown role/level yields an empty page rather than an error.
+    Same server-side pagination as list_roles, over the role + at-or-below-level filter. `search`
+    matches question text. `saved` is a TRI-STATE against the caller's saved set: True → only saved
+    ("My questions"), False → only NOT saved (the Questions page's "everything else" table), None →
+    the whole bank (the Add-question modal). Every returned row carries a computed `selected` flag so
+    the checkbox renders right. An unknown role/level yields an empty page rather than an error.
     """
     async with get_session() as db:
         role_row = (
@@ -327,22 +328,26 @@ async def list_questions_page(
         stmt = _filtered_questions_stmt(role_row.id if role_row else -1, level_rank)
         if search:
             stmt = stmt.where(Question.text.ilike(f"%{search}%"))
-        if mine and profile_id is not None:
+        if saved is not None and profile_id is not None:
             saved_ids = select(ProfileQuestion.question_id).where(
                 ProfileQuestion.profile_id == profile_id
             )
-            stmt = stmt.where(Question.id.in_(saved_ids))
+            stmt = stmt.where(
+                Question.id.in_(saved_ids) if saved else Question.id.not_in(saved_ids)
+            )
 
         # apaginate returns page.items as the full Question ORM rows for this page (COUNT +
         # LIMIT/OFFSET handled for us). What it CAN'T give us is `selected` — that's not a column on
         # Question but a fact in profile_questions — so we stamp it below.
         page = await apaginate(db, stmt, params)
 
-        # `selected` per row = is this question in the caller's saved set. On the `mine` view every
-        # row is saved by construction, so skip the lookup; otherwise do ONE lookup over just this
-        # page's ids (indexed), not one per row.
-        if mine:
+        # `selected` per row = is this question in the caller's saved set. When the query already
+        # filtered by membership the answer is known for free (all saved / none saved); otherwise do
+        # ONE lookup over just this page's ids (indexed), not one per row.
+        if saved is True:
             saved_set: set[int] = {q.id for q in page.items}
+        elif saved is False:
+            saved_set = set()
         else:
             saved_set = set()
             if profile_id is not None and page.items:

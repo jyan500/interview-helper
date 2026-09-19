@@ -482,9 +482,9 @@ export const interviewApi = createApi({
             query: (slug) => `/levels/${encodeURIComponent(slug)}`,
         }),
         // Phase G — a page of bank questions for the browse UI. A QUERY (cacheable GET). The generic
-        // `QueryParams` bag carries role/level/q/mine/page/size (server-side filtered); `mine=true`
-        // narrows to the user's saved set (the dashboard "My questions" view). Tagged "Questions" so
-        // a saveQuestions commit refetches every mounted questions list.
+        // `QueryParams` bag carries role/level/q/saved/page/size (server-side filtered); `saved` is
+        // tri-state — true = the user's saved set, false = everything NOT saved, omitted = the whole
+        // bank. Tagged "Questions" so a saveQuestions commit refetches every mounted questions list.
         getQuestions: builder.query<Page<QuestionItem>, QueryParams>({
             query: (params) => ({ url: "/questions", params }),
             providesTags: ["Questions"],

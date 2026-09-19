@@ -935,8 +935,9 @@ async def level_by_slug(slug: str, user_id: str = Depends(require_user)):
 # table (Phase G). Same paginated shape as /api/roles — `params` (page/size) + our own filters:
 #   role/level  scope to a role and at-or-below seniority (the same filter interviews use).
 #   q           substring match on the question text.
-#   mine        true -> only the caller's SAVED questions (the dashboard "My questions" view);
-#               false -> the whole role+level bank (the Add-question modal / Questions page).
+#   saved       TRI-STATE against the caller's saved set: true -> only saved ("My questions"),
+#               false -> only NOT saved (the Questions page's "everything else" table), omitted ->
+#               the whole role+level bank (the Add-question modal).
 # `require_user` gives us the uid so each row can carry `selected` (is it in THIS user's set) — the
 # uid is never taken from the request, so there's nothing to authorize separately.
 @app.get("/api/questions", response_model=Page[QuestionOut])
@@ -945,11 +946,11 @@ async def questions(
     role: str = "backend-engineer",
     level: str | None = None,
     q: str | None = None,
-    mine: bool = False,
+    saved: bool | None = None,
     user_id: str = Depends(require_user),
 ):
     return await list_questions_page(
-        params, role=role, level=level, profile_id=user_id, search=q, mine=mine
+        params, role=role, level=level, profile_id=user_id, search=q, saved=saved
     )
 
 

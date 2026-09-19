@@ -1139,11 +1139,17 @@ ask a **frozen, finite plan**; candidates curate a saved set, with a sensible de
   stage→Save bar), and a `useQuestionSelection` hook (add/remove deltas that survive paging;
   `selectedCount = savedTotal + add − remove`; one batch Save + toast). Dashboard gained a **"My
   questions"** section (scoped to the picked role+level) + an **Add-question modal**; new **`/questions`**
-  page (`AppNav` NavLink + protected route) scoped to the profile's default role (filters deferred).
+  page (`AppNav` NavLink + protected route) scoped to the profile's default role. The Questions page is
+  a **two-table split** — a "Saved" table over an "Other questions" table — sharing one selection + Save
+  bar; on Save both refetch so a ticked/unticked row moves between them. This needed the browse filter
+  to become **tri-state** (`GET /api/questions?saved=true|false`, omitted = whole bank), replacing the
+  earlier `mine` boolean; `list_questions_page` filters `Question.id in/not_in` the saved set accordingly.
 - **Verified:** migration applied; data-layer smoke tests (list/save/build_plan) and a full non-LLM
   plan lifecycle (create → 3 increasing-seniority `interview_questions` → answer through → `done=True`
   after the 3rd, not at exhaustion) pass against live Supabase; `tsc` + `vite build` clean.
 
 **Deferred / not gaps:** the `/questions` page has no role/level filter bar yet (handoff said later);
-`useQuestionSelection.selectedCount` trusts the `mine` query's `total`, refreshed on each Save via the
-`Questions` tag. No user-facing "Random N" control — random collapsed into the empty-set default.
+`useQuestionSelection.selectedCount` trusts the saved query's `total`, refreshed on each Save via the
+`Questions` tag. No user-facing "Random N" control — random collapsed into the empty-set default. On
+the two-table Questions page, rows move between "Saved" and "Other" on Save (not on click) — the chosen
+behaviour, consistent with the stage-then-Save bar.

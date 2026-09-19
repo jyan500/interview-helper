@@ -166,7 +166,7 @@ export default function DashboardPage() {
     useEffect(() => { setMyqPage(1); }, [roleSlug, levelSlug]);
     const { data: myQuestions, isFetching: myqFetching } = useGetQuestionsQuery(
         canBrowse
-            ? { role: roleSlug!, level: levelSlug!, mine: true, page: myqPage, size: PAGE_SIZE }
+            ? { role: roleSlug!, level: levelSlug!, saved: true, page: myqPage, size: PAGE_SIZE }
             : skipToken,
     );
     const savedTotal = myQuestions?.total ?? 0;

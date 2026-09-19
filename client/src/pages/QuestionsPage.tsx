@@ -1,11 +1,18 @@
 /**
  * Questions — browse the bank and curate the saved "My questions" set, the full-page counterpart of
- * the dashboard's Add-question modal. Same QuestionsTable + SelectionBar (stage → Save); saving here
- * re-syncs the dashboard set via the "Questions" cache tag.
+ * the dashboard's Add-question modal.
  *
- * FILTERS ARE DEFERRED (a later pass — the handoff said so). For now the page scopes to the user's
- * DEFAULT role from their profile (falling back to backend-engineer), across all levels, so it's
- * useful without a filter bar. A role/level picker can slot into the header later.
+ * TWO TABLES so the current selection is obvious at a glance instead of hunting through pages:
+ *   Saved            — the questions already in the set (server `saved=true`).
+ *   Other questions  — everything else for the role (server `saved=false`).
+ * Both share ONE useQuestionSelection + one sticky SelectionBar (stage → Save). A checkbox marks
+ * intent; on Save the "Questions" tag invalidates and BOTH tables refetch, so a question ticked in
+ * "Other" moves up to "Saved" and an unticked "Saved" one drops back down. Each table paginates on
+ * its own page cursor.
+ *
+ * FILTERS ARE DEFERRED (a later pass — the handoff said so): the page scopes to the user's DEFAULT
+ * role from their profile (falling back to backend-engineer), across all levels. A role/level picker
+ * can slot into the header later.
  */
 import { useState } from "react";
 import { useGetProfileQuery, useGetQuestionsQuery } from "../api";
@@ -22,12 +29,25 @@ export default function QuestionsPage() {
     const roleSlug = profile?.role?.slug ?? "backend-engineer";
     const roleName = profile?.role?.name ?? "Backend Engineer";
 
-    const [page, setPage] = useState(1);
-    const { data, isFetching } = useGetQuestionsQuery({ role: roleSlug, page, size: PAGE_SIZE });
-    // the saved count for this role — the base for the SelectionBar's running total (size:1, we only
-    // want `.total`). Separate from the paged list above so the count is exact across pages.
-    const { data: mineData } = useGetQuestionsQuery({ role: roleSlug, mine: true, size: 1 });
-    const savedTotal = mineData?.total ?? 0;
+    // each table has its own page cursor.
+    const [savedPage, setSavedPage] = useState(1);
+    const [restPage, setRestPage] = useState(1);
+
+    const { data: savedData, isFetching: savedFetching } = useGetQuestionsQuery({
+        role: roleSlug,
+        saved: true,
+        page: savedPage,
+        size: PAGE_SIZE,
+    });
+    const { data: restData, isFetching: restFetching } = useGetQuestionsQuery({
+        role: roleSlug,
+        saved: false,
+        page: restPage,
+        size: PAGE_SIZE,
+    });
+
+    // the saved table's total is the base for the SelectionBar's running count.
+    const savedTotal = savedData?.total ?? 0;
     const selection = useQuestionSelection(savedTotal);
 
     return (
@@ -47,19 +67,41 @@ export default function QuestionsPage() {
                 </div>
 
                 <div className="px-7 pb-[26px] pt-2">
+                    {/* Saved — the current set (server truth). Unticking one stages a removal; on Save
+                        it drops into "Other questions" below. */}
+                    <h2 className="mb-2 font-heading text-[19px] font-medium">
+                        Saved <span className="text-neutral-400">({savedTotal})</span>
+                    </h2>
                     <QuestionsTable
-                        questions={data?.items ?? []}
+                        questions={savedData?.items ?? []}
                         isChecked={selection.isChecked}
                         onToggle={selection.toggle}
-                        loading={isFetching}
-                        skeletonRows={PAGE_SIZE}
-                        emptyMessage="No questions for this role yet."
+                        loading={savedFetching}
+                        skeletonRows={3}
+                        emptyMessage="No saved questions yet — tick some below, or start and we'll pick 3 for you."
                     />
                     <Pagination
-                        page={data?.page ?? page}
-                        totalPages={data?.pages ?? 0}
-                        onPageChange={setPage}
+                        page={savedData?.page ?? savedPage}
+                        totalPages={savedData?.pages ?? 0}
+                        onPageChange={setSavedPage}
                     />
+
+                    {/* Everything else for this role. Ticking one stages an add; on Save it moves up. */}
+                    <h2 className="mb-2 mt-8 font-heading text-[19px] font-medium">Other questions</h2>
+                    <QuestionsTable
+                        questions={restData?.items ?? []}
+                        isChecked={selection.isChecked}
+                        onToggle={selection.toggle}
+                        loading={restFetching}
+                        skeletonRows={PAGE_SIZE}
+                        emptyMessage="Nothing left — you've saved every question for this role."
+                    />
+                    <Pagination
+                        page={restData?.page ?? restPage}
+                        totalPages={restData?.pages ?? 0}
+                        onPageChange={setRestPage}
+                    />
+
                     <SelectionBar
                         count={selection.selectedCount}
                         dirty={selection.dirty}
