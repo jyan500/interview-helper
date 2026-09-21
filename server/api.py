@@ -724,6 +724,12 @@ async def scorecard(
         # was remembered. (A role with no rubric is the realistic cause; see save_scorecard.)
         raise HTTPException(status_code=500, detail=f"could not save scorecard: {saved['error']}")
 
+    # 6. mark the interview DONE. The conversational loop only reaches done=True when the bank
+    #    runs out (see /api/answer), but "End session" grades early via this route and would
+    #    otherwise leave a fully-graded interview flagged unfinished — so a scorecard existing IS
+    #    the interview being finished. Idempotent: re-grading a done interview leaves it done.
+    await save_interview_state(req.interview_id, done=True)
+
     return {
         "interview_id": req.interview_id,
         "role": req.role,

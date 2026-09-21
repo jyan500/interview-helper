@@ -459,10 +459,13 @@ export const interviewApi = createApi({
             providesTags: ["Profile"],
         }),
         // Set the default (the "Set as default" control). A mutation (PATCH); invalidates the profile
-        // so the pre-fill reflects the new default on next read.
+        // so the pre-fill reflects the new default on next read. Also invalidates "Dashboard": the
+        // signal panel's effective role is backend-resolved FROM the profile default (when no role is
+        // applied), so a changed default must refetch getDashboard / the interviewed-roles list — else
+        // the panel keeps showing the old default's role and aggregates.
         updateProfile: builder.mutation<{ ok: boolean }, ProfileUpdate>({
             query: (body) => ({ url: "/profile", method: "PATCH", body }),
-            invalidatesTags: ["Profile"],
+            invalidatesTags: ["Profile", "Dashboard"],
         }),
         // Set/replace the profile PICTURE. The file itself is uploaded client-direct to Supabase
         // Storage (see SettingsPage); this only stores the resulting public URL. PUT because the

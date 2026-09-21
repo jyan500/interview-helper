@@ -3,6 +3,7 @@
  * network, no module state — so they're trivial to reuse and to reason about.
  */
 import type { SelectOption } from "./components/AsyncPaginateSelect";
+import type { BasePageItem } from "./api";
 import {
     AVATAR_ACCEPTED_TYPES,
     AVATAR_MAX_BYTES,
@@ -116,6 +117,15 @@ export function formatScore(overall: number): string {
  */
 export function optionFromSlug(slug: string | null): SelectOption | null {
     return slug ? { value: slug, label: slug } : null;
+}
+
+/**
+ * A react-select Option from a {slug, name} lookup row (a role/level as the profile returns it) —
+ * value = slug, label = the REAL display name. The label-carrying counterpart to optionFromSlug, for
+ * seeding a picker when the name is already in hand. Null when the row is absent (no default set).
+ */
+export function optionFromItem(item: BasePageItem | null | undefined): SelectOption | null {
+    return item ? { value: item.slug, label: item.name } : null;
 }
 
 /**

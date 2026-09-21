@@ -3,9 +3,11 @@
  * React-free functions — anything that calls useState/useEffect/etc. lives here.)
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { FieldValues, Path, PathValue, UseFormSetValue } from "react-hook-form";
 import hark from "hark";
 import { audioConstraints } from "./voice/helpers";
 import { useSaveQuestionsMutation } from "./api";
+import type { SelectOption } from "./components/AsyncPaginateSelect";
 import { useToast } from "./toast/ToastProvider";
 import {
     HARK_POLL_INTERVAL_MS,
@@ -16,6 +18,51 @@ import {
     MIC_SILENCE_MS,
     NO_INPUT_TIMEOUT_MS,
 } from "./constants";
+
+/**
+ * One field to pre-fill in useSeededSelectFields: the form field `name` and the Option to seed it with
+ * (null = leave this field alone, e.g. the source has no value for it).
+ */
+export interface SeededSelectField<TForm extends FieldValues> {
+    name: Path<TForm>;
+    option: SelectOption | null;
+}
+
+/**
+ * Pre-fill one or more react-select form fields from async source data (a profile default, the
+ * dashboard's resolved role, …), re-seeding whenever `key` changes and NEVER on a same-key refetch.
+ * Pass `key = null` while there's nothing to seed from yet (data not loaded, no default set).
+ *
+ * WHY A KEY, NOT A FIRE-ONCE BOOLEAN — the bug this replaces: a boolean latches on whatever data is
+ * cached at mount, so if that first read is STALE (the value from before the user changed it on another
+ * page, not yet refetched) the fresh value that arrives moments later is ignored. Keying on the VALUE
+ * re-seeds only when it genuinely changes — which also can't clobber a manual pick, since a manual pick
+ * doesn't change the source data, so `key` is unchanged and this no-ops.
+ *
+ * The `fields`/`setValue` are read through a ref so the effect depends ONLY on `key`: callers rebuild
+ * the array every render, and re-seeding must track the key changing, not that identity churn.
+ */
+export function useSeededSelectFields<TForm extends FieldValues>(
+    setValue: UseFormSetValue<TForm>,
+    key: string | null,
+    fields: SeededSelectField<TForm>[],
+    options?: { shouldValidate?: boolean },
+): void {
+    const seededKey = useRef<string | null>(null);
+    const latest = useRef({ setValue, fields, shouldValidate: options?.shouldValidate });
+    latest.current = { setValue, fields, shouldValidate: options?.shouldValidate };
+
+    useEffect(() => {
+        if (key === null || seededKey.current === key) return;
+        const { setValue, fields, shouldValidate } = latest.current;
+        for (const { name, option } of fields) {
+            // SelectOption is what every caller's targeted field holds, but the generic can't prove it —
+            // assert at this one boundary, the same contract ControlledAsyncPaginateSelect relies on.
+            if (option) setValue(name, option as PathValue<TForm, Path<TForm>>, { shouldValidate });
+        }
+        seededKey.current = key;
+    }, [key]);
+}
 
 /**
  * The staged "My questions" selection behind the QuestionsTable + SelectionBar (the dashboard section,
