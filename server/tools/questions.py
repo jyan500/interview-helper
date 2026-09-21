@@ -45,6 +45,7 @@ from db.models import (
     ProfileQuestion,
     Question,
     QuestionRole,
+    QuestionType,
     ReferenceBrief,
     Role,
     Rubric,
@@ -297,6 +298,34 @@ def _question_out(question: Question, selected: bool) -> dict:
     }
 
 
+async def list_question_types(params: Params, search: str | None = None):
+    """Return a PAGE of question types — backs GET /api/question-types.
+
+    The third picker on the Questions-page filter (behavioral · system-design · technical · …),
+    mirroring list_roles / list_levels exactly: server-side pagination, an optional case-insensitive
+    `?q=` name search, ordered by name. Returns a `Page[QuestionType]` of ORM rows the route's
+    `response_model=Page[QuestionTypeOut]` coerces to {slug, name}.
+    """
+    async with get_session() as db:
+        stmt = select(QuestionType).order_by(QuestionType.name)
+        if search:
+            stmt = stmt.where(QuestionType.name.ilike(f"%{search}%"))
+        return await apaginate(db, stmt, params)
+
+
+async def get_question_type_by_slug(slug: str) -> QuestionType | None:
+    """Resolve ONE question type by its slug — backs GET /api/question-types/{slug}.
+
+    The type counterpart of get_role_by_slug / get_level_by_slug: the Questions-page filter carries
+    the chosen type SLUG in the URL and hydrates its display NAME from here, so a deep link shows the
+    live name rather than a copy cached in the URL. Returns the ORM row or None for an unknown slug.
+    """
+    async with get_session() as db:
+        return (
+            await db.execute(select(QuestionType).where(QuestionType.slug == slug))
+        ).scalar_one_or_none()
+
+
 async def list_questions_page(
     params: Params,
     role: str,
@@ -304,28 +333,51 @@ async def list_questions_page(
     profile_id=None,
     search: str | None = None,
     saved: bool | None = None,
+    type_slug: str | None = None,
+    exact_level: bool = False,
 ):
     """A PAGE of bank questions for the browse UI — backs GET /api/questions.
 
-    Same server-side pagination as list_roles, over the role + at-or-below-level filter. `search`
-    matches question text. `saved` is a TRI-STATE against the caller's saved set: True → only saved
+    Same server-side pagination as list_roles, over the role (+ level) filter. `search` matches
+    question text. `saved` is a TRI-STATE against the caller's saved set: True → only saved
     ("My questions"), False → only NOT saved (the Questions page's "everything else" table), None →
-    the whole bank (the Add-question modal). Every returned row carries a computed `selected` flag so
-    the checkbox renders right. An unknown role/level yields an empty page rather than an error.
+    the whole bank (the Add-question modal). `type_slug` narrows to one question KIND. Every returned
+    row carries a computed `selected` flag so the checkbox renders right. An unknown role/level/type
+    yields an empty page rather than an error.
+
+    LEVEL has two modes. By default it's the AT-OR-BELOW rule an interview plan uses (a senior view
+    draws entry+mid+senior) — what the dashboard "My questions" table and the Add-question modal
+    want. The Questions-page filter passes `exact_level=True` to instead match ONLY the chosen level,
+    which is what a browse filter reads intuitively (and mirrors the Interviews-page level filter).
     """
     async with get_session() as db:
         role_row = (
             await db.execute(select(Role).where(Role.slug == role))
         ).scalar_one_or_none()
-        level_rank: int | None = None
+        level_row = None
         if level is not None:
             level_row = (
                 await db.execute(select(Level).where(Level.slug == level))
             ).scalar_one_or_none()
+
+        # Role scoping (+ at-or-below level for the plan/modal view). For an EXACT-level filter we
+        # pass no rank to the shared helper and add an exact level_id clause below instead.
+        at_or_below_rank: int | None = None
+        if level is not None and not exact_level:
             # unknown level -> a rank nothing can be at-or-below, i.e. an empty result.
-            level_rank = level_row.rank if level_row is not None else -1
+            at_or_below_rank = level_row.rank if level_row is not None else -1
         # unknown role -> a role_id nothing pairs with, again an empty page.
-        stmt = _filtered_questions_stmt(role_row.id if role_row else -1, level_rank)
+        stmt = _filtered_questions_stmt(role_row.id if role_row else -1, at_or_below_rank)
+
+        if level is not None and exact_level:
+            # exact seniority: only this level's questions. Unknown level -> -1, matching nothing.
+            stmt = stmt.where(Question.level_id == (level_row.id if level_row is not None else -1))
+
+        if type_slug is not None:
+            # filter by question KIND. .has() is an EXISTS subquery, so it composes without a join
+            # that could multiply rows; an unknown slug simply matches nothing (an empty page).
+            stmt = stmt.where(Question.type.has(QuestionType.slug == type_slug))
+
         if search:
             stmt = stmt.where(Question.text.ilike(f"%{search}%"))
         if saved is not None and profile_id is not None:

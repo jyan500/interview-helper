@@ -51,6 +51,9 @@ export type RolePageItem = BasePageItem;
 export interface LevelPageItem extends BasePageItem {
     rank: number; // entry(1) < mid(2) < senior(3) — the picker renders in this order
 }
+// The Questions-page filter's type picker rows (GET /api/question-types) — just the {slug, name}
+// base, same as a role. The slug is what the filter sends back as `?type=`, the name is the label.
+export type QuestionTypePageItem = BasePageItem;
 // The server-side pagination envelope, mirroring fastapi-pagination's Page[T] (see api.py's
 // Page[RoleOut] / Page[LevelOut] response models). The picker's loadOptions reads `items` for the
 // current page and derives "is there another page?" from page/size/total.
@@ -484,6 +487,17 @@ export const interviewApi = createApi({
         getLevel: builder.query<LevelPageItem, string>({
             query: (slug) => `/levels/${encodeURIComponent(slug)}`,
         }),
+        // The Questions-page filter's type options — paginated + searchable, same contract and
+        // async-paginate wiring as getRoles/getLevels (feeds an AsyncPaginateSelect { q, page }).
+        getQuestionTypes: builder.query<Page<QuestionTypePageItem>, OptionPageQuery>({
+            query: ({ q = "", page = 1 }) =>
+                `/question-types?q=${encodeURIComponent(q)}&page=${page}`,
+        }),
+        // Resolve ONE question type by slug — the type counterpart of getRole/getLevel, used to hydrate
+        // the filter picker's label from the slug carried in the URL.
+        getQuestionType: builder.query<QuestionTypePageItem, string>({
+            query: (slug) => `/question-types/${encodeURIComponent(slug)}`,
+        }),
         // Phase G — a page of bank questions for the browse UI. A QUERY (cacheable GET). The generic
         // `QueryParams` bag carries role/level/q/saved/page/size (server-side filtered); `saved` is
         // tri-state — true = the user's saved set, false = everything NOT saved, omitted = the whole
@@ -514,6 +528,8 @@ export const {
     useLazyGetLevelsQuery,
     useGetRoleQuery,
     useGetLevelQuery,
+    useLazyGetQuestionTypesQuery,
+    useGetQuestionTypeQuery,
     useGetDashboardQuery,
     useLazyGetInterviewedRolesQuery,
     useGetProfileQuery,

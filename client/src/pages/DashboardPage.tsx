@@ -192,8 +192,7 @@ export default function DashboardPage() {
             {addOpen && canBrowse && (
                 <AddQuestionModal
                     role={roleSlug!}
-                    level={levelSlug!}
-                    savedTotal={savedTotal}
+                    roleName={roleValue!.label}
                     onClose={() => setAddOpen(false)}
                 />
             )}

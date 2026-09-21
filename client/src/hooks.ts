@@ -3,6 +3,7 @@
  * React-free functions — anything that calls useState/useEffect/etc. lives here.)
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router";
 import type { FieldValues, Path, PathValue, UseFormSetValue } from "react-hook-form";
 import hark from "hark";
 import { audioConstraints } from "./voice/helpers";
@@ -127,6 +128,107 @@ export function useQuestionSelection(savedTotal: number) {
         () => ({ isChecked, toggle, dirty, selectedCount, saving, reset, save }),
         [isChecked, toggle, dirty, selectedCount, saving, reset, save],
     );
+}
+
+/**
+ * The applied slugs a caller hands `apply` — each nullable (null = no filter / "all"). `q` is the raw
+ * search text; the three pickers carry the chosen slug or null.
+ */
+export interface AppliedSectionFilters {
+    q: string;
+    role: string | null;
+    level: string | null;
+    questionType: string | null;
+    // Optional "saved only" toggle — only the Add-question modal uses it (its single table stands in for
+    // the Questions page's Saved/Other split). useSectionFilters ignores it (it's not a URL param).
+    savedOnly?: boolean;
+}
+
+/**
+ * The URL-backed filter state for ONE section of the Questions page. The page shows TWO independent
+ * filter sets — the "Saved" table and the "Other" table — so each gets its own `prefix` ("s_" / "o_")
+ * and its own slice of the query string (`s_q`, `s_role`, `s_level`, `s_type`, `s_page`, and the "o_"
+ * counterparts). THE URL IS THE SOURCE OF TRUTH (same rule as the Interviews page): the applied values
+ * are read from the query string every render, so a deep link reproduces both tables' views and
+ * Back/Forward just work; a section only WRITES the URL on Search/Clear/page-change.
+ *
+ * Every write PRESERVES the other section's params (it copies the live `URLSearchParams` and touches
+ * only this prefix's keys), so filtering one table never disturbs the other. Applying a filter or
+ * clearing resets THIS section to page 1; the other section stays put.
+ */
+export interface SectionFilters {
+    // applied values (from the URL), undefined when the key is absent — role stays undefined here even
+    // though the page falls back to a default role, so `hasFilters` reflects only user-set filters.
+    q?: string;
+    role?: string;
+    level?: string;
+    questionType?: string;
+    page: number;
+    hasFilters: boolean;
+    apply: (values: AppliedSectionFilters) => void;
+    clear: () => void;
+    goToPage: (p: number) => void;
+}
+
+export function useSectionFilters(prefix: string): SectionFilters {
+    const [searchParams, setSearchParams] = useSearchParams();
+    const key = useCallback((k: string) => `${prefix}${k}`, [prefix]);
+
+    const q = searchParams.get(key("q")) || undefined;
+    const role = searchParams.get(key("role")) || undefined;
+    const level = searchParams.get(key("level")) || undefined;
+    const questionType = searchParams.get(key("type")) || undefined;
+    const page = Number(searchParams.get(key("page"))) || 1;
+
+    const apply = useCallback(
+        (values: AppliedSectionFilters) => {
+            // functional updater so a write always builds on the LIVE params, never a stale copy — the
+            // two sections share one query string and could each be edited between renders.
+            setSearchParams((prev) => {
+                const next = new URLSearchParams(prev);
+                const set = (k: string, v: string | null | undefined) =>
+                    v && v.trim() ? next.set(key(k), v.trim()) : next.delete(key(k));
+                set("q", values.q);
+                set("role", values.role);
+                set("level", values.level);
+                set("type", values.questionType);
+                next.delete(key("page")); // a changed filter resets THIS section to page 1
+                return next;
+            });
+        },
+        [key, setSearchParams],
+    );
+
+    const clear = useCallback(() => {
+        setSearchParams((prev) => {
+            const next = new URLSearchParams(prev);
+            ["q", "role", "level", "type", "page"].forEach((k) => next.delete(key(k)));
+            return next;
+        });
+    }, [key, setSearchParams]);
+
+    const goToPage = useCallback(
+        (p: number) => {
+            setSearchParams((prev) => {
+                const next = new URLSearchParams(prev);
+                next.set(key("page"), String(p));
+                return next;
+            });
+        },
+        [key, setSearchParams],
+    );
+
+    return {
+        q,
+        role,
+        level,
+        questionType,
+        page,
+        hasFilters: Boolean(q || role || level || questionType),
+        apply,
+        clear,
+        goToPage,
+    };
 }
 
 /**

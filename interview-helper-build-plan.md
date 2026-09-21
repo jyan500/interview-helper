@@ -1148,8 +1148,51 @@ ask a **frozen, finite plan**; candidates curate a saved set, with a sensible de
   plan lifecycle (create → 3 increasing-seniority `interview_questions` → answer through → `done=True`
   after the 3rd, not at exhaustion) pass against live Supabase; `tsc` + `vite build` clean.
 
-**Deferred / not gaps:** the `/questions` page has no role/level filter bar yet (handoff said later);
+**Deferred / not gaps:** ~~the `/questions` page has no role/level filter bar yet~~ (done 2026-09-21, below);
 `useQuestionSelection.selectedCount` trusts the saved query's `total`, refreshed on each Save via the
 `Questions` tag. No user-facing "Random N" control — random collapsed into the empty-set default. On
 the two-table Questions page, rows move between "Saved" and "Other" on Save (not on click) — the chosen
 behaviour, consistent with the stage-then-Save bar.
+
+### 2026-09-21 — Questions page filters (branch `questions-adjustments-and-bug-fixes`)
+
+The `/questions` deferred filter bar, built out to match the Interviews page and then some. **Each of
+the two tables (Saved / Other) has its OWN independent filter set** (the handoff-era "role/level picker
+in the header later" grew into two full sets, per the request).
+
+- **Backend.** `GET /api/questions` gained `type` (a `question_types.slug`, aliased so the wire stays
+  `?type=` without shadowing the Python builtin) and `exact_level`. `list_questions_page` now takes
+  `type_slug` (`.has()` EXISTS subquery, no row-multiplying join) and `exact_level`: the browse filter
+  matches ONE level exactly, vs. the interview-plan's at-or-below rule the dashboard/modal still use
+  (default `False`, so those callers are untouched). New vocab endpoints `GET /api/question-types`
+  (+ `/{slug}`) mirror `/api/roles` exactly, backed by `list_question_types` / `get_question_type_by_slug`
+  and `QuestionTypeOut`. Verified against live Supabase: type filter narrows correctly, exact vs
+  at-or-below differ (mid: 16 vs 18), unknown type/level → empty page.
+- **Frontend.** `api.ts`: `getQuestionTypes` (lazy) + `getQuestionType` hooks, `QuestionTypePageItem`.
+  New `useSectionFilters(prefix)` hook (hooks.ts) — URL-backed applied state for one section, prefixed
+  `s_*` (Saved) / `o_*` (Other) so both live in the query string and don't disturb each other (functional
+  `setSearchParams` updater; apply/clear/goToPage). New reusable `QuestionFilters.tsx` — one RHF form:
+  keyword box (`q`, substring on question TEXT) + role/level/type async pickers + Search/Clear, applied on
+  submit, labels hydrated from slugs by `getRole/getLevel/getQuestionType`. **Role is a required scope**
+  (bank is per-role), so a section with no role filter falls back to the profile default; Clear resets
+  role to that default, level/type to "all". `QuestionsPage` mounts two `QuestionFilters` + drives both
+  queries from the URL with `exact_level: true`; the SelectionBar count now reads a **dedicated
+  unfiltered saved-total query** (size 1) for the Saved section's role, so narrowing the Saved filters
+  can't skew it. `tsc --noEmit` clean.
+- **Note / naming:** URL param keys stay `type` (clean links) but the JS identifier is `questionType`
+  everywhere (per user pref — avoid the `type` keyword as a variable name).
+- **Parity limitation carried over from the Interviews filter:** the RHF `q`/picker draft is seeded from
+  the URL at mount only, so Back/Forward updates the picker labels (via the by-slug hydrate effects) but
+  not the raw `q` text box. Individual level/type pickers aren't clearable — use the per-section Clear
+  button (same as Interviews).
+- **Add-question modal got the same filter row** (`AddQuestionModal.tsx`). Reuses `QuestionFilters`, but
+  driven by LOCAL `useState` (a modal is transient — no URL). It opens scoped to the dashboard's picked
+  ROLE across ALL levels (was: at-or-below the picked level), uses `exact_level` like the browse page,
+  computes its own unfiltered saved-total (size-1 query) for the SelectionBar, and Clear returns to the
+  opening scope. Props slimmed: `role` + `roleName` + `onClose` (dropped `level`/`savedTotal`); the
+  DashboardPage invocation was updated to match.
+- **A "Saved only" checkbox** on the modal's filter row (opt-in via `QuestionFilters`'s `showSavedFilter`
+  prop; the Questions page leaves it off since it splits Saved/Other into two tables). Checked → the
+  query sends `saved=true`, standing in for the Questions page's Saved table within the modal's single
+  table. Threaded as an optional `savedOnly` on `AppliedSectionFilters` (useSectionFilters ignores it —
+  not a URL param) and applied on Search like the rest.
