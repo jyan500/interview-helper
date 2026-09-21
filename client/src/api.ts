@@ -24,6 +24,11 @@ import { supabase } from "./supabase";
 export interface InterviewResponse {
     interview_id: string;
     message: string; // the first interview question
+    // Phase G — the interview now asks a FROZEN PLAN, not the whole bank. These describe it:
+    // `plan_size` is how many questions it will ask; `default_selection` is true when the candidate
+    // had saved no questions for this role+level, so the backend chose a default set (the SPA notes it).
+    default_selection?: boolean;
+    plan_size?: number;
 }
 // Phase D — the kickoff now carries the candidate's choices. Both are SLUGS (the DB's
 // vocabulary), mirroring StartRequest in server/api.py: `role` = a roles.slug, `seniority` =
@@ -66,6 +71,27 @@ export interface OptionPageQuery {
 // the query string). Kept generic rather than per-endpoint fields so adding a filter is just another
 // key — no signature change. `undefined` values are dropped by the serializer.
 export type QueryParams = Record<string, string | number | boolean | undefined>;
+
+// Phase G — a bank question row for the browse UI (GET /api/questions), mirroring QuestionOut in
+// server/api.py. NOT a BasePageItem: a question has `text`, not a `name`, and carries display-only
+// type/level NAMES plus `selected` — whether it's in THIS user's saved "My questions" set, which
+// drives the checkbox. `level_*` are null for an unleveled question.
+export interface QuestionItem {
+    slug: string;
+    text: string;
+    type_slug: string;
+    type_name: string;
+    level_slug: string | null;
+    level_name: string | null;
+    tags: string[];
+    selected: boolean;
+}
+// PUT /api/profile/questions body — a staged "My questions" edit, committed in one batch (the SPA
+// stages checkbox toggles and sends the deltas on Save). Mirrors SaveQuestionsRequest in api.py.
+export interface SaveQuestionsRequest {
+    add: string[]; // question slugs to save
+    remove: string[]; // question slugs to unsave
+}
 export interface AnswerResponse {
     message: string; // feedback + the next question
     done?: boolean; // true once the client-driven loop exhausts the question bank
@@ -337,7 +363,10 @@ export const interviewApi = createApi({
     // "Interviews" — the user's interview list (see above). "Dashboard" — the signal panel's
     // aggregates + the picker's graded-role list: a new grade changes both, so getScorecard
     // invalidates it. "Profile" — the user's default role/level, invalidated when they set it.
-    tagTypes: ["Interviews", "Dashboard", "Profile"],
+    // "Questions" — the bank list + the user's saved set. getQuestions provides it; saveQuestions
+    // invalidates it, so committing a "My questions" edit re-syncs every questions list on screen
+    // (the dashboard table, the Add-question modal, the Questions page) with no manual refetch.
+    tagTypes: ["Interviews", "Dashboard", "Profile", "Questions"],
     endpoints: (builder) => ({
         // It's a MUTATION, not a query. Even though it "gets" the first question, the POST
         // CREATES server-side state — a row in `interviews` (a side effect). Rule of thumb:
@@ -452,6 +481,20 @@ export const interviewApi = createApi({
         getLevel: builder.query<LevelPageItem, string>({
             query: (slug) => `/levels/${encodeURIComponent(slug)}`,
         }),
+        // Phase G — a page of bank questions for the browse UI. A QUERY (cacheable GET). The generic
+        // `QueryParams` bag carries role/level/q/saved/page/size (server-side filtered); `saved` is
+        // tri-state — true = the user's saved set, false = everything NOT saved, omitted = the whole
+        // bank. Tagged "Questions" so a saveQuestions commit refetches every mounted questions list.
+        getQuestions: builder.query<Page<QuestionItem>, QueryParams>({
+            query: (params) => ({ url: "/questions", params }),
+            providesTags: ["Questions"],
+        }),
+        // Commit a staged "My questions" edit (add/remove slugs) in one batch. A mutation (PUT);
+        // invalidates "Questions" so the `selected` flags + the "My questions" list re-read at once.
+        saveQuestions: builder.mutation<{ ok: boolean; added: number; removed: number }, SaveQuestionsRequest>({
+            query: (body) => ({ url: "/profile/questions", method: "PUT", body }),
+            invalidatesTags: ["Questions"],
+        }),
     }),
 });
 
@@ -474,4 +517,6 @@ export const {
     useUpdateProfileMutation,
     useSetAvatarMutation,
     useDeleteAvatarMutation,
+    useGetQuestionsQuery,
+    useSaveQuestionsMutation,
 } = interviewApi;

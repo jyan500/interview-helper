@@ -532,6 +532,17 @@ class Interview(Base, TimestampMixin):
         back_populates="interview", lazy="selectin", order_by="Turn.created_at",
         cascade="all, delete-orphan",
     )
+    # THE FROZEN PLAN — the ordered set of bank questions this interview will ask, materialized
+    # ONCE at kickoff (from the candidate's saved `profile_questions`, or a random default when
+    # they've saved none). It's what gives the interview a finite end: `/api/answer` advances to the
+    # next plan question not yet asked and, when there is none, concludes — instead of walking the
+    # whole role+level bank to exhaustion. Frozen so editing "My questions" mid-interview can't move
+    # the goalposts and a restart resumes the same questions. Ordered by position; selectin so it
+    # loads with the interview like `turns` does. See InterviewQuestion.
+    plan_questions: Mapped[list[InterviewQuestion]] = relationship(
+        back_populates="interview", lazy="selectin", order_by="InterviewQuestion.position",
+        cascade="all, delete-orphan",
+    )
 
     @property
     def asked_question_ids(self) -> set[int]:
@@ -552,6 +563,45 @@ class Interview(Base, TimestampMixin):
         if self.current_question_id is not None:
             asked.add(self.current_question_id)
         return asked
+
+
+class InterviewQuestion(Base, TimestampMixin):
+    """One question in an interview's FROZEN plan — the ordered subset it will actually ask.
+
+    THE JOIN TABLE THE `Interview.asked_question_ids` DOCSTRING PREDICTED. That property derives
+    "what's been asked" from turns + the current question, resting on the invariant that a question
+    is never presented and skipped. This table is the OTHER half: "what will be asked", decided up
+    front. `/api/answer`'s advance branch walks this plan (next `position` not yet answered) instead
+    of pulling the next unasked bank question, so an interview ends when the PLAN is exhausted, not
+    the bank.
+
+    Written once, at kickoff, by save_interview_plan (tools/interview.py). Never edited afterwards —
+    that's the point of "frozen": the candidate can re-curate their saved `profile_questions` freely
+    without disturbing an interview already in flight, and a backend restart mid-interview replays
+    the same plan because it's a row, not process state.
+
+    `position` is the ask order (0-based). Two unique constraints: one question can't appear twice in
+    a plan, and two questions can't share a position. Both FKs cascade — the plan is meaningless
+    without its interview, and a question can't be dropped from the bank while a plan references it
+    unless that plan goes too (`ondelete="CASCADE"` on the question side matches `question_roles`).
+    """
+    __tablename__ = "interview_questions"
+    __table_args__ = (
+        UniqueConstraint("interview_id", "question_id", name="uq_interview_question"),
+        UniqueConstraint("interview_id", "position", name="uq_interview_question_position"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    interview_id: Mapped[int] = mapped_column(
+        ForeignKey("interviews.id", ondelete="CASCADE"), index=True
+    )
+    question_id: Mapped[int] = mapped_column(
+        ForeignKey("questions.id", ondelete="CASCADE"), index=True
+    )
+    position: Mapped[int] = mapped_column(Integer)   # 0-based ask order
+
+    interview: Mapped[Interview] = relationship(back_populates="plan_questions", lazy="selectin")
+    question: Mapped[Question] = relationship(lazy="selectin")
 
 
 class Turn(Base, TimestampMixin):
@@ -705,3 +755,39 @@ class ScorecardEntryScore(Base, TimestampMixin):
 
     entry: Mapped[ScorecardEntry] = relationship(back_populates="scores", lazy="selectin")
     dimension: Mapped[RubricDimension] = relationship(lazy="selectin")
+
+
+# ===========================================================================
+# THE CANDIDATE'S SAVED QUESTIONS — the "My questions" set they curate per role.
+# ===========================================================================
+class ProfileQuestion(Base, TimestampMixin):
+    """A question a user has saved to their "My questions" set — a plain N:N of profile to question.
+
+    THE DURABLE CURATION, distinct from the per-interview InterviewQuestion plan: this is the pool
+    the candidate maintains ("I want to practise these"); a plan is a snapshot of it frozen at one
+    interview's kickoff. Toggling a checkbox in the UI inserts/deletes a row here (batched on Save);
+    starting an interview reads the rows for the chosen role+level to build that interview's plan.
+
+    DELIBERATELY NO role/level COLUMNS. A saved question already knows its level (`question.level_id`)
+    and its roles (`question_roles`), so "my backend questions at or below mid" is a JOIN at query
+    time, not denormalized copies here that could drift from the bank. (This was an explicit design
+    choice — see the question-selection-modes-design memory.) The cost is that every "my questions"
+    read joins through those tables; the benefit is one source of truth for a question's role/level.
+
+    UNIQUE (profile_id, question_id): a question is either in the set or not, never twice. Both FKs
+    cascade — drop the profile or the question and the membership row goes with it.
+    """
+    __tablename__ = "profile_questions"
+    __table_args__ = (
+        UniqueConstraint("profile_id", "question_id", name="uq_profile_question"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[uuid_pkg.UUID] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE"), index=True
+    )
+    question_id: Mapped[int] = mapped_column(
+        ForeignKey("questions.id", ondelete="CASCADE"), index=True
+    )
+
+    question: Mapped[Question] = relationship(lazy="selectin")

@@ -74,7 +74,17 @@ export default function InterviewsTable({
 
     return (
         <div className="overflow-x-auto">
-            <table className="table">
+            {/* table-fixed + a colgroup pins the column widths so they don't depend on cell content —
+                without it the narrow loading skeletons size the columns smaller than real rows, and the
+                headers "jump" wider when data arrives. Interview (the wide column) takes the remainder;
+                the rest are fixed. */}
+            <table className="table table-fixed min-w-[640px]">
+                <colgroup>
+                    <col />
+                    <col className="w-28" />
+                    <col className="w-24" />
+                    <col className="w-28" />
+                </colgroup>
                 <thead>
                     <tr>
                         <th>Interview</th>

@@ -27,17 +27,33 @@ Quick test once filled in (from server/):
 """
 from __future__ import annotations
 
+import random
+
 from fastapi_pagination import Params
 # `apaginate` is the ASYNC entry point (0.15.16 deprecated calling `paginate` on an AsyncSession
 # in favour of it; it's removed in 0.16). Same contract — (session, select_stmt, params) ->
 # Page(items, total, page, size, pages) — just the coroutine the async engine needs.
 from fastapi_pagination.ext.sqlalchemy import apaginate
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from db.engine import get_session
 # ReferenceBrief added for Phase E's get_reference (pre-imported so the TODO body has it ready).
 # QuestionRole is the question<->role join carrying per-role bank order (next_question orders on it).
-from db.models import Level, Question, QuestionRole, ReferenceBrief, Role, Rubric
+# ProfileQuestion is the candidate's saved "My questions" set (the interview-plan source).
+from db.models import (
+    Level,
+    ProfileQuestion,
+    Question,
+    QuestionRole,
+    ReferenceBrief,
+    Role,
+    Rubric,
+)
+
+# How many questions a DEFAULT interview asks when the candidate hasn't saved any. Picked to be a
+# short-but-real mock interview; the plan builder draws them at increasing seniority (see
+# build_interview_plan). Not a stored column — the plan's LENGTH is the count.
+DEFAULT_PLAN_SIZE = 3
 
 
 def _question_dict(question: Question) -> dict:
@@ -141,27 +157,271 @@ async def next_question(
         asked = asked_ids or []
         if role_row is None:
             return {"status": "not_found", "role": role}
-        # question<->role is N:N now: join the pairing to scope to this role, and order by the
-        # pairing's sort_order (per-role bank order — a shared question orders differently per role).
-        stmt = (
-            select(Question)
-            .join(QuestionRole, QuestionRole.question_id == Question.id)
-            .where(QuestionRole.role_id == role_row.id)
-            .order_by(QuestionRole.sort_order)
-        )
-        if (asked):
-            stmt = stmt.where(Question.slug.not_in(asked))
+        level_rank = None
         if level is not None:
             level_row = (await db.execute(select(Level).where(Level.slug == level))).scalar_one_or_none()
             if level_row is None:
                 return {"status": "not_found", "role": role, "level": level}
-            allowed_level_ids = select(Level.id).where(Level.rank <= level_row.rank)
-            stmt = stmt.where(Question.level_id.in_(allowed_level_ids)) 
+            level_rank = level_row.rank
+        # the role + at-or-below-level filter, ordered by per-role bank order, lives in one helper
+        # now (build_interview_plan reuses it); here we just add the "not already asked" clause.
+        stmt = _filtered_questions_stmt(role_row.id, level_rank)
+        if asked:
+            stmt = stmt.where(Question.slug.not_in(asked))
         res = await db.execute(stmt)
         question_result = res.scalars().first()
         if (question_result is None):
             return {"status": "exhausted", "role": role}
         return {"status": "ok", "question": _question_dict(question_result)}
+
+
+def _filtered_questions_stmt(role_id: int, level_rank: int | None):
+    """The bank query shared by next_question and the interview-plan builder: every question for a
+    role, at or below a seniority, in that role's bank order.
+
+    question<->role is N:N, so join the `question_roles` pairing to scope to this role and order by
+    its `sort_order` (a shared question sits at a different place in each role's list). The level
+    filter is the AT-OR-BELOW rule: questions whose level ranks at or beneath `level_rank` (a senior
+    interview draws entry+mid+senior, an entry one only entry). A NULL-level question has no rank to
+    compare and is excluded once a level is given — same as before. Pass `level_rank=None` for no
+    level filter.
+    """
+    stmt = (
+        select(Question)
+        .join(QuestionRole, QuestionRole.question_id == Question.id)
+        .where(QuestionRole.role_id == role_id)
+        .order_by(QuestionRole.sort_order)
+    )
+    if level_rank is not None:
+        allowed_level_ids = select(Level.id).where(Level.rank <= level_rank)
+        stmt = stmt.where(Question.level_id.in_(allowed_level_ids))
+    return stmt
+
+
+def _default_plan(rows: list[Question], size: int = DEFAULT_PLAN_SIZE) -> list[Question]:
+    """Pick up to `size` questions of INCREASING seniority from the at-or-below pool `rows`.
+
+    `rows` arrives in bank order (per-role `sort_order`), each carrying its level. The rule the user
+    asked for: draw one random question from each distinct level band, ascending (so a senior
+    interview opens entry → mid → senior); if that yields fewer than `size` (a mid interview has only
+    two bands), top up with more random questions from the pool; then order the result by seniority.
+    Caps at whatever exists — a role+level with fewer than `size` questions just gets fewer.
+    """
+    if not rows:
+        return []
+
+    def rank(q: Question) -> int:
+        return q.level.rank if q.level is not None else 0
+
+    by_rank: dict[int, list[Question]] = {}
+    for q in rows:
+        by_rank.setdefault(rank(q), []).append(q)
+
+    chosen: list[Question] = []
+    chosen_ids: set[int] = set()
+    # SELECTION: one random question per band, visiting bands LOW → HIGH. Ascending matters when
+    # there are more bands than slots — we then cover the lowest `size` bands (start easy, ramp up).
+    for r in sorted(by_rank):
+        if len(chosen) >= size:
+            break
+        pick = random.choice(by_rank[r])
+        chosen.append(pick)
+        chosen_ids.add(pick.id)
+    # TOP-UP: bands alone may not fill the quota (a mid interview has only two). Append extra random
+    # questions from the rest of the pool — note these come in shuffled, i.e. at an arbitrary rank.
+    if len(chosen) < size:
+        remaining = [q for q in rows if q.id not in chosen_ids]
+        random.shuffle(remaining)
+        for q in remaining:
+            if len(chosen) >= size:
+                break
+            chosen.append(q)
+            chosen_ids.add(q.id)
+    # FINAL ASK ORDER: the top-up appended at the end regardless of rank, so re-sort to guarantee
+    # increasing seniority across the whole plan. (A no-op when no top-up fired.) Stable, so bank
+    # order is preserved among questions sharing a level.
+    chosen.sort(key=rank)
+    return chosen
+
+
+async def build_interview_plan(
+    db, role_row: Role, level_row: Level, profile_id
+) -> tuple[list[Question], bool]:
+    """Materialize the ordered question plan for a new interview.
+
+    Runs inside create_interview's session (takes `db`) so the plan rows land in the same
+    transaction as the interview. Returns `(questions, from_saved)` — `from_saved` is False when the
+    default fired, which the route surfaces so the SPA can tell the candidate a default was used.
+
+    Two sources, in priority order:
+      1. the candidate's SAVED set (`profile_questions`) intersected with this role+level — if they
+         have curated any, that IS the plan, ordered by seniority then bank order.
+      2. otherwise the DEFAULT: `DEFAULT_PLAN_SIZE` random questions of increasing seniority, so a
+         brand-new candidate still gets a bounded, sensibly-ramped interview.
+    """
+    base = _filtered_questions_stmt(role_row.id, level_row.rank)
+
+    if profile_id is not None:
+        saved_ids = select(ProfileQuestion.question_id).where(
+            ProfileQuestion.profile_id == profile_id
+        )
+        saved_rows = (
+            await db.execute(base.where(Question.id.in_(saved_ids)))
+        ).scalars().all()
+        if saved_rows:
+            # stable sort by seniority; base already ordered by bank sort_order within a level.
+            saved_rows = sorted(
+                saved_rows, key=lambda q: q.level.rank if q.level is not None else 0
+            )
+            return list(saved_rows), True
+
+    all_rows = (await db.execute(base)).scalars().all()
+    return _default_plan(list(all_rows)), False
+
+
+def _question_out(question: Question, selected: bool) -> dict:
+    """The richer wire shape the BROWSE UI needs (vs. the terse _question_dict the agent uses).
+
+    Carries the human-readable type/level NAMES and tag names for display, plus `selected` — whether
+    this question is in the current user's saved set, so a checkbox renders in the right state.
+    """
+    return {
+        "slug": question.slug,
+        "text": question.text,
+        "type_slug": question.type.slug,
+        "type_name": question.type.name,
+        "level_slug": question.level.slug if question.level is not None else None,
+        "level_name": question.level.name if question.level is not None else None,
+        "tags": [tag.name for tag in question.tags],
+        "selected": selected,
+    }
+
+
+async def list_questions_page(
+    params: Params,
+    role: str,
+    level: str | None = None,
+    profile_id=None,
+    search: str | None = None,
+    saved: bool | None = None,
+):
+    """A PAGE of bank questions for the browse UI — backs GET /api/questions.
+
+    Same server-side pagination as list_roles, over the role + at-or-below-level filter. `search`
+    matches question text. `saved` is a TRI-STATE against the caller's saved set: True → only saved
+    ("My questions"), False → only NOT saved (the Questions page's "everything else" table), None →
+    the whole bank (the Add-question modal). Every returned row carries a computed `selected` flag so
+    the checkbox renders right. An unknown role/level yields an empty page rather than an error.
+    """
+    async with get_session() as db:
+        role_row = (
+            await db.execute(select(Role).where(Role.slug == role))
+        ).scalar_one_or_none()
+        level_rank: int | None = None
+        if level is not None:
+            level_row = (
+                await db.execute(select(Level).where(Level.slug == level))
+            ).scalar_one_or_none()
+            # unknown level -> a rank nothing can be at-or-below, i.e. an empty result.
+            level_rank = level_row.rank if level_row is not None else -1
+        # unknown role -> a role_id nothing pairs with, again an empty page.
+        stmt = _filtered_questions_stmt(role_row.id if role_row else -1, level_rank)
+        if search:
+            stmt = stmt.where(Question.text.ilike(f"%{search}%"))
+        if saved is not None and profile_id is not None:
+            saved_ids = select(ProfileQuestion.question_id).where(
+                ProfileQuestion.profile_id == profile_id
+            )
+            stmt = stmt.where(
+                Question.id.in_(saved_ids) if saved else Question.id.not_in(saved_ids)
+            )
+
+        # apaginate returns page.items as the full Question ORM rows for this page (COUNT +
+        # LIMIT/OFFSET handled for us). What it CAN'T give us is `selected` — that's not a column on
+        # Question but a fact in profile_questions — so we stamp it below.
+        page = await apaginate(db, stmt, params)
+
+        # `selected` per row = is this question in the caller's saved set. When the query already
+        # filtered by membership the answer is known for free (all saved / none saved); otherwise do
+        # ONE lookup over just this page's ids (indexed), not one per row.
+        if saved is True:
+            saved_set: set[int] = {q.id for q in page.items}
+        elif saved is False:
+            saved_set = set()
+        else:
+            saved_set = set()
+            if profile_id is not None and page.items:
+                ids = [q.id for q in page.items]
+                saved_set = set(
+                    (
+                        await db.execute(
+                            select(ProfileQuestion.question_id).where(
+                                ProfileQuestion.profile_id == profile_id,
+                                ProfileQuestion.question_id.in_(ids),
+                            )
+                        )
+                    ).scalars().all()
+                )
+        page.items = [_question_out(q, q.id in saved_set) for q in page.items]
+        return page
+
+
+async def save_saved_questions(
+    profile_id, add: list[str] | None = None, remove: list[str] | None = None
+) -> dict:
+    """Apply a staged "My questions" edit in one transaction — backs PUT /api/profile/questions.
+
+    `add`/`remove` are question SLUGS (what the client holds). Adds are idempotent (an already-saved
+    question is skipped, so re-saving never errors on the unique constraint); removes that aren't
+    saved are simply no-ops. Unknown slugs are ignored — the bank is authoritative, and a stale slug
+    from the client shouldn't 500 a save. Returns {"ok": True, "added": n, "removed": m}.
+    """
+    add = add or []
+    remove = remove or []
+    slugs = set(add) | set(remove)
+    if not slugs:
+        return {"ok": True, "added": 0, "removed": 0}
+
+    async with get_session() as db:
+        id_by_slug = dict(
+            (
+                await db.execute(
+                    select(Question.slug, Question.id).where(Question.slug.in_(slugs))
+                )
+            ).all()
+        )
+        add_ids = [id_by_slug[s] for s in add if s in id_by_slug]
+        remove_ids = [id_by_slug[s] for s in remove if s in id_by_slug]
+
+        removed = 0
+        if remove_ids:
+            res = await db.execute(
+                delete(ProfileQuestion).where(
+                    ProfileQuestion.profile_id == profile_id,
+                    ProfileQuestion.question_id.in_(remove_ids),
+                )
+            )
+            removed = res.rowcount or 0
+
+        added = 0
+        if add_ids:
+            existing = set(
+                (
+                    await db.execute(
+                        select(ProfileQuestion.question_id).where(
+                            ProfileQuestion.profile_id == profile_id,
+                            ProfileQuestion.question_id.in_(add_ids),
+                        )
+                    )
+                ).scalars().all()
+            )
+            for qid in add_ids:
+                if qid not in existing:
+                    db.add(ProfileQuestion(profile_id=profile_id, question_id=qid))
+                    added += 1
+
+        await db.commit()
+        return {"ok": True, "added": added, "removed": removed}
 
 
 async def list_levels(params: Params, search: str | None = None):

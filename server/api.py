@@ -137,8 +137,9 @@ from tools.questions import (
     get_role_by_slug,
     get_rubric,
     list_levels,
+    list_questions_page,
     list_roles,
-    next_question,
+    save_saved_questions,
 )
 
 
@@ -231,6 +232,31 @@ class LevelOut(BaseModel):
     rank: int
 
 
+# GET /api/questions row shape (Phase G — the browse / "My questions" UI). Unlike RoleOut/LevelOut
+# this is NOT coerced straight off an ORM row: `list_questions_page` returns plain dicts (from
+# _question_out) because `selected` is computed, not a column, and type/level are flattened to their
+# NAMES for display. `selected` = is this question in the CALLING user's saved set, so a checkbox
+# renders in the right state. `level_*` are nullable — an unleveled question has no band.
+class QuestionOut(BaseModel):
+    slug: str
+    text: str
+    type_slug: str
+    type_name: str
+    level_slug: str | None = None
+    level_name: str | None = None
+    tags: list[str]
+    selected: bool
+
+
+# PUT /api/profile/questions body — a staged "My questions" edit committed in one batch. The SPA
+# stages many checkbox toggles and sends the deltas on Save (add/remove lists of question slugs),
+# rather than a per-toggle PUT/DELETE, so a whole selection lands in one transaction. Both default
+# to empty so a body may carry only adds or only removes.
+class SaveQuestionsRequest(BaseModel):
+    add: list[str] = []
+    remove: list[str] = []
+
+
 # ===========================================================================
 # WORKED EXAMPLE — POST /api/interview : start an interview, get the first question.
 #
@@ -275,30 +301,43 @@ async def start_interview(
     # to somebody. The column has been sitting there nullable since Phase A waiting for it,
     # and `profiles.id` IS the auth uid, so the value goes straight in with no lookup — the
     # payoff for breaking the surrogate-key convention on that one table.
+    # create_interview now also MATERIALIZES the question plan (Phase G): the candidate's saved
+    # "My questions" for this role+level, or a random default of increasing seniority when they've
+    # saved none. The FIRST plan question comes back on the envelope — the client still presents it
+    # (the model never picks), exactly as it used to take it from next_question. What changed is the
+    # SOURCE: a frozen, finite plan instead of "the first at-or-below-level bank question", which is
+    # what stops the interview from walking the entire bank.
     created = await create_interview(req.role, req.seniority, persona, profile_id=user_id)
     if not created["ok"]:
         raise HTTPException(status_code=400, detail=created["error"])
     interview_id = created["interview_id"]
 
-    # the CLIENT picks the first question... now level-aware (Phase D): `req.seniority` is the
-    # level slug, and next_question filters the bank to questions at or below it. An entry
-    # interview and a senior one for the same role can therefore open on different questions.
-    nq = await next_question(req.role, req.seniority, asked_ids=[])
-    if nq.get("status") != "ok":
+    # an empty plan means the role+level has no questions at all — same failure the old
+    # next_question "no questions" branch reported, just detected from the plan now.
+    first_qid = created["first_qid"]
+    if first_qid is None:
         raise HTTPException(status_code=400, detail=f"no questions for role: {req.role}")
-    q = nq["question"]
+    first_qtext = created["first_qtext"]
 
-    # ...and writes it onto the row. From here on, "which question is on the table" is a
+    # writes the first question onto the row. From here on, "which question is on the table" is a
     # column, not a dict key — which is why a restart can't lose the candidate's place.
-    await save_interview_state(interview_id, current_qid=q["id"], followups_used=0)
+    await save_interview_state(interview_id, current_qid=first_qid, followups_used=0)
 
     # OPEN the first turn: the question has been PRESENTED, no answer yet. This is the turn the
     # candidate's first /api/answer will complete. Opening it here (rather than at answer time)
     # is what lets the transcript record the exact prompt shown — see the Turn docstring.
-    await open_turn(interview_id, q["id"], q["text"])
+    await open_turn(interview_id, first_qid, first_qtext)
 
-    # present the first question verbatim (short canned lead-in; the bank text is authoritative)
-    return {"interview_id": interview_id, "message": f"Let's begin. {q['text']}", "done": False}
+    # present the first question verbatim (short canned lead-in; the bank text is authoritative).
+    # `default_selection` lets the SPA note that a default set was chosen (they'd saved nothing);
+    # `plan_size` is how many questions this interview will ask.
+    return {
+        "interview_id": interview_id,
+        "message": f"Let's begin. {first_qtext}",
+        "done": False,
+        "default_selection": not created["from_saved"],
+        "plan_size": created["plan_size"],
+    }
 
 
 # ===========================================================================
@@ -424,35 +463,32 @@ async def submit_answer(
         await open_turn(req.interview_id, state["current_qid"], decision.followup)
         return {"message": f"{decision.reaction}\n\n{decision.followup}", "done": False}
 
-    #    (b) ADVANCE — the CLIENT pulls the next bank question (never the model).
-    #        `asked_ids` is no longer a list we append to and hope stays right: load_interview_state
-    #        DERIVES it from the turns + the current question every time, so it can't drift.
-    #        Phase D — `state["level"]` scopes selection to the interview's seniority (the same
-    #        at-or-below filter the first question used), so a mid interview never advances into a
-    #        senior-only question. The level is a column on the row, so it survives a restart too.
-    nq = await next_question(state["role"], state["level"], asked_ids=state["asked_ids"])
-    if nq["status"] == "ok":
-        q = nq["question"]
-        # write back: `current_qid=q["id"]`, `followups_used=0` (the probe budget is
-        #   per question, so a new question resets it), and `message_history=new_history`.
-        #   Note what you DON'T write: `current_qtext` and `asked_ids` were dict keys with no
-        #   column behind them — the text is read through `current_question.text` and the
-        #   asked set is derived. Copies you have to keep in sync are exactly the bug class
-        #   the normalized schema deleted.
+    #    (b) ADVANCE — the CLIENT moves to the next question in the FROZEN PLAN (never the model).
+    #        Phase G: the plan replaced "the next unasked at-or-below-level bank question". The next
+    #        question is `state["next_planned_qid"]` — load_interview_state walked the plan (by
+    #        position, skipping already-asked) and handed us the first one still owed, or None if the
+    #        plan is spent. The plan is a column set, so it survives a restart just like `level` did.
+    next_qid = state["next_planned_qid"]
+    if next_qid is not None:
+        # write back: `current_qid=next_qid`, `followups_used=0` (the probe budget is per question,
+        #   so a new question resets it), and `message_history=new_history`. Note what you DON'T
+        #   write: `current_qtext` and `asked_ids` were dict keys with no column behind them — the
+        #   text is read through `current_question.text` and the asked set is derived. Copies you
+        #   have to keep in sync are exactly the bug class the normalized schema deleted.
         #
         # explicit transition so a NEW bank question can't be misread as a follow-up. The
         # CLIENT owns this marker (the model never announces "moving on" — it can't, it doesn't
         # know a new question is coming), so it's consistent regardless of the reaction's wording.
-        await save_interview_state(req.interview_id, current_qid=q["id"], followups_used=0, message_history=new_history)
-        # OPEN the next turn for the new bank question. This is INSIDE the `status == "ok"`
-        # block on purpose: if the bank were exhausted we'd never get here, we'd fall to the END
+        await save_interview_state(req.interview_id, current_qid=next_qid, followups_used=0, message_history=new_history)
+        # OPEN the next turn for the new plan question. This is INSIDE the `next_qid is not None`
+        # block on purpose: if the plan were exhausted we'd never get here, we'd fall to the END
         # branch below — so the interview ends with its last turn COMPLETED and no dangling open
         # turn. (That's what keeps a finished interview at zero open turns.)
-        await open_turn(req.interview_id, q["id"], q["text"])
-        return {"message": f"{decision.reaction}\n\nLet's move on to the next question. {q['text']}",
+        await open_turn(req.interview_id, next_qid, state["next_planned_qtext"])
+        return {"message": f"{decision.reaction}\n\nLet's move on to the next question. {state['next_planned_qtext']}",
                 "done": False}
 
-    #    (c) END — status "exhausted": the bank is done, so conclude.
+    #    (c) END — the plan is exhausted, so conclude.
     #    write back `done=True` and `message_history=new_history`. Leave `current_qid`
     #      alone: it keeps pointing at the last question asked, which is fine precisely because
     #      every reader checks `done` first (the contract save_interview_state documents). This
@@ -893,6 +929,41 @@ async def level_by_slug(slug: str, user_id: str = Depends(require_user)):
     if row is None:
         raise HTTPException(status_code=404, detail="unknown level")
     return row
+
+
+# GET /api/questions : a PAGE of bank questions for the browse UI and the dashboard "My questions"
+# table (Phase G). Same paginated shape as /api/roles — `params` (page/size) + our own filters:
+#   role/level  scope to a role and at-or-below seniority (the same filter interviews use).
+#   q           substring match on the question text.
+#   saved       TRI-STATE against the caller's saved set: true -> only saved ("My questions"),
+#               false -> only NOT saved (the Questions page's "everything else" table), omitted ->
+#               the whole role+level bank (the Add-question modal).
+# `require_user` gives us the uid so each row can carry `selected` (is it in THIS user's set) — the
+# uid is never taken from the request, so there's nothing to authorize separately.
+@app.get("/api/questions", response_model=Page[QuestionOut])
+async def questions(
+    params: Params = Depends(),
+    role: str = "backend-engineer",
+    level: str | None = None,
+    q: str | None = None,
+    saved: bool | None = None,
+    user_id: str = Depends(require_user),
+):
+    return await list_questions_page(
+        params, role=role, level=level, profile_id=user_id, search=q, saved=saved
+    )
+
+
+# PUT /api/profile/questions : commit a staged "My questions" edit (add/remove question slugs) in one
+# batch. Owner-scoped like the rest of /api/profile — the VERIFIED uid is what the saved rows are
+# written under, never an id from the body, so "my saved questions" can't be widened to someone else.
+# A batch (not per-slug PUT/DELETE) because the UI stages many toggles and Saves them together.
+@app.put("/api/profile/questions")
+async def save_profile_questions(
+    body: SaveQuestionsRequest,
+    user_id: str = Depends(require_user),
+) -> dict:
+    return await save_saved_questions(user_id, add=body.add, remove=body.remove)
 
 
 # ===========================================================================

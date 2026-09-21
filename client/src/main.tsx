@@ -8,6 +8,7 @@ import SessionPage from "./pages/SessionPage";
 import SessionLayout from "./pages/SessionLayout";
 import InterviewsPage from "./pages/InterviewsPage";
 import InterviewDetailPage from "./pages/InterviewDetailPage";
+import QuestionsPage from "./pages/QuestionsPage";
 import SettingsPage from "./pages/SettingsPage";
 import { AuthProvider } from "./auth/AuthProvider";
 import { ToastProvider } from "./toast/ToastProvider";
@@ -69,6 +70,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                             </Route>
                             <Route path="/interviews" element={<InterviewsPage />} />
                             <Route path="/interviews/:id" element={<InterviewDetailPage />} />
+                            <Route path="/questions" element={<QuestionsPage />} />
                             <Route path="/settings" element={<SettingsPage />} />
                         </Route>
 
