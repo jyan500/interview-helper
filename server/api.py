@@ -80,7 +80,7 @@ from __future__ import annotations
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, File, HTTPException, Response, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 # fastapi-pagination — the paginated option endpoints (Phase D picker). `Params` is the
 # page/size query-param dependency, `Page[T]` the {items,total,page,size,pages} response
@@ -134,9 +134,11 @@ from tools.interview import (
 from tools.questions import (
     get_level_by_slug,
     get_question,
+    get_question_type_by_slug,
     get_role_by_slug,
     get_rubric,
     list_levels,
+    list_question_types,
     list_questions_page,
     list_roles,
     save_saved_questions,
@@ -230,6 +232,14 @@ class LevelOut(BaseModel):
     slug: str
     name: str
     rank: int
+
+
+# The Questions-page filter's third picker — question KIND (behavioral · system-design · …). Same
+# {slug, name} contract as RoleOut: the slug is what the client filters by, the name is what it shows.
+class QuestionTypeOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    slug: str
+    name: str
 
 
 # GET /api/questions row shape (Phase G — the browse / "My questions" UI). Unlike RoleOut/LevelOut
@@ -724,6 +734,12 @@ async def scorecard(
         # was remembered. (A role with no rubric is the realistic cause; see save_scorecard.)
         raise HTTPException(status_code=500, detail=f"could not save scorecard: {saved['error']}")
 
+    # 6. mark the interview DONE. The conversational loop only reaches done=True when the bank
+    #    runs out (see /api/answer), but "End session" grades early via this route and would
+    #    otherwise leave a fully-graded interview flagged unfinished — so a scorecard existing IS
+    #    the interview being finished. Idempotent: re-grading a done interview leaves it done.
+    await save_interview_state(req.interview_id, done=True)
+
     return {
         "interview_id": req.interview_id,
         "role": req.role,
@@ -931,6 +947,27 @@ async def level_by_slug(slug: str, user_id: str = Depends(require_user)):
     return row
 
 
+# GET /api/question-types (+ /{slug}) : the Questions-page filter's type picker, backing an
+# async-paginate select exactly like /api/roles. The list is paginated + `?q=` searchable; the
+# by-slug lookup hydrates the picker's label from the URL slug (a 404 for an unknown slug). Same
+# require_user gate as the other vocab routes — behind <ProtectedRoute>, touches no user data.
+@app.get("/api/question-types", response_model=Page[QuestionTypeOut])
+async def question_types(
+    params: Params = Depends(),
+    q: str | None = None,
+    user_id: str = Depends(require_user),
+):
+    return await list_question_types(params, search=q)
+
+
+@app.get("/api/question-types/{slug}", response_model=QuestionTypeOut)
+async def question_type_by_slug(slug: str, user_id: str = Depends(require_user)):
+    row = await get_question_type_by_slug(slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail="unknown question type")
+    return row
+
+
 # GET /api/questions : a PAGE of bank questions for the browse UI and the dashboard "My questions"
 # table (Phase G). Same paginated shape as /api/roles — `params` (page/size) + our own filters:
 #   role/level  scope to a role and at-or-below seniority (the same filter interviews use).
@@ -940,6 +977,9 @@ async def level_by_slug(slug: str, user_id: str = Depends(require_user)):
 #               the whole role+level bank (the Add-question modal).
 # `require_user` gives us the uid so each row can carry `selected` (is it in THIS user's set) — the
 # uid is never taken from the request, so there's nothing to authorize separately.
+#   type        filter to one question KIND (behavioral / system-design / …), a question_types.slug.
+#   exact_level when true, `level` matches ONLY that seniority (the Questions-page browse filter)
+#               instead of the default at-or-below plan rule (the dashboard table / Add-question modal).
 @app.get("/api/questions", response_model=Page[QuestionOut])
 async def questions(
     params: Params = Depends(),
@@ -947,10 +987,20 @@ async def questions(
     level: str | None = None,
     q: str | None = None,
     saved: bool | None = None,
+    # aliased so the wire stays `?type=` while the Python name doesn't shadow the builtin.
+    question_type: str | None = Query(default=None, alias="type"),
+    exact_level: bool = False,
     user_id: str = Depends(require_user),
 ):
     return await list_questions_page(
-        params, role=role, level=level, profile_id=user_id, search=q, saved=saved
+        params,
+        role=role,
+        level=level,
+        profile_id=user_id,
+        search=q,
+        saved=saved,
+        type_slug=question_type,
+        exact_level=exact_level,
     )
 
 

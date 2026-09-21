@@ -15,7 +15,7 @@
  * role (the user's default, else most-recently-graded) and we seed the form's picker LABEL from what
  * it chose — so the draft shows the role actually on screen before the first Apply.
  */
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { useForm, Controller } from "react-hook-form";
 import Select from "react-select";
 import { AsyncPaginateSelect } from "./AsyncPaginateSelect";
@@ -29,6 +29,7 @@ import Button from "./Button";
 import { nocturneSelectStyles } from "../selectStyles";
 import { useGetDashboardQuery, useLazyGetInterviewedRolesQuery } from "../api";
 import type { DashboardPeriod, Readiness } from "../api";
+import { useSeededSelectFields } from "../hooks";
 
 // The window options — a plain (non-API) dropdown, so react-select's Select (see the dropdown
 // convention). Values match DASHBOARD_PERIODS on the backend. `month` is the default.
@@ -65,14 +66,23 @@ export default function SignalPanel() {
     });
 
     // seed the picker's label from the role the backend actually used (so the draft shows what's on
-    // screen), once — never clobbering a role the user has since typed into the draft.
-    const seededRole = useRef(false);
-    useEffect(() => {
-        if (!seededRole.current && data?.role && data.role_name) {
-            setValue("role", { value: data.role, label: data.role_name });
-            seededRole.current = true;
-        }
-    }, [data, setValue]);
+    // screen). Keyed on the effective role SLUG: it changes when the user updates their default
+    // (updateProfile invalidates "Dashboard", so this query refetches), and re-seeding on that change
+    // still never clobbers a role the user typed into the draft, since an un-applied draft pick doesn't
+    // move `data.role`. See useSeededSelectFields.
+    useSeededSelectFields(setValue, data?.role ?? null, [
+        {
+            name: "role",
+            option: data?.role && data.role_name ? { value: data.role, label: data.role_name } : null,
+        },
+    ]);
+
+    // Show the role picker's loading spinner while the query is (re)fetching AND no explicit role is
+    // applied — that's exactly when the picker's value is the backend-RESOLVED default (cold load, or a
+    // reload after the user changes their default), so it would otherwise sit empty/stale with no
+    // indication. Once the user has APPLIED a role, its value is their own pick and won't change on a
+    // refetch, so no spinner then (e.g. changing only the period).
+    const roleLoading = isFetching && applied.role === undefined;
 
     function onApply(values: SignalFilters) {
         setApplied({
@@ -91,6 +101,7 @@ export default function SignalPanel() {
                         name="role"
                         fetchPage={triggerRoles}
                         placeholder="Select a role…"
+                        isLoading={roleLoading}
                     />
                     <Controller
                         control={control}

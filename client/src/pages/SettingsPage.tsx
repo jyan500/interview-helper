@@ -6,13 +6,14 @@
  * The split of concerns across the cards mirrors where each value actually lives:
  *   - AvatarCard / DefaultsCard → OUR backend (profile row): the picture pointer and the default
  *     role/level, via the /api/profile endpoints.
- *   - AccountCard → SUPABASE AUTH (client-direct): name, email and password in one form (one
- *     updateUser call), because they're auth-user attributes, not interview data — the same edge
- *     signup and reset use.
+ *   - AccountCard / PasswordCard → SUPABASE AUTH (client-direct): name + email and the password, each
+ *     in its own form with its own save, because they're auth-user attributes, not interview data —
+ *     the same edge signup and reset use.
  */
 import AppNav from "../components/AppNav";
 import AvatarCard from "../components/settings/AvatarCard";
 import AccountCard from "../components/settings/AccountCard";
+import PasswordCard from "../components/settings/PasswordCard";
 import DefaultsCard from "../components/settings/DefaultsCard";
 
 export default function SettingsPage() {
@@ -26,6 +27,7 @@ export default function SettingsPage() {
                 <div className="mt-6 flex flex-col gap-6">
                     <AvatarCard />
                     <AccountCard />
+                    <PasswordCard />
                     <DefaultsCard />
                 </div>
             </div>

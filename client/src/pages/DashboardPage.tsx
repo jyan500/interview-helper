@@ -9,7 +9,7 @@
  * Fluid, not fixed: the mock's 1440px frame becomes a max-width container, and the
  * two-column body collapses to one column below ~1024px (lg:).
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { useForm } from "react-hook-form";
 import { skipToken } from "@reduxjs/toolkit/query/react";
@@ -24,7 +24,8 @@ import {
     useStartInterviewMutation,
     useUpdateProfileMutation,
 } from "../api";
-import { useQuestionSelection } from "../hooks";
+import { useQuestionSelection, useSeededSelectFields } from "../hooks";
+import { optionFromItem } from "../helpers";
 import { ControlledAsyncPaginateSelect } from "../components/ControlledAsyncPaginateSelect";
 import type { SelectOption } from "../components/AsyncPaginateSelect";
 import AppNav from "../components/AppNav";
@@ -64,18 +65,20 @@ export default function DashboardPage() {
         mode: "onChange",
     });
 
-    // PRE-FILL from the user's saved default (GET /api/profile), once — so a returning user opens on
-    // the role/level they usually practise instead of two empty pickers. Seeded via setValue (not the
-    // form's defaultValues, which are fixed before the profile loads) and guarded by a ref so it never
-    // clobbers a pick the user has since made. A profile with no default leaves the pickers empty.
-    const { data: profile } = useGetProfileQuery();
-    const seededDefaults = useRef(false);
-    useEffect(() => {
-        if (seededDefaults.current || !profile) return;
-        if (profile.role) setValue("role", { value: profile.role.slug, label: profile.role.name }, { shouldValidate: true });
-        if (profile.level) setValue("level", { value: profile.level.slug, label: profile.level.name }, { shouldValidate: true });
-        seededDefaults.current = true;
-    }, [profile, setValue]);
+    // PRE-FILL from the user's saved default (GET /api/profile) — so a returning user opens on the
+    // role/level they usually practise instead of two empty pickers. Keyed on the default's slugs so it
+    // re-seeds when the default changes (e.g. edited on the Settings page) but never clobbers a manual
+    // pick; see useSeededSelectFields. A profile with no default leaves the pickers empty.
+    const { data: profile, isLoading: profileLoading } = useGetProfileQuery();
+    useSeededSelectFields(
+        setValue,
+        profile ? `${profile.role?.slug ?? ""}|${profile.level?.slug ?? ""}` : null,
+        [
+            { name: "role", option: optionFromItem(profile?.role) },
+            { name: "level", option: optionFromItem(profile?.level) },
+        ],
+        { shouldValidate: true },
+    );
 
     // "Set as default" — persist the currently-picked role + level to the profile (PATCH /api/profile),
     // so it becomes next visit's pre-fill and the signal panel's default scope. Watched so the button
@@ -189,8 +192,7 @@ export default function DashboardPage() {
             {addOpen && canBrowse && (
                 <AddQuestionModal
                     role={roleSlug!}
-                    level={levelSlug!}
-                    savedTotal={savedTotal}
+                    roleName={roleValue!.label}
                     onClose={() => setAddOpen(false)}
                 />
             )}
@@ -231,6 +233,7 @@ export default function DashboardPage() {
                                         rules={{ required: true }}
                                         fetchPage={triggerRoles}
                                         placeholder="Search roles…"
+                                        isLoading={profileLoading}
                                     />
                                 </div>
                                 <div className="field">
@@ -241,6 +244,7 @@ export default function DashboardPage() {
                                         rules={{ required: true }}
                                         fetchPage={triggerLevels}
                                         placeholder="Search levels…"
+                                        isLoading={profileLoading}
                                     />
                                 </div>
                             </div>

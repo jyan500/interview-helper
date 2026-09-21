@@ -50,6 +50,12 @@ export interface AsyncPaginateSelectProps {
     onBlur?: () => void;
     placeholder?: string;
     isDisabled?: boolean;
+    // Force the loading spinner in the control — for when the SELECTED value is still being fetched by
+    // a SEPARATE query (e.g. the profile default / dashboard role that seeds this picker), a gap during
+    // which the control would otherwise just look empty and un-picked. This is independent of the option
+    // list's own loading, which the component already indicates while a page is fetched. See the render:
+    // a boolean here overrides that internal state, so we only force it (undefined = defer to internal).
+    isLoading?: boolean;
     // Bust AsyncPaginate's per-search-term option cache when an external input changes (e.g. a
     // dependent filter). Rarely needed for the independent role/level lists, exposed for reuse.
     cacheUniqs?: ReadonlyArray<unknown>;
@@ -62,6 +68,7 @@ export function AsyncPaginateSelect({
     onBlur,
     placeholder,
     isDisabled,
+    isLoading,
     cacheUniqs,
 }: AsyncPaginateSelectProps) {
     // The pagination dance, owned here instead of at every call site. AsyncPaginate calls this with
@@ -109,6 +116,11 @@ export function AsyncPaginateSelect({
             additional={{ page: 1 }}
             placeholder={placeholder}
             isDisabled={isDisabled}
+            // `|| undefined` (not `?? false`): a boolean here OVERRIDES the library's own option-loading
+            // spinner (it uses the prop when it's a boolean, else its internal state). We want to FORCE
+            // the spinner only while an external seed query loads, and otherwise let the internal state
+            // drive it, so we pass a boolean only when true and undefined the rest of the time.
+            isLoading={isLoading || undefined}
             cacheUniqs={cacheUniqs}
             // Nocturne dark-theme styling (shared) — without it react-select's white menu + inherited
             // near-white option text render the dropdown unreadable. See selectStyles.ts.

@@ -6,7 +6,6 @@
  *
  * Applied on SUBMIT (a Save button), not on change, and both picks are required before it enables.
  */
-import { useEffect, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { useToast } from "../../toast/ToastProvider";
 import {
@@ -15,6 +14,8 @@ import {
     useLazyGetRolesQuery,
     useUpdateProfileMutation,
 } from "../../api";
+import { useSeededSelectFields } from "../../hooks";
+import { optionFromItem } from "../../helpers";
 import type { SelectOption } from "../AsyncPaginateSelect";
 import { ControlledAsyncPaginateSelect } from "../ControlledAsyncPaginateSelect";
 import Button from "../Button";
@@ -32,16 +33,19 @@ export default function DefaultsCard() {
         mode: "onChange",
     });
 
-    // PRE-FILL from the saved default (GET /api/profile), once — guarded by a ref so it never clobbers
-    // a pick the user has since made. A profile with no default leaves both pickers empty.
-    const { data: profile } = useGetProfileQuery();
-    const seeded = useRef(false);
-    useEffect(() => {
-        if (seeded.current || !profile) return;
-        if (profile.role) setValue("role", { value: profile.role.slug, label: profile.role.name }, { shouldValidate: true });
-        if (profile.level) setValue("level", { value: profile.level.slug, label: profile.level.name }, { shouldValidate: true });
-        seeded.current = true;
-    }, [profile, setValue]);
+    // PRE-FILL from the saved default (GET /api/profile). Keyed on the default's slugs so it re-seeds
+    // when the default changes (e.g. via the dashboard's "Set as default") but never clobbers a pick the
+    // user has since made; see useSeededSelectFields. A profile with no default leaves both pickers empty.
+    const { data: profile, isLoading: profileLoading } = useGetProfileQuery();
+    useSeededSelectFields(
+        setValue,
+        profile ? `${profile.role?.slug ?? ""}|${profile.level?.slug ?? ""}` : null,
+        [
+            { name: "role", option: optionFromItem(profile?.role) },
+            { name: "level", option: optionFromItem(profile?.level) },
+        ],
+        { shouldValidate: true },
+    );
 
     // LAZY option triggers handed straight to the two async selects as their `fetchPage` — the select
     // owns paginate/map, we only inject WHICH endpoint (see ControlledAsyncPaginateSelect).
@@ -74,6 +78,7 @@ export default function DefaultsCard() {
                             rules={{ required: true }}
                             fetchPage={triggerRoles}
                             placeholder="Search roles…"
+                            isLoading={profileLoading}
                         />
                     </div>
                     <div className="field">
@@ -84,6 +89,7 @@ export default function DefaultsCard() {
                             rules={{ required: true }}
                             fetchPage={triggerLevels}
                             placeholder="Search levels…"
+                            isLoading={profileLoading}
                         />
                     </div>
                 </div>
