@@ -35,11 +35,21 @@ export default function QuestionsTable({
 
     return (
         <div className="overflow-x-auto">
-            <table className="table">
+            {/* table-fixed + a colgroup pins the column widths so they don't depend on cell content —
+                without it the narrow loading skeletons size the columns smaller than real rows and the
+                headers "jump" when data arrives. Question (the wide column) takes the remainder; the
+                rest are fixed. */}
+            <table className="table table-fixed min-w-[640px]">
+                <colgroup>
+                    <col className="w-10" />
+                    <col />
+                    <col className="w-36" />
+                    <col className="w-24" />
+                </colgroup>
                 <thead>
                     <tr>
                         {/* narrow checkbox column; the header is intentionally blank (per-row control) */}
-                        <th className="w-8"></th>
+                        <th></th>
                         <th>Question</th>
                         <th>Type</th>
                         <th>Level</th>
@@ -69,19 +79,20 @@ export default function QuestionsTable({
                                             aria-label={`Select "${q.text}"`}
                                         />
                                     </td>
-                                    {/* the question text is the row's substance — let it wrap, unlike
-                                        the terse cells beside it. Clicking it also toggles the row, so
-                                        the whole line is a target, not just the 16px box. */}
+                                    {/* the question is the row's substance, but questions get long — so
+                                        clamp to 2 lines for a uniform, scannable row height and expose the
+                                        full text on hover (title). Clicking anywhere on it also toggles the
+                                        row, so the whole line is a target, not just the 16px box. */}
                                     <td
-                                        className="max-w-[560px] cursor-pointer align-top"
+                                        className="cursor-pointer align-top"
                                         onClick={() => onToggle(q.slug, q.selected)}
                                     >
-                                        {q.text}
+                                        <div className="line-clamp-2" title={q.text}>{q.text}</div>
                                     </td>
-                                    <td className="whitespace-nowrap align-top text-neutral-300">
+                                    <td className="truncate align-top text-neutral-300" title={q.type_name}>
                                         {q.type_name}
                                     </td>
-                                    <td className="whitespace-nowrap align-top text-neutral-400">
+                                    <td className="truncate align-top text-neutral-400" title={q.level_name ?? undefined}>
                                         {q.level_name ?? "—"}
                                     </td>
                                 </tr>

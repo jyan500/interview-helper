@@ -70,7 +70,7 @@ export default function QuestionsPage() {
                     {/* Saved — the current set (server truth). Unticking one stages a removal; on Save
                         it drops into "Other questions" below. */}
                     <h2 className="mb-2 font-heading text-[19px] font-medium">
-                        Saved <span className="text-neutral-400">({savedTotal})</span>
+                        Saved <span className="text-neutral-400">{savedTotal > 0 ? `(${savedTotal})` : ""}</span>
                     </h2>
                     <QuestionsTable
                         questions={savedData?.items ?? []}
