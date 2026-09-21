@@ -52,6 +52,9 @@ export const nocturneSelectStyles: StylesConfig<any, boolean, GroupBase<any>> = 
     }),
     noOptionsMessage: (base) => ({ ...base, color: "var(--color-neutral-400)" }),
     loadingMessage: (base) => ({ ...base, color: "var(--color-neutral-400)" }),
+    // The spinner in the control (option loading, or a forced isLoading while the seed value fetches) —
+    // match the other indicators so it reads as part of the theme, not react-select's light-gray default.
+    loadingIndicator: (base) => ({ ...base, color: "var(--color-neutral-400)" }),
     indicatorSeparator: (base) => ({ ...base, backgroundColor: "var(--color-divider)" }),
     dropdownIndicator: (base, state) => ({
         ...base,

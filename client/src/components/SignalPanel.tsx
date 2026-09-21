@@ -77,6 +77,13 @@ export default function SignalPanel() {
         },
     ]);
 
+    // Show the role picker's loading spinner while the query is (re)fetching AND no explicit role is
+    // applied — that's exactly when the picker's value is the backend-RESOLVED default (cold load, or a
+    // reload after the user changes their default), so it would otherwise sit empty/stale with no
+    // indication. Once the user has APPLIED a role, its value is their own pick and won't change on a
+    // refetch, so no spinner then (e.g. changing only the period).
+    const roleLoading = isFetching && applied.role === undefined;
+
     function onApply(values: SignalFilters) {
         setApplied({
             role: values.role?.value,
@@ -94,6 +101,7 @@ export default function SignalPanel() {
                         name="role"
                         fetchPage={triggerRoles}
                         placeholder="Select a role…"
+                        isLoading={roleLoading}
                     />
                     <Controller
                         control={control}

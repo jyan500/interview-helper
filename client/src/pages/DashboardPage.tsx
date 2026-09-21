@@ -69,7 +69,7 @@ export default function DashboardPage() {
     // role/level they usually practise instead of two empty pickers. Keyed on the default's slugs so it
     // re-seeds when the default changes (e.g. edited on the Settings page) but never clobbers a manual
     // pick; see useSeededSelectFields. A profile with no default leaves the pickers empty.
-    const { data: profile } = useGetProfileQuery();
+    const { data: profile, isLoading: profileLoading } = useGetProfileQuery();
     useSeededSelectFields(
         setValue,
         profile ? `${profile.role?.slug ?? ""}|${profile.level?.slug ?? ""}` : null,
@@ -234,6 +234,7 @@ export default function DashboardPage() {
                                         rules={{ required: true }}
                                         fetchPage={triggerRoles}
                                         placeholder="Search roles…"
+                                        isLoading={profileLoading}
                                     />
                                 </div>
                                 <div className="field">
@@ -244,6 +245,7 @@ export default function DashboardPage() {
                                         rules={{ required: true }}
                                         fetchPage={triggerLevels}
                                         placeholder="Search levels…"
+                                        isLoading={profileLoading}
                                     />
                                 </div>
                             </div>
