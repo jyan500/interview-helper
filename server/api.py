@@ -94,6 +94,7 @@ from pydantic import BaseModel, ConfigDict
 # pydantic-ai owns the shape of `message_history`, so it also owns the (de)serialization.
 # Never hand-roll it: dump_python(msgs, mode="json") out, validate_python(raw) back in.
 # (Verified against pydantic-ai 2.13.0 — the repo's "check live API shapes" rule.)
+from pydantic_ai.exceptions import AgentRunError
 from pydantic_ai.messages import ModelMessagesTypeAdapter
 from pydantic_ai.usage import UsageLimits
 
@@ -102,15 +103,15 @@ from pydantic_ai.usage import UsageLimits
 # Importing this also imports pydantic_agent, whose module-level load_dotenv is what puts
 # GEMINI_API_KEY / OPENAI_API_KEY in the environment for this process.
 from grading import aggregate, grade_one, turn_agent
-# Interview simulation — the JD extractor (and, from Phase 2, the round generator).
-from simulation import extract_job
+# Interview simulation — the JD extractor and the round generator.
+from simulation import extract_job, generate_round
 
 # --- THE DATA LAYER + THE TEMPLATES, imported directly (see point 2 above). ------------
 # Note the asymmetry, and that it's intentional: `record_answer` is a legitimate interview
 # ACTION and stays registered as an MCP tool for external clients, while `create_interview`
 # and the two state functions are backend bookkeeping that no model should ever reach. That
 # line lives in mcp_server.py. From in here, they're all just functions.
-from prompts import behavioral_interview
+from prompts import behavioral_interview, simulation_interview
 # Phase B — identity. `require_user` turns the Authorization header into a user id (or 401);
 # `require_ownership` is the second, separate question (403). See auth.py.
 from auth import SUPABASE_URL, require_ownership, require_user
@@ -124,6 +125,7 @@ from tools.interview import (
     get_resumable_interview,
     list_interviews,
     list_interviewed_roles,
+    load_grading_context,
     load_interview_state,
     load_resume_payload,
     open_turn,
@@ -140,7 +142,6 @@ from tools.questions import (
     get_question,
     get_question_type_by_slug,
     get_role_by_slug,
-    get_rubric,
     list_levels,
     list_question_types,
     list_questions_page,
@@ -180,16 +181,26 @@ class StartRequest(BaseModel):
     # the client's word for it. It's the `levels.slug` in the DB and the `seniority` argument
     # of the behavioral_interview template — one concept, two established names.
     seniority: str = "mid"
+    # INTERVIEW SIMULATION — a saved job's slug + a round_types slug, sent together. When set, the
+    # job supplies role + level (role/seniority above are ignored) and the round is GENERATED.
+    job: str | None = None
+    round: str | None = None
 
 
 class AnswerRequest(BaseModel):
     interview_id: str
     text: str
+    # A coding round's editor contents, sent with the turn when they changed. Appended to `text` as
+    # a fenced block, so the model and the transcript both see the code. Nothing is executed.
+    code: str | None = None
+    language: str | None = None
 
 
 class ScorecardRequest(BaseModel):
     interview_id: str
-    role: str = "backend-engineer"   # which rubric to grade against (matches the interview)
+    # IGNORED — the rubric is chosen from the interview ROW (its round for a simulation, else its
+    # role). Kept optional so older clients that still send it don't 422.
+    role: str | None = None
 
 
 # PATCH /api/profile body — the dashboard default. Both OPTIONAL slugs: sending only one updates
@@ -349,7 +360,37 @@ async def start_interview(
     # STORED on the row, then replayed as `instructions` every turn. Storing it (rather than
     # rebuilding per turn) keeps the interviewer's character stable even if the template is
     # edited mid-interview.
-    persona = behavioral_interview(role=req.role, seniority=req.seniority)
+    role, seniority = req.role, req.seniority
+    persona = behavioral_interview(role=role, seniority=seniority)
+    simulation: dict = {}
+
+    # INTERVIEW SIMULATION — `{job, round}`. The job supplies role + level, the round its guidance,
+    # and the questions are GENERATED (with a brief each) instead of drawn from the bank. Guard order:
+    # the job exists (404) and is the caller's (403), the round is real (400) — all BEFORE the paid
+    # generation call, so a bad request costs a couple of SELECTs, not a round of tokens.
+    if (req.job is None) != (req.round is None):
+        raise HTTPException(status_code=400, detail="a simulation needs both a job and a round")
+    if req.job is not None:
+        job = await _owned_job(req.job, user_id)
+        round_row = await get_round_type_by_slug(req.round)
+        if round_row is None:
+            raise HTTPException(status_code=400, detail=f"unknown round type: {req.round}")
+        role, seniority = job["role"], job["level"]
+        persona = simulation_interview(
+            company=job["company"],
+            title=job["title"],
+            summary=job["summary"],
+            round_name=round_row.name,
+            round_guidance=round_row.guidance,
+            seniority=seniority,
+        )
+        try:
+            generated = await generate_round(job, round_row)
+        except AgentRunError as exc:
+            # the model couldn't produce a valid round within its retries/limits — nothing was
+            # written, so the candidate can simply try again.
+            raise HTTPException(status_code=502, detail="could not generate this round, please try again") from exc
+        simulation = {"job": req.job, "round_type": req.round, "generated": generated}
 
     # INSERT the row. create_interview mints the slug (the id the client holds) and resolves
     # the role/level slugs — an unknown one comes back as an envelope, not an exception.
@@ -364,7 +405,7 @@ async def start_interview(
     # (the model never picks), exactly as it used to take it from next_question. What changed is the
     # SOURCE: a frozen, finite plan instead of "the first at-or-below-level bank question", which is
     # what stops the interview from walking the entire bank.
-    created = await create_interview(req.role, req.seniority, persona, profile_id=user_id)
+    created = await create_interview(role, seniority, persona, profile_id=user_id, **simulation)
     if not created["ok"]:
         raise HTTPException(status_code=400, detail=created["error"])
     interview_id = created["interview_id"]
@@ -373,7 +414,7 @@ async def start_interview(
     # next_question "no questions" branch reported, just detected from the plan now.
     first_qid = created["first_qid"]
     if first_qid is None:
-        raise HTTPException(status_code=400, detail=f"no questions for role: {req.role}")
+        raise HTTPException(status_code=400, detail=f"no questions for role: {role}")
     first_qtext = created["first_qtext"]
 
     # writes the first question onto the row. From here on, "which question is on the table" is a
@@ -387,13 +428,16 @@ async def start_interview(
 
     # present the first question verbatim (short canned lead-in; the bank text is authoritative).
     # `default_selection` lets the SPA note that a default set was chosen (they'd saved nothing);
-    # `plan_size` is how many questions this interview will ask.
+    # `plan_size` is how many questions this interview will ask. `question` is the plan question on
+    # the table (not a probe) — the coding panel's problem statement.
     return {
         "interview_id": interview_id,
         "message": f"Let's begin. {first_qtext}",
         "done": False,
-        "default_selection": not created["from_saved"],
+        # a simulation's plan is generated, never a "default because nothing was saved"
+        "default_selection": not created["from_saved"] and req.job is None,
         "plan_size": created["plan_size"],
+        "question": {"slug": first_qid, "text": first_qtext},
     }
 
 
@@ -426,6 +470,11 @@ async def start_interview(
 #   expensive part of this route, so checking first means a stranger's request costs you one
 #   indexed SELECT instead of tokens.
 # ===========================================================================
+# A coding answer's code block ceiling — generous for a 20-minute interview solution, but it bounds
+# what one turn (and every later replay of message_history) can cost.
+ANSWER_CODE_MAX_CHARS = 20_000
+
+
 @app.post("/api/answer")
 async def submit_answer(
     req: AnswerRequest,
@@ -445,7 +494,18 @@ async def submit_answer(
         # that vanished with the process.
         raise HTTPException(status_code=409, detail="this interview is already finished")
 
-    if not req.text.strip():
+    # CODING ROUNDS — the editor's contents ride along with the turn. They're folded into the message
+    # as a fenced block, so ONE string is what the model reads, what record_answer stores, and what
+    # the grader later sees (its template notices the fence and grades the code as typed, not spoken).
+    # Code alone is a valid turn ("here's my solution"), so the blank check runs on the combined text.
+    text = req.text
+    if req.code is not None and req.code.strip():
+        if len(req.code) > ANSWER_CODE_MAX_CHARS:
+            raise HTTPException(status_code=413, detail=f"code is too long (max {ANSWER_CODE_MAX_CHARS} characters)")
+        fence = f"```{req.language or ''}\n{req.code.rstrip()}\n```"
+        text = f"{text.rstrip()}\n\n{fence}" if text.strip() else fence
+
+    if not text.strip():
         # Reject a blank BEFORE the LLM call: it would otherwise close the open turn with "" and
         # spend tokens on nothing. The open turn stays open, so the candidate just answers again.
         # (PRODUCT choice, not a null-safety one — "" is a valid non-NULL answer as far as the
@@ -462,7 +522,7 @@ async def submit_answer(
     #    store as an answer. We say "message" (not "answer") so we don't pre-bias the model.
     #    output_type=TurnReply is set on turn_agent.
     prompt = (f"The current interview question is: {state['current_qtext']}\n\n"
-              f"The candidate's message: {req.text}")
+              f"The candidate's message: {text}")
     result = await turn_agent.run(
         prompt,
         instructions=state["persona"],
@@ -493,7 +553,7 @@ async def submit_answer(
     #    the open turn is for the question the client thinks it's answering. Correct BY
     #    CONSTRUCTION: the model never picked or labelled the question, so it can't be
     #    mislabelled, and the FK means an id that isn't a question can't reach the table.
-    await record_answer(req.interview_id, state["current_qid"], req.text)
+    await record_answer(req.interview_id, state["current_qid"], text)
 
     # 5. BRANCH. The reaction is ALWAYS shown; what follows it is the client's call — the probe
     #    (if following up), the next bank question (if advancing), or a closing (if exhausted).
@@ -543,7 +603,9 @@ async def submit_answer(
         # turn. (That's what keeps a finished interview at zero open turns.)
         await open_turn(req.interview_id, next_qid, state["next_planned_qtext"])
         return {"message": f"{decision.reaction}\n\nLet's move on to the next question. {state['next_planned_qtext']}",
-                "done": False}
+                "done": False,
+                # the new plan question (the coding panel swaps its problem statement to this)
+                "question": {"slug": next_qid, "text": state["next_planned_qtext"]}}
 
     #    (c) END — the plan is exhausted, so conclude.
     #    write back `done=True` and `message_history=new_history`. Leave `current_qid`
@@ -719,12 +781,15 @@ async def scorecard(
         # and an empty one looked identical.
         raise HTTPException(status_code=404, detail="no recorded answers for this interview")
 
-    # 2. the rubric for this role (dimensions + a human-readable text to hand the grader)
-    rubric_env = await get_rubric(req.role)
-    if rubric_env.get("status") != "ok":
-        raise HTTPException(status_code=404, detail=f"unknown role: {req.role}")
-    dimensions = rubric_env["rubric"]["dimensions"]
-    rubric_text = f"Dimensions: {'; '.join(dimensions)}. {rubric_env['rubric']['scale']}"
+    # 2. the rubric (dimensions + a human-readable text to hand the grader), chosen from the INTERVIEW
+    #    ROW — the round's rubric for a simulation, the role's for a bank interview. It used to come
+    #    from `req.role`, which let the client grade an interview against a rubric it wasn't run
+    #    under. The same context carries a simulation's job + round framing for the grader.
+    context = await load_grading_context(req.interview_id)
+    if context["status"] != "ok":
+        raise HTTPException(status_code=404, detail="no rubric for this interview")
+    dimensions = context["dimensions"]
+    rubric_text = f"Dimensions: {'; '.join(dimensions)}. {context['scale']}"
 
     # PHASE E — the interview's seniority, so the grader calibrates each grade to the right bar
     # (the same answer clears entry but not senior). TODO: get_interview must start returning
@@ -760,7 +825,10 @@ async def scorecard(
             combined += " (the following text is follow-up) " + "\n\n".join(followups)
         # Phase E — pass the question SLUG (so grade_one fetches this question's brief) and the
         # interview level (so scoring is calibrated). grade_one tolerates an un-briefed question.
-        grade = await grade_one(question_id, question_text, combined, rubric_text, level=level)
+        grade = await grade_one(
+            question_id, question_text, combined, rubric_text, level=level,
+            job_context=context["job_context"], round_note=context["round_note"],
+        )
         grades.append(grade)
         answers.append({"question_id": question_id, "question_text": question_text,
                         **grade.model_dump()})
@@ -789,7 +857,7 @@ async def scorecard(
 
     return {
         "interview_id": req.interview_id,
-        "role": req.role,
+        "role": context["role"],
         "answers": answers,
         "dimension_averages": agg["dimension_averages"],
         "overall": agg["overall"],
@@ -830,6 +898,7 @@ async def my_interviews(
     sort: str | None = None,
     order: str | None = None,
     scored: bool = False,
+    job: str | None = None,
 ) -> dict:
     # `?resumable=true` NARROWS to the ONE resumable interview (the banner's question). It returns the
     # SAME page envelope as the full list — a 0-or-1-item page — so the client reads `items[0]` and the
@@ -841,9 +910,11 @@ async def my_interviews(
         return {"items": items, "total": len(items), "page": 1, "size": params.size, "pages": 1 if items else 0}
     # The full history: server-side paged (page/size from the query string via `params`) and filtered
     # by role/level SLUG + search — see list_interviews. `?scored=true` keeps only graded interviews
-    # (the list's default view; the "Show all" toggle drops it). Same {items,...} envelope.
+    # (the list's default view; the "Show all" toggle drops it). `?job=<slug>` keeps one job's
+    # simulations (the Job page's list). Same {items,...} envelope.
     return await list_interviews(
-        user_id, params, q=q, role=role, level=level, sort=sort, order=order, scored=scored
+        user_id, params, q=q, role=role, level=level, sort=sort, order=order, scored=scored,
+        job=job,
     )
 
 
@@ -878,6 +949,10 @@ async def interview_detail(
         "role": interview["role"],
         "level": interview["level_name"],
         "created_at": interview["created_at"],
+        # simulation header fields (all null for a bank interview)
+        "job_id": interview["job_id"],
+        "company": interview["company"],
+        "round": interview["round"],
         "turns": interview["turns"],
         "summary": interview["summary"],
         # null until this interview has been graded (or until get_scorecard is implemented).
@@ -934,6 +1009,13 @@ async def resume_interview(
         "level": payload["level"],
         "turns": payload["turns"],
         "current_question": payload["current_question"],
+        # INTERVIEW SIMULATION — resume into the right UI: header (company · round), the code editor
+        # flag, and the plan question on the table (the problem statement, even mid-probe).
+        "job_id": payload["job_id"],
+        "company": payload["company"],
+        "round": payload["round"],
+        "has_code_editor": payload["has_code_editor"],
+        "question": payload["question"],
     }
 
 

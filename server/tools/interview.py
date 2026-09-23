@@ -54,10 +54,15 @@ from db.engine import get_session
 from db.models import (
     Interview,
     InterviewQuestion,
+    Job,
     Level,
     Profile,
     Question,
+    QuestionType,
+    ReferenceBrief,
     Role,
+    RoundType,
+    Rubric,
     Scorecard,
     ScorecardEntry,
     ScorecardEntryScore,
@@ -74,8 +79,48 @@ from tools.questions import build_interview_plan
 from tools.scoring import aggregate_scores
 
 
+async def _insert_generated_questions(
+    db, generated: list[dict], job_row: Job, level_row: Level
+) -> list[Question] | None:
+    """Stage a simulation round's generated questions (+ one brief each) in `db`'s open transaction
+    and return them in ask order — or None if an item's `type_slug` isn't a real question type (the
+    generator's output is constrained to live slugs, so that's a vocab race, not an expected path).
+
+    No `question_roles` rows, on purpose: every bank read (browse, default plan) joins through that
+    table, so a generated question can never surface outside its own interview."""
+    type_ids = dict((await db.execute(select(QuestionType.slug, QuestionType.id))).all())
+    questions: list[Question] = []
+    for item in generated:
+        type_id = type_ids.get(item["type_slug"])
+        if type_id is None:
+            return None
+        question = Question(
+            slug=f"gen-{uuid.uuid4().hex[:12]}",
+            type_id=type_id,
+            text=item["text"],
+            level_id=level_row.id,
+            job_id=job_row.id,
+        )
+        db.add(question)
+        questions.append(question)
+    # FLUSH so Postgres assigns each question's autoincrement id — the briefs below and the caller's
+    # InterviewQuestion rows both need it. The briefs themselves need no flush: nothing reads their
+    # ids, and the caller's commit() flushes everything still pending, all in the one transaction.
+    await db.flush()
+    for question, item in zip(questions, generated):
+        db.add(ReferenceBrief(question_id=question.id, brief=item["brief"]))
+    return questions
+
+
 async def create_interview(
-    role: str, level: str, persona: str, profile_id: str | None = None
+    role: str,
+    level: str,
+    persona: str,
+    profile_id: str | None = None,
+    *,
+    job: str | None = None,
+    round_type: str | None = None,
+    generated: list[dict] | None = None,
 ) -> dict:
     """Start an interview: mint its id and INSERT the row. Called by POST /api/interview.
 
@@ -96,7 +141,18 @@ async def create_interview(
     smoke test below still runs without a token — an owner-less interview is a legal row (the
     column is nullable), it's just one no signed-in user can reach, because require_ownership
     refuses a None owner. The string goes straight into a Uuid column; SQLAlchemy parses it.
+
+    INTERVIEW SIMULATION: pass `job` + `round_type` (slugs) + `generated` (the round generator's
+    questions, dicts of {text, type_slug, brief}) together. Then, in the SAME transaction, each
+    generated item becomes a real `questions` row (slug `gen-<hex>`, its own type, this level, tagged
+    with the job and paired with NO role — which is what keeps it out of every bank read) plus a
+    `reference_briefs` row, and THOSE are the frozen plan instead of build_interview_plan's pick.
+    The probe budget comes from the round. From here the turn loop and the grader can't tell a
+    simulation from a bank interview. The caller checks job ownership before spending on generation.
     """
+    if (job is None) != (round_type is None) or (job is not None and not generated):
+        return {"ok": False, "error": "a simulation needs a job, a round, and generated questions"}
+
     async with get_session() as db:
         # both arrive as slugs from the HTTP request ("backend-engineer", "mid")
         role_row = (
@@ -107,6 +163,15 @@ async def create_interview(
         ).scalar_one_or_none()
         if role_row is None or level_row is None:
             return {"ok": False, "error": f"unknown role or level: {role} / {level}"}
+
+        job_row = round_row = None
+        if job is not None:
+            job_row = (await db.execute(select(Job).where(Job.slug == job))).scalar_one_or_none()
+            round_row = (
+                await db.execute(select(RoundType).where(RoundType.slug == round_type))
+            ).scalar_one_or_none()
+            if job_row is None or round_row is None:
+                return {"ok": False, "error": f"unknown job or round: {job} / {round_type}"}
 
         # the same id scheme api.py always used — short enough to eyeball in a URL, random
         # enough that nobody guesses someone else's interview
@@ -119,17 +184,30 @@ async def create_interview(
             persona=persona,
             message_history=[],   # the agent hasn't said anything yet
             profile_id=profile_id,   # Phase B: whose interview this is (None = nobody's)
+            job_id=job_row.id if job_row is not None else None,
+            round_type_id=round_row.id if round_row is not None else None,
         )
+        if round_row is not None:
+            interview.max_followups = round_row.max_followups
         db.add(interview)
         # FLUSH (not commit): the INSERT runs and `interview.id` is assigned, but the transaction
         # stays open so the plan rows below land atomically with it. An interview is never valid
         # without its frozen plan, so they must commit together or not at all.
         await db.flush()
 
-        # MATERIALIZE THE PLAN — the ordered subset this interview will ask, from the candidate's
-        # saved "My questions" for this role+level, or a random default of increasing seniority when
-        # they've saved none. Frozen here so re-curating later can't move an in-flight interview.
-        plan, from_saved = await build_interview_plan(db, role_row, level_row, profile_id)
+        if generated:
+            # the round's plan IS what the generator wrote — there's no saved set to consult.
+            plan = await _insert_generated_questions(db, generated, job_row, level_row)
+            if plan is None:
+                await db.rollback()
+                return {"ok": False, "error": "generated question has an unknown type"}
+            from_saved = False
+        else:
+            # MATERIALIZE THE PLAN — the ordered subset this interview will ask, from the candidate's
+            # saved "My questions" for this role+level, or a random default of increasing seniority
+            # when they've saved none. Frozen here so re-curating later can't move an in-flight
+            # interview.
+            plan, from_saved = await build_interview_plan(db, role_row, level_row, profile_id)
         for position, question in enumerate(plan):
             db.add(InterviewQuestion(
                 interview_id=interview.id, question_id=question.id, position=position,
@@ -192,6 +270,8 @@ async def get_interview(interview_id: str) -> dict:
             "role": interview.role.name,
             "level_name": interview.level.name,
             "created_at": interview.created_at.isoformat(),
+            # simulation only (None on a bank interview): job slug, company, round name
+            **_simulation_fields(interview),
             "turns": [
                 {
                     # the wire shape keeps the SLUG under the key "question_id", exactly as
@@ -455,7 +535,10 @@ def _interview_card(iv: Interview) -> dict:
     transcript. role/level are the human-readable NAMES (both relationships are selectin-loaded,
     so reading them is free), and `overall` is the grade if scored else None (the 1:1
     `interview.scorecard` is selectin-loaded too). The ONE card shape, shared by the list, the
-    `?resumable=true` narrowing, and get_resumable_interview so they can't drift apart."""
+    `?resumable=true` narrowing, and get_resumable_interview so they can't drift apart.
+
+    `job_id` / `company` / `round` are set only on a SIMULATION (None on a bank interview) — the
+    badge the list shows and the link back to the job. job + round_type are selectin-loaded."""
     return {
         "interview_id": iv.slug,
         "role": iv.role.name,
@@ -463,6 +546,17 @@ def _interview_card(iv: Interview) -> dict:
         "created_at": iv.created_at.isoformat(),
         "done": iv.done,
         "overall": iv.scorecard.overall if iv.scorecard is not None else None,
+        **_simulation_fields(iv),
+    }
+
+
+def _simulation_fields(iv: Interview) -> dict:
+    """The simulation display fields shared by the list card, the detail view and resume: the job's
+    slug + company and the round's name, all None for a bank interview."""
+    return {
+        "job_id": iv.job.slug if iv.job is not None else None,
+        "company": iv.job.company if iv.job is not None else None,
+        "round": iv.round_type.name if iv.round_type is not None else None,
     }
 
 
@@ -476,6 +570,7 @@ async def list_interviews(
     sort: str | None = None,
     order: str | None = None,
     scored: bool = False,
+    job: str | None = None,
 ) -> dict:
     """A PAGE of one user's interviews, newest first, optionally filtered — backs GET /api/interviews.
 
@@ -496,6 +591,9 @@ async def list_interviews(
         clutter; the page's "Show all" toggle drops the flag to reveal them. Expressed as
         `Interview.scorecard.has()`, an EXISTS subquery rather than a join, so it composes with the
         score-sort OUTER join below without turning that into an inner join or double-counting rows.
+      - job: a job SLUG — only that job's simulations (the Job page's "Simulations" list). Also an
+        EXISTS (`Interview.job.has(...)`), for the same reason as `scored`. Another user's job slug
+        just matches nothing: the owner predicate above still applies.
     Each relationship is joined AT MOST ONCE (guarded on whether any filter references it), which is
     why q + role can coexist without joining Role twice. The joins are 1:1 so they can't multiply
     rows; selectin still loads role/level for display via its own query — these joins are WHERE-only.
@@ -531,6 +629,8 @@ async def list_interviews(
             # EXISTS on the 1:1 scorecard — keeps graded interviews only, without a join (so the
             # score-sort outerjoin below stays an OUTER join and rows aren't multiplied).
             stmt = stmt.where(Interview.scorecard.has())
+        if job:
+            stmt = stmt.where(Interview.job.has(Job.slug == job))
         if sort == "date":
             col = Interview.created_at
             stmt = stmt.order_by(col.desc() if descending else col.asc())
@@ -547,6 +647,42 @@ async def list_interviews(
             "page": page.page,
             "size": page.size,
             "pages": page.pages,
+        }
+
+
+def _interview_rubric(iv: Interview) -> Rubric | None:
+    """The rubric an interview is graded on: its ROUND's for a simulation (a behavioral answer must
+    not be scored on "Technical depth"), its ROLE's for a bank interview. Read off the ROW, never
+    from the request — one rule shared by grading and save_scorecard, so the dimension names the
+    grader scores are exactly the ones the scorecard resolves."""
+    if iv.round_type is not None:
+        return iv.round_type.rubric
+    return iv.role.rubric
+
+
+async def load_grading_context(interview_id: str) -> dict:
+    """What /api/scorecard hands the grader beyond the transcript: the rubric (dimension names + a
+    scale), plus — for a simulation — the job and round context the grading template frames the
+    answer with. Returns {"status": "ok", "role", "dimensions", "scale", "job_context", "round_note"}
+    or {"status": "not_found"} (unknown interview, or its role/round has no rubric)."""
+    async with get_session() as db:
+        interview = (
+            await db.execute(select(Interview).where(Interview.slug == interview_id))
+        ).scalar_one_or_none()
+        if interview is None:
+            return {"status": "not_found"}
+        rubric = _interview_rubric(interview)
+        if rubric is None:
+            return {"status": "not_found"}
+        job, round_row = interview.job, interview.round_type
+        return {
+            "status": "ok",
+            "role": interview.role.slug,
+            "dimensions": [dim.name for dim in rubric.dimensions],
+            "scale": rubric.scale,
+            "job_context": (f"{job.company} — {job.title}\n{job.summary}" if job is not None else ""),
+            "round_note": (f"{round_row.name} round — {round_row.description}"
+                           if round_row is not None else ""),
         }
 
 
@@ -596,11 +732,13 @@ async def save_scorecard(interview_id: str, overall: float, answers: list[dict])
         ).scalar_one_or_none()
         if interview is None:
             return {"ok": False, "error": "unknown interview"}
-        if interview.role.rubric is None:
-            return {"ok": False, "error": f"role {interview.role.slug} has no rubric"}
+        rubric = _interview_rubric(interview)
+        if rubric is None:
+            return {"ok": False, "error": f"interview {interview_id} has no rubric"}
 
-        # (1) the NAME -> ID map, built once from this role's rubric dimensions.
-        name_to_id = {dim.name: dim.id for dim in interview.role.rubric.dimensions}
+        # (1) the NAME -> ID map, built once from this interview's rubric dimensions (the round's for
+        #     a simulation, the role's otherwise — see _interview_rubric).
+        name_to_id = {dim.name: dim.id for dim in rubric.dimensions}
 
         # idempotency: drop a prior scorecard for this interview (cascades to its rows).
         existing = (
@@ -851,7 +989,8 @@ async def list_interviewed_roles(profile_id: str, params: Params, *, search: str
             select(Role)
             .join(Interview, Interview.role_id == Role.id)
             .join(Scorecard, Scorecard.interview_id == Interview.id)
-            .where(Interview.profile_id == profile_id)
+            # bank interviews only — see get_dashboard's SIMULATIONS note
+            .where(Interview.profile_id == profile_id, Interview.job_id.is_(None))
         )
         if search:
             stmt = stmt.where(Role.name.ilike(f"%{search}%"))
@@ -894,6 +1033,10 @@ async def get_dashboard(
 
     All the nested rows (scorecard -> entries -> scores -> dimension, and role.rubric.dimensions)
     are selectin-loaded, so this walks them in Python — no GROUP BY SQL — exactly like get_scorecard.
+
+    SIMULATIONS ARE EXCLUDED (`job_id IS NULL` on every query here and in list_interviewed_roles).
+    A simulation is graded on its ROUND's rubric, not the role's, so its dimensions wouldn't line up
+    with this role's skill bars, and its overall would blend a different bar into the readiness trend.
     """
     period = period if period in DASHBOARD_PERIODS else DASHBOARD_DEFAULT_PERIOD
     cutoff = datetime.now(timezone.utc) - DASHBOARD_PERIODS[period]
@@ -915,7 +1058,7 @@ async def get_dashboard(
                     await db.execute(
                         select(Interview)
                         .join(Interview.scorecard)   # inner join -> graded interviews only
-                        .where(Interview.profile_id == profile_id)
+                        .where(Interview.profile_id == profile_id, Interview.job_id.is_(None))
                         .order_by(Interview.created_at.desc())
                         .limit(1)
                     )
@@ -941,6 +1084,7 @@ async def get_dashboard(
                 .where(
                     Interview.profile_id == profile_id,
                     Interview.role_id == role_row.id,
+                    Interview.job_id.is_(None),
                     Interview.created_at >= cutoff,
                 )
                 .order_by(Interview.created_at.asc())
@@ -1105,6 +1249,15 @@ async def load_resume_payload(interview_id: str) -> dict:
             "level": interview.level.name,
             "turns": turns,
             "current_question": current_question,
+            # INTERVIEW SIMULATION — so a round resumes into the right UI: the job/company/round for
+            # the header, whether to show the code editor, and the PARENT question on the table (its
+            # full text — the coding panel's problem statement — even while a probe is the open turn).
+            **_simulation_fields(interview),
+            "has_code_editor": (interview.round_type.has_code_editor
+                                if interview.round_type is not None else False),
+            "question": ({"slug": interview.current_question.slug,
+                          "text": interview.current_question.text}
+                         if interview.current_question is not None else None),
         }
 
 
