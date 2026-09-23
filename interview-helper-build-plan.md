@@ -411,10 +411,11 @@ get different questions and level-calibrated feedback).
 
 ## CURRENT STATUS (resume point)
 
-*Last updated 2026-09-22. Branch: `company-jd-interview-simulation-data-model`. Phases A–F all ✅;
+*Last updated 2026-09-23. Branch: `interview-simulation-backend-logic`. Phases A–F all ✅;
 Phase G (production hardening & deploy) is still ahead. **In progress: INTERVIEW SIMULATION from a
 pasted job description** — a 5-phase build (plan: `~/.claude/plans/i-would-like-to-floofy-sutton.md`);
-**Sim Phase 1 ✅, next action = Sim Phase 2 (the simulation turn loop, backend).** Recent post-F work
+**Sim Phases 1–2 ✅, next action = Sim Phase 3 (Jobs UI + behavioral/system-design rounds in the
+SPA).** Recent post-F work
 (profile picture, settings page, the question-bank + roles expansion, bounded interviews, questions
 filters, and the simulation work) is logged in dated `###` sections at the END of this file.*
 
@@ -1208,7 +1209,7 @@ The normal turn loop then runs it.
 It is built in five phases, each stopped for review:
 
 1. Schema, seed, jobs ✅
-2. Simulation turn loop, backend
+2. Simulation turn loop, backend ✅ (see the 2026-09-23 section below)
 3. Jobs UI, plus the behavioral and system-design rounds in the SPA
 4. Coding-round UI (CodeMirror)
 5. Polish and docs
@@ -1278,4 +1279,108 @@ the already-selectin-loaded `job.level` stale. `update_job` now assigns the rela
 
 **Watch:** the dashboard (`tools/interview.py` around line 969) and `save_scorecard` read
 `interview.role.rubric`. Simulation interviews must use the round rubric there, and should probably be
-left out of role-dashboard aggregates.
+left out of role-dashboard aggregates. *(Both done in Phase 2, below.)*
+
+### 2026-09-23 — Interview simulation, Phase 2: the simulation turn loop (branch `interview-simulation-backend-logic`)
+
+Backend only. A saved job can now run a full round over the API: generate → play → grade.
+
+**Generation (`simulation.py`).**
+- `round_agent` runs on the grader's stronger `grader_model`, with `max_tokens=8000`.
+- `generate_round(job, round_type)` returns `plan_size` dicts of `{text, type_slug, brief}`.
+- The output type is built per run, like `jd_agent`'s. It has exactly `plan_size` questions
+  (`min_length == max_length`), and each `type_slug` is a `Literal` over the live question types. A
+  wrong count or an invented type is a validation error that pydantic-ai retries.
+- The instructions require briefs in the house style: what the question tests, capability-phrased
+  anchors, Bad/Good/Great, and Entry/Mid/Senior bands. Coding briefs also give brute force, optimal
+  plus complexity, and edge cases.
+- Each call is logged with `log_run`.
+
+**Prompts (`prompts.py`).**
+- The per-turn TurnReply rules are now one `_TURN_CONTRACT` constant, shared by
+  `behavioral_interview` (its output is unchanged) and the new `simulation_interview`. That new
+  persona adds the company, the JD summary, the round's `guidance`, and one rule change: keep
+  probing while the guidance says the question isn't covered, even on a good answer. The client
+  still caps this with the round's `max_followups`.
+- Built by joining paragraphs rather than `dedent`-ing an f-string, because a multi-line summary
+  would break the dedent.
+- `evaluate_answer` gains optional `job_context` and `round_note`. When the answer contains a
+  ```` ``` ```` fence it adds a note that the code was TYPED, so it's graded as code rather than as
+  speech. `grade_one` passes both through.
+
+**Data layer (`tools/interview.py`).**
+- `create_interview(..., job=, round_type=, generated=)`, all slugs, sent together.
+  - In one transaction, `_insert_generated_questions` writes each item as a `gen-<hex12>` question
+    (its own type, the job's level, `job_id`, **no `question_roles`**) plus a `reference_briefs` row.
+  - Those questions are the plan. `max_followups` comes from the round.
+- `_interview_rubric(iv)` is the rubric rule, read from the ROW: the round's rubric for a simulation,
+  otherwise the role's. It's shared by `save_scorecard` and the new `load_grading_context`, which
+  returns the dimensions, the scale, `job_context` and `round_note`.
+- `_simulation_fields` adds `job_id` / `company` / `round` (null for a bank interview) to the list
+  card, `get_interview` and `load_resume_payload`. Resume also gets `has_code_editor` and `question`,
+  the PARENT question on the table (the problem statement, even while a probe is the open turn).
+- `list_interviews(job=)` uses `Interview.job.has(Job.slug == …)` (EXISTS).
+- **Simulations are excluded from the role dashboard** (`job_id IS NULL` in `get_dashboard` and
+  `list_interviewed_roles`). Their round-rubric scores would mix a different bar into the role trend.
+
+**Routes (`api.py`).**
+- `POST /api/interview {job, round}`: both or neither (400). Checks run before the paid generation:
+  the job must exist (404) and be the caller's (403), and the round must be real (400).
+  - The job supplies role and level, and the persona is `simulation_interview`.
+  - An `AgentRunError` from generation becomes a 502.
+  - Both flows now return `question: {slug, text}`, and `default_selection` is always false for a
+    simulation.
+- `POST /api/answer {code?, language?}`: the code is appended to `text` as a
+  ```` ```{language} ```` fence, capped at 20k characters (413). The prompt, `record_answer` and the
+  grader all see that one string. Code alone counts as a turn. The advance branch returns the next
+  `question`.
+- `POST /api/scorecard` takes its rubric from the interview row via `load_grading_context`, which
+  fixes the old `req.role` bug. `req.role` is now optional and ignored, and the response's `role` is
+  the row's role.
+- `GET /api/interviews?job=`: the detail and resume responses gain the simulation fields.
+
+**Bug found and fixed (a Phase 1 latent bug): `DELETE /api/jobs/{id}` hit an FK violation once a
+simulation had turns.**
+- The job delete cascades two ways at once: jobs → questions, and jobs → interviews → turns.
+- `turns.question_id`, `scorecard_entries.question_id` and `interviews.current_question_id` are
+  plain NO ACTION FKs, on purpose, so a bank question with history can't be deleted.
+- Postgres checked those FKs before the interviews path had cleared the turns.
+- `delete_job` now deletes the job's interviews first, then the job, in one transaction. No
+  migration was needed.
+
+**Verified** with TestClient against live Supabase, with `require_user` overridden to two real
+profiles, on a real Stripe JD:
+- All three rounds generate `gen-*` questions:
+  - behavioral: 4 questions, `max_followups` 2;
+  - coding: 2 questions, 6;
+  - system design: 1 question, 8.
+- Each has a brief and `job_id`. None appear in `/api/questions` (22 bank rows scanned).
+- Request checks: job without round → 400, unknown round → 400, unknown job → 404, a stranger
+  starting a round on the job → 403.
+- Resume mid-round carries company, round, `has_code_editor` and the plan question.
+- Every scorecard (live and persisted) uses exactly the round's rubric dimensions, with one grade
+  per question.
+- `?job=` lists the job's simulations. A stranger gets an empty list, and 403 on resume and answer.
+- The role dashboard count is the same before and after the simulations are graded.
+- Bank regression: the plan comes from the bank, `max_followups` is 3, the resume simulation fields
+  are null, and the scorecard uses the role rubric.
+- **Coding round, typed, with answers written against the generated problems:**
+  - approach → asked for code → code reviewed → asked for complexity → advanced with `question`;
+  - on problem 2, a planted case-fold bug was caught in review, and the round ended after the fix;
+  - the turn stores the fenced code;
+  - the scorecard came out at 4.9, with Code correctness 4 on problem 2 for the bug.
+- Job delete cascaded 4 simulations and 9 generated questions, leaving 0 behind. All test data was
+  removed.
+
+**Observed, not fixed:**
+- One coding generation put the harder problem first (peak concurrent intervals, then a palindrome)
+  even though the guidance says easier first. If this recurs, tighten the ordering line in
+  `round_agent`'s instructions.
+- Generating a round takes several seconds. Phase 3's `StartingOverlay` covers it.
+
+**Next (Sim Phase 3):**
+- `api.ts` types and hooks (jobs, round types, extended start/answer/resume/list).
+- `JobsPage` + `NewJobModal`, and `JobDetailPage` (edit form, round cards, Simulations list via
+  `?job=`, delete).
+- The shared start-sequence hook.
+- The session header showing company · round.

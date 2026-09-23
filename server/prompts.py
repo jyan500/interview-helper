@@ -29,20 +29,10 @@ from __future__ import annotations
 import textwrap
 
 
-def behavioral_interview(role: str, seniority: str = "mid") -> str:
-    """The interviewer PERSONA — seeds a consistent interviewer for a role and seniority.
-
-    REDUCED ROLE (client-driven loop): the CLIENT (api.py) owns the question spine — it picks
-    each bank question, records every answer, caps follow-ups, and ends the interview. So this
-    persona no longer drives any of that; it describes only what the model still does each
-    turn: REACT to the candidate's last answer and DECIDE whether to probe (the `ask_followup`
-    field of the TurnReply output_type). All the old "use next_question / log with
-    record_answer / run until exhausted" rules are gone BY DESIGN — the model can't invent a
-    question or mislabel an id if it never touches either.
-    """
-    return textwrap.dedent(f"""
-        You are an experienced interviewer conducting a {seniority}-level {role} interview.
-
+# The per-turn CONTRACT every persona shares — what the model does each turn (classify the message,
+# react, decide whether to probe) in the shape of grading.TurnReply. One copy, so the bank persona and
+# the simulation persona can't drift on the rules the /api/answer branches depend on.
+_TURN_CONTRACT = textwrap.dedent("""
         Each turn you get the candidate's latest MESSAGE. First decide what it is:
 
         - CLARIFYING QUESTION about the current question ("what do you mean by X?", "is this
@@ -69,7 +59,57 @@ def behavioral_interview(role: str, seniority: str = "mid") -> str:
         - If they're unsure or can't answer, acknowledge it graciously and move on — no scolding.
         - No hollow praise for answers that didn't earn it, but a warm, encouraging tone is good.
           Never give away the answer; hints are fine.
-    """).strip()
+""").strip()
+
+
+def behavioral_interview(role: str, seniority: str = "mid") -> str:
+    """The interviewer PERSONA — seeds a consistent interviewer for a role and seniority.
+
+    REDUCED ROLE (client-driven loop): the CLIENT (api.py) owns the question spine — it picks
+    each bank question, records every answer, caps follow-ups, and ends the interview. So this
+    persona no longer drives any of that; it describes only what the model still does each
+    turn: REACT to the candidate's last answer and DECIDE whether to probe (the `ask_followup`
+    field of the TurnReply output_type). All the old "use next_question / log with
+    record_answer / run until exhausted" rules are gone BY DESIGN — the model can't invent a
+    question or mislabel an id if it never touches either.
+    """
+    return (f"You are an experienced interviewer conducting a {seniority}-level {role} interview."
+            f"\n\n{_TURN_CONTRACT}")
+
+
+def simulation_interview(
+    company: str,
+    title: str,
+    summary: str,
+    round_name: str,
+    round_guidance: str,
+    seniority: str = "mid",
+) -> str:
+    """The interviewer PERSONA for an interview SIMULATION — one company's round, from a saved job.
+
+    Same TurnReply contract as behavioral_interview (the /api/answer branches can't tell the two
+    apart), with the company and the round layered on top. The round's STYLE comes from its
+    `guidance` row in the DB — how a coding interviewer hints and reviews code, what a behavioral
+    screener probes for — so a new round is a seed entry, not an edit here.
+
+    The one rule that changes: the bank persona probes only a WEAK answer, but a round can need more
+    back-and-forth on a good one (a coding problem isn't done until there's working code and its
+    complexity). So the persona is told to keep probing while the guidance says the question isn't
+    covered. The client still caps it (the round's `max_followups`), so that's a request, not a loop.
+    """
+    # Paragraphs joined rather than one dedented f-string: `summary` is LLM text that may span lines,
+    # and interpolating it before dedent() would break the common-indent strip for the whole block.
+    return "\n\n".join([
+        f'You are an experienced interviewer at {company}, running the {round_name} round for a '
+        f'{seniority}-level candidate applying for "{title}". Stay in character as someone who '
+        f'works there.',
+        f"About the company and the job:\n{summary}",
+        f"How this round runs:\n{round_guidance}",
+        "The round guidance decides when a question is fully covered. While it isn't (for example, "
+        "a coding problem still lacks working code or a complexity analysis), set ask_followup = "
+        "true and ask for the next missing piece, even if the answer so far is good.",
+        _TURN_CONTRACT,
+    ])
 
 
 def evaluate_answer(
@@ -78,6 +118,8 @@ def evaluate_answer(
     rubric: str,
     reference_brief: str = "",
     level: str | None = None,
+    job_context: str = "",
+    round_note: str = "",
 ) -> str:
     """The GRADING template: score, one strength, one gap, one fix.
 
@@ -103,6 +145,11 @@ def evaluate_answer(
       (c) REWARD DEMONSTRATED UNDERSTANDING over keyword presence — an answer that explains the
           mechanism in its own words beats one that name-drops the term. (The anchors are written
           as capability, not keywords, precisely to make this gradeable.)
+
+    INTERVIEW SIMULATION adds two more OPTIONAL inputs (both "" for a bank interview):
+      job_context — the company, title and JD summary the round was generated from.
+      round_note  — the round's name and description ("Coding round — ...").
+    And when the answer contains a fenced code block, a note that the code was TYPED, not spoken.
     """
     # WORKED — build the optional sections so an un-briefed / un-leveled call renders the
     # pre-Phase-E prompt with NOTHING dangling (no empty "reference brief:" or "level: None"
@@ -113,6 +160,23 @@ def evaluate_answer(
         if reference_brief else ""
     )
     level_section = f"\n\ncandidate seniority level: {level}" if level else ""
+    # INTERVIEW SIMULATION — the company/job and the round, so "why this company" is graded against
+    # the actual company and a coding answer is read as a coding round. Both "" for a bank interview.
+    context_section = (
+        f"\n\ninterview context (a mock interview for this company and job — judge relevance and "
+        f"company/role fit against it):\n{job_context}"
+        if job_context else ""
+    )
+    round_section = f"\n\ninterview round: {round_note}" if round_note else ""
+    # Code arrives as a fenced block appended to the turn (api.py /api/answer). It was TYPED, so the
+    # spoken-answer framing above must not excuse — or penalize — it as speech.
+    code_section = (
+        "\n\nnote on code: the answer contains fenced code blocks (```), which the candidate TYPED "
+        "into a code editor rather than spoke. Grade that code as code (correctness, edge cases, "
+        "complexity, readability); the speech allowances above apply only to the spoken prose "
+        "around it."
+        if "```" in answer else ""
+    )
 
     # TODO — rewrite this instruction paragraph to do (a), (b), (c) above, and to CONDITION on
     # whether brief_section/level_section are present (fall back to plain rubric grading when
@@ -153,5 +217,5 @@ def evaluate_answer(
 
         question: {question}
         answer: {answer}
-        rubric: {rubric}{brief_section}{level_section}
+        rubric: {rubric}{brief_section}{level_section}{context_section}{round_section}{code_section}
     """).strip()

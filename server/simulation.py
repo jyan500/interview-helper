@@ -6,7 +6,10 @@ no prose to parse):
     jd_agent     reads a pasted JD once, at job creation, and extracts company / title / a short
                  summary, plus the role and level MAPPED ONTO OUR EXISTING VOCAB. Cheap model
                  (the interviewer's flash-lite): it's extraction, not judgement.
-    round_agent  (Phase 2) writes a round's questions + their grading briefs from the job.
+    round_agent  writes a round's questions + a grading brief for each, from the job's summary and
+                 the round's `guidance`. The STRONGER grader model: these questions and briefs
+                 are the whole interview and its answer key, so quality is worth paying for —
+                 and it runs once per round, not once per turn.
 
 WHY THE ROLE/LEVEL ARE CONSTRAINED, NOT FREE TEXT. A job's role/level are FKs — they pick the level
 calibration for grading and let simulations sit beside bank interviews. A free-text "Senior Backend
@@ -18,7 +21,8 @@ id we didn't give it" rule as the turn loop.
 COST GUARDRAILS (CLAUDE.md): max_tokens capped, request_limit capped, and every run logs its token
 counts + latency. The JD itself is length-capped by the route before it gets here.
 
-Smoke test (from server/, 1 LLM call — needs .env GEMINI_API_KEY):
+Smoke test (from server/, 2 LLM calls: extract, then generate a coding round — needs .env
+GEMINI_API_KEY and a seeded DB):
     .venv/Scripts/python.exe simulation.py
 """
 from __future__ import annotations
@@ -34,9 +38,11 @@ from pydantic_ai import Agent
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import UsageLimits
 
-# Importing pydantic_agent runs its load_dotenv (GEMINI_API_KEY) and gives us the cheap model.
+# Importing pydantic_agent runs its load_dotenv (GEMINI_API_KEY) and gives us the cheap model;
+# grading gives us the stronger one the round generator runs on.
+from grading import grader_model
 from pydantic_agent import model
-from tools.questions import list_levels, list_roles
+from tools.questions import list_levels, list_question_types, list_roles
 
 # uvicorn's logger, so these lines land in the same console as the request log.
 log = logging.getLogger("uvicorn.error")
@@ -124,6 +130,104 @@ async def extract_job(description: str) -> BaseModel:
     return result.output
 
 
+# --- ROUND GENERATION ----------------------------------------------------------------------
+# The questions a simulation asks are WRITTEN here, once, at kickoff — and each one carries its own
+# grading brief. The brief is what keeps grading grounded: a generated question is graded exactly
+# like a bank question with an authored brief (grade_one -> get_reference), so the brief has to be
+# the same house style as data/reference_briefs/*.md. The candidate never sees it.
+class _GeneratedQuestionBase(BaseModel):
+    """The free-text half of one generated question. `type_slug` is added per run (see
+    _round_output_type), constrained to the live question types like the JD extractor's role."""
+    text: str = Field(description="the question exactly as the interviewer will present it to the "
+                                  "candidate, in plain text (no markdown headings)")
+    brief: str = Field(description="the grading brief for this question, in the house style set out "
+                                   "in the instructions. Hidden from the candidate — it's the answer key")
+
+
+def _round_output_type(type_slugs: list[str], plan_size: int) -> type[BaseModel]:
+    """Build the round's output type: exactly `plan_size` questions, each typed from the live
+    question-type slugs. Both constraints are in the JSON schema the model sees AND enforced by
+    pydantic — a wrong count or an invented type is a validation error pydantic-ai retries, so the
+    plan the interview freezes is always the round's size."""
+    question = create_model(
+        "GeneratedQuestion",
+        __base__=_GeneratedQuestionBase,
+        type_slug=(
+            Literal[tuple(type_slugs)],
+            Field(description="the question's type, from the allowed list — the round guidance "
+                              "says which to use"),
+        ),
+    )
+    return create_model(
+        "GeneratedRound",
+        questions=(
+            list[question],
+            Field(min_length=plan_size, max_length=plan_size,
+                  description=f"exactly {plan_size} question(s), in the order they will be asked"),
+        ),
+    )
+
+
+# No output_type here either — supplied per run by generate_round. The stronger model (see the module
+# docstring). max_tokens is sized for the biggest round: four briefs of a few hundred words each, or
+# two full coding problem statements plus their briefs.
+round_agent = Agent(
+    grader_model,
+    instructions=(
+        "You write the questions for one round of a realistic mock interview at a specific company, "
+        "plus a private grading brief for each question. The round guidance says what the round "
+        "contains and how many questions to write; follow it exactly, in its order. Tailor every "
+        "question to this company and job using the job summary, and calibrate difficulty to the "
+        "candidate's level. Do not invent facts about the company beyond what the summary states.\n\n"
+        "Each BRIEF is the answer key a separate grader scores the candidate's answer against. Write it "
+        "in plain markdown with these sections, in this order:\n"
+        "1. 'What this question is really testing' - one or two sentences.\n"
+        "2. 'Concept anchors' - 3 to 5 bullets, phrased as DEMONSTRATED CAPABILITY, never as keywords "
+        "(explaining how a mechanism works earns credit; naming it does not).\n"
+        "3. 'Tiered gradation' - this IS the 1-5 scale: Bad (1-2), Good (3-4) and Great (5), each a "
+        "concrete description of what such an answer contains.\n"
+        "4. 'Leveling bands' - what clears the bar at Entry, at Mid, and at Senior; the same answer "
+        "clears a different bar at each level.\n"
+        "For a CODING question, the brief must also give the brute-force approach, the optimal approach "
+        "with its time and space complexity, and the edge cases a strong answer handles. For a "
+        "behavioral question, anchor on structure, the candidate's own actions, measurable results, and "
+        "(where the question is about this company) genuine knowledge of the company and role."
+    ),
+    model_settings=ModelSettings(max_tokens=8000),
+)
+
+
+async def generate_round(job: dict, round_type) -> list[dict]:
+    """Write one round's questions for a job. Returns `plan_size` dicts of {text, type_slug, brief},
+    in ask order — the shape create_interview(generated=...) takes (plain dicts, so the data layer
+    never imports this module's model stack).
+
+    `job` is the tools/jobs detail dict (company, title, summary, level); `round_type` is the
+    RoundType ORM row, whose `guidance` says what to ask and `plan_size` how many. The allowed
+    question types are passed with their names, like the JD extractor's roles."""
+    types = (await list_question_types(Params(page=1, size=100))).items
+    output_type = _round_output_type([t.slug for t in types], round_type.plan_size)
+
+    prompt = (
+        f"Allowed question types (slug: name): {'; '.join(f'{t.slug}: {t.name}' for t in types)}\n\n"
+        f"COMPANY: {job['company']}\n"
+        f"JOB TITLE: {job['title']}\n"
+        f"CANDIDATE LEVEL: {job['level']} ({job['level_name']})\n"
+        f"JOB SUMMARY: {job['summary']}\n\n"
+        f"ROUND: {round_type.name}\n"
+        f"ROUND GUIDANCE: {round_type.guidance}\n\n"
+        f"Write exactly {round_type.plan_size} question(s), each with its brief."
+    )
+    started = time.perf_counter()
+    result = await round_agent.run(
+        prompt,
+        output_type=output_type,
+        usage_limits=UsageLimits(request_limit=3),
+    )
+    log_run(f"round_generate[{round_type.slug}]", result, started)
+    return [q.model_dump() for q in result.output.questions]
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     sample = (
@@ -132,4 +236,20 @@ if __name__ == "__main__":
         "backend systems in Java, Go, or Ruby; experience with distributed systems, databases, and "
         "high-availability services. We value users first, rigor, and moving with urgency."
     )
-    print(asyncio.run(extract_job(sample)))
+    async def _smoke() -> None:
+        from tools.rounds import get_round_type_by_slug
+
+        extracted = await extract_job(sample)
+        print(extracted)
+        # the job dict shape generate_round reads (tools/jobs._job_dict), without writing a row
+        job = {
+            "company": extracted.company,
+            "title": extracted.title,
+            "summary": extracted.summary,
+            "level": extracted.level_slug,
+            "level_name": extracted.level_slug,
+        }
+        for q in await generate_round(job, await get_round_type_by_slug("coding")):
+            print(f"\n[{q['type_slug']}] {q['text']}\n--- brief ---\n{q['brief']}")
+
+    asyncio.run(_smoke())

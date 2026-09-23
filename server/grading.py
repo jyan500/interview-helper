@@ -167,6 +167,8 @@ async def grade_one(
     answer: str,
     rubric_text: str,
     level: str | None = None,
+    job_context: str = "",
+    round_note: str = "",
 ) -> AnswerGrade:
     """Grade a single (question, answer) against the rubric -> a typed AnswerGrade.
 
@@ -179,6 +181,9 @@ async def grade_one(
     envelope for those. That is NOT an error — pass "" as the brief and let evaluate_answer fall
     back to plain rubric grading. A question without a brief must still grade, just ungrounded.
 
+    INTERVIEW SIMULATION: `job_context` / `round_note` are passed straight to the template (both ""
+    for a bank interview). A generated question's brief is an ordinary reference_briefs row, so the
+    fetch above grounds it with no special case.
     """
     brief_env = await get_reference(question_id)
     reference_brief = brief_env["brief"] if brief_env["status"] == "ok" else ""
@@ -187,7 +192,9 @@ async def grade_one(
         answer=answer,
         rubric=rubric_text,
         reference_brief=reference_brief,
-        level=level
+        level=level,
+        job_context=job_context,
+        round_note=round_note,
     )
     result = await grader_agent.run(
         filled,

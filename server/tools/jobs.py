@@ -22,10 +22,10 @@ import uuid
 
 from fastapi_pagination import Params
 from fastapi_pagination.ext.sqlalchemy import apaginate
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select
 
 from db.engine import get_session
-from db.models import Job, Level, Role
+from db.models import Interview, Job, Level, Role
 
 
 def _job_dict(job: Job, *, detail: bool = False) -> dict:
@@ -170,13 +170,20 @@ async def update_job(
 
 
 async def delete_job(job_id: str) -> dict:
-    """Delete a job. The FKs do the rest in the same statement: its simulation interviews (and their
-    turns, plans, scorecards) and its generated questions all CASCADE. Callers check ownership first.
-    Returns {"ok": True} or {"ok": False, "error": ...}."""
+    """Delete a job, its simulation interviews (and their turns, plans, scorecards) and its generated
+    questions. Callers check ownership first. Returns {"ok": True} or {"ok": False, "error": ...}.
+
+    TWO STATEMENTS, INTERVIEWS FIRST, one transaction. Deleting the job alone would cascade down two
+    paths at once — jobs -> questions and jobs -> interviews -> turns — and `turns.question_id` (like
+    `scorecard_entries.question_id` and `interviews.current_question_id`) is a plain NO ACTION FK, on
+    purpose, so a bank question with history can't be deleted. Postgres checks that FK before the
+    interviews path has removed the turns, and the delete fails. Removing the interviews first (the DB
+    cascades their children) leaves the generated questions unreferenced when the job goes."""
     async with get_session() as db:
         job = (await db.execute(select(Job).where(Job.slug == job_id))).scalar_one_or_none()
         if job is None:
             return {"ok": False, "error": f"unknown job: {job_id}"}
+        await db.execute(delete(Interview).where(Interview.job_id == job.id))
         await db.delete(job)
         await db.commit()
         return {"ok": True}
