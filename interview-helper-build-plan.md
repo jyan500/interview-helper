@@ -411,10 +411,12 @@ get different questions and level-calibrated feedback).
 
 ## CURRENT STATUS (resume point)
 
-*Last updated 2026-09-18. Branch: `allow-users-to-pick-questions-or-choose-random`. Phases A–F all ✅;
-**Phase G (production hardening & deploy) is the next phase.*** Recent post-F work (profile picture,
-settings page, the question-bank + roles expansion, and bounded interviews via saved "My questions" +
-a frozen per-interview plan) is logged in dated `###` sections at the END of this file.*
+*Last updated 2026-09-22. Branch: `company-jd-interview-simulation-data-model`. Phases A–F all ✅;
+Phase G (production hardening & deploy) is still ahead. **In progress: INTERVIEW SIMULATION from a
+pasted job description** — a 5-phase build (plan: `~/.claude/plans/i-would-like-to-floofy-sutton.md`);
+**Sim Phase 1 ✅, next action = Sim Phase 2 (the simulation turn loop, backend).** Recent post-F work
+(profile picture, settings page, the question-bank + roles expansion, bounded interviews, questions
+filters, and the simulation work) is logged in dated `###` sections at the END of this file.*
 
 ### Phase A — ✅ COMPLETE (all verified against the live Supabase DB)
 
@@ -1196,3 +1198,84 @@ in the header later" grew into two full sets, per the request).
   query sends `saved=true`, standing in for the Questions page's Saved table within the modal's single
   table. Threaded as an optional `savedOnly` on `AppliedSectionFilters` (useSectionFilters ignores it —
   not a URL param) and applied on Search like the rest.
+
+### 2026-09-22 — Interview simulation, Phase 1: schema, seed, jobs (branch `company-jd-interview-simulation-data-model`)
+
+**The feature:** the candidate pastes a job description, then picks a round (behavioral, coding, or
+system design). The LLM generates that company's round: the questions, plus a grading brief for each.
+The normal turn loop then runs it.
+
+It is built in five phases, each stopped for review:
+
+1. Schema, seed, jobs ✅
+2. Simulation turn loop, backend
+3. Jobs UI, plus the behavioral and system-design rounds in the SPA
+4. Coding-round UI (CodeMirror)
+5. Polish and docs
+
+**The key design move:** generated questions are ordinary `questions` rows with slug `gen-<hex>` and a
+`job_id`, and each has an ordinary `reference_briefs` row. They get **no `question_roles` pairing**.
+Two things follow:
+- the plan → turn → grade pipeline runs unchanged;
+- every bank read (browse, default plan) already skips them, because those reads join through
+  `question_roles`.
+
+**Migration `e4b8d2f6a1c3`** (down `c7d9e1f3a5b2`, applied):
+- **New `round_types` table:** slug, name, description, `guidance`, `plan_size`, `max_followups`,
+  `has_code_editor`.
+- **New `jobs` table:** owner, company, title, the raw `description`, the LLM `summary`, and role/level
+  FKs.
+- **New columns:** `questions.job_id` and `interviews.job_id`, both CASCADE with the job, plus
+  `interviews.round_type_id`.
+- **`rubrics`:** now owned by a role OR a round. `round_type_id` was added, `role_id` is nullable, and
+  CHECK `ck_rubric_one_owner` keeps exactly one owner.
+- **RLS:** new `jobs_own` and `round_types_read` policies. `questions_read` narrowed from
+  `USING (true)` to "bank rows, or generated rows of a job you own", because generated questions carry
+  JD content. `reference_briefs` was already deny-all.
+
+**`round_types` is its own table, not `question_types`** (the user's call). A round is a format that may
+mix question kinds (for example a future recruiter screen), so each generated question keeps its own
+type. The row drives the round, so adding a round is a seed entry: `guidance` feeds both the generator
+and the persona.
+
+**Seed:**
+- `questions.json` has a new top-level `rounds` key: 3 rounds, each with its own 5-dimension rubric.
+- `seed.py` updates rounds in place, like briefs, because guidance gets tuned. It creates the `coding`
+  question type from `_EXTRA_QUESTION_TYPES`, since no bank question uses it. The dimension loop is now
+  the shared `_seed_dimensions`.
+- Verified: the first run gave `types=1, dimensions=15, rounds=3`; a re-run gave all zeros.
+
+**`simulation.py` (new):**
+- `jd_agent` (flash-lite) and `extract_job` return company, title, summary, role and level.
+- The output type is built per run with `Literal[...]` over the live slugs (`run(output_type=...)`), so
+  the model can't invent vocab.
+- `log_run` logs tokens and latency for each call.
+
+**New data layers:** `tools/jobs.py` and `tools/rounds.py`.
+
+**Routes:**
+- `GET /api/round-types` (+ `/{slug}`). `RoundTypeOut` hides `guidance`.
+- `POST /api/jobs` and `GET /api/jobs`.
+- `GET/PATCH/DELETE /api/jobs/{job_id}`, guarded 404 → 403 by `_owned_job`.
+- The JD must be 100–20k characters; outside that the route returns 400 or 413.
+
+**Verified** with TestClient against live Supabase, with `require_user` overridden to two real profiles:
+- every round-type and job CRUD path works, and the length caps hold;
+- a stranger gets 403 on get, patch and delete, and the job is missing from the stranger's list;
+- after delete, the job returns 404;
+- the extractor mapped a Stripe JD to backend/mid and a Figma JD to frontend/senior;
+- `alembic check` shows only the known hand-written `profiles → auth.users` FK.
+
+**Bug found and fixed during verification:** PATCH echoed the old level. Setting `job.level_id` left
+the already-selectin-loaded `job.level` stale. `update_job` now assigns the relationship instead.
+
+**Next (Sim Phase 2):**
+- `round_agent` and `generate_round`, plus the `simulation_interview` persona.
+- `create_interview(generated=...)`.
+- `POST /api/interview {job, round}` and `AnswerRequest.code/language`.
+- Resume and list fields.
+- `/api/scorecard` choosing the rubric from the interview row.
+
+**Watch:** the dashboard (`tools/interview.py` around line 969) and `save_scorecard` read
+`interview.role.rubric`. Simulation interviews must use the round rubric there, and should probably be
+left out of role-dashboard aggregates.

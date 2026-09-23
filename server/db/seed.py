@@ -14,6 +14,8 @@ statement of how the old shape maps to the new one:
         .type                           -> a question_types row, deduped across the bank
         .level                          -> the question's level_id, via the levels map (Phase D)
         .tags[]                         -> tags rows + question_tags pairings
+    bank["rounds"][slug]                -> a round_types row (interview simulation) + a round-owned
+                                          rubrics row + its rubric_dimensions
 
 Two things about LEVELS and SLUGS the raw bank doesn't spell out:
   - The LEVEL ROWS (entry/mid/senior) are authored HERE, not in the bank — they're a fixed
@@ -50,6 +52,7 @@ from db.models import (
     QuestionType,
     ReferenceBrief,
     Role,
+    RoundType,
     Rubric,
     RubricDimension,
     Tag,
@@ -63,6 +66,12 @@ _LEVELS = [
     ("entry", "Entry level", 1),
     ("mid", "Mid level", 2),
     ("senior", "Senior", 3),
+]
+
+# Question types the BANK never names but the interview-simulation generator assigns. Authored
+# here for the same reason as the levels: nothing in questions.json would otherwise create them.
+_EXTRA_QUESTION_TYPES = [
+    ("coding", "Coding"),
 ]
 
 
@@ -94,10 +103,41 @@ async def _get_or_create(db: AsyncSession, model, *, slug: str, **fields):
     return row, True
 
 
+async def _seed_dimensions(db: AsyncSession, rubric: Rubric, names: list[str]) -> int:
+    """Get-or-create a rubric's dimensions in authored order. Returns how many were new.
+
+    Shared by role rubrics and round rubrics. A dimension slug is unique WITHIN its rubric, not
+    globally, so the lookup is scoped to this rubric rather than going through _get_or_create.
+    """
+    new = 0
+    for i, dimension_name in enumerate(names):
+        dimension_slug = slugify(dimension_name)
+        existing = (
+            await db.execute(
+                select(RubricDimension).where(
+                    RubricDimension.rubric_id == rubric.id,
+                    RubricDimension.slug == dimension_slug,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            db.add(
+                RubricDimension(
+                    rubric_id=rubric.id,
+                    slug=dimension_slug,
+                    name=dimension_name,
+                    sort_order=i,
+                )
+            )
+            new += 1
+    await db.flush()
+    return new
+
+
 async def seed() -> None:
     bank = json.loads(_BANK.read_text(encoding="utf-8"))
     created = {"levels": 0, "roles": 0, "types": 0, "tags": 0, "dimensions": 0,
-               "questions": 0, "question_roles": 0, "briefs": 0}
+               "questions": 0, "question_roles": 0, "briefs": 0, "rounds": 0}
 
     async with get_session() as db:
         # --- levels: authored, not from the bank ---------------------------------------
@@ -110,6 +150,13 @@ async def seed() -> None:
             level_row, was_new = await _get_or_create(db, Level, slug=slug, name=name, rank=rank)
             levels_by_slug[slug] = level_row
             created["levels"] += was_new
+
+        # --- question types no bank question uses (yet) ------------------------------------
+        # Types are otherwise born from the bank's `type` strings below. `coding` has no authored
+        # question — only the interview simulation's GENERATOR assigns it — so it's authored here.
+        for slug, name in _EXTRA_QUESTION_TYPES:
+            _, was_new = await _get_or_create(db, QuestionType, slug=slug, name=name)
+            created["types"] += was_new
 
         for role_slug, role_data in bank["roles"].items():
             # --- role ------------------------------------------------------------------
@@ -130,29 +177,7 @@ async def seed() -> None:
                 db.add(rubric)
                 await db.flush()
 
-            for i, dimension_name in enumerate(rubric_data["dimensions"]):
-                dimension_slug = slugify(dimension_name)
-                # unique per RUBRIC, not globally — so the lookup is scoped to this rubric
-                # rather than going through _get_or_create.
-                existing = (
-                    await db.execute(
-                        select(RubricDimension).where(
-                            RubricDimension.rubric_id == rubric.id,
-                            RubricDimension.slug == dimension_slug,
-                        )
-                    )
-                ).scalar_one_or_none()
-                if existing is None:
-                    db.add(
-                        RubricDimension(
-                            rubric_id=rubric.id,
-                            slug=dimension_slug,
-                            name=dimension_name,
-                            sort_order=i,
-                        )
-                    )
-                    created["dimensions"] += 1
-            await db.flush()
+            created["dimensions"] += await _seed_dimensions(db, rubric, rubric_data["dimensions"])
 
             # --- questions --------------------------------------------------------------
             for i, q in enumerate(role_data["questions"]):
@@ -280,6 +305,36 @@ async def seed() -> None:
                 created["briefs"] += 1
             elif existing.brief != brief_text:
                 existing.brief = brief_text          # tuned edit — the deliberate in-place update
+
+        # --- round types (interview simulation) + their rubrics ---------------------------
+        # bank["rounds"][slug] -> a round_types row + a round-owned rubric + its dimensions.
+        # UPDATED IN PLACE like briefs, not get-or-create-only: a round's `guidance` and budgets get
+        # TUNED (they steer the generator and the interviewer), and re-seeding must pick that up.
+        # Dimensions stay get-or-create — rewording one is a new slug by design (see RubricDimension).
+        for round_slug, round_data in bank.get("rounds", {}).items():
+            fields = {
+                "name": round_data["name"],
+                "description": round_data["description"],
+                "guidance": round_data["guidance"],
+                "plan_size": round_data["plan_size"],
+                "max_followups": round_data["max_followups"],
+                "has_code_editor": round_data["has_code_editor"],
+            }
+            round_type, was_new = await _get_or_create(db, RoundType, slug=round_slug, **fields)
+            created["rounds"] += was_new
+            if not was_new:
+                for field, value in fields.items():
+                    setattr(round_type, field, value)
+
+            rubric_data = round_data["rubric"]
+            rubric = (
+                await db.execute(select(Rubric).where(Rubric.round_type_id == round_type.id))
+            ).scalar_one_or_none()
+            if rubric is None:
+                rubric = Rubric(round_type_id=round_type.id, scale=rubric_data["scale"])
+                db.add(rubric)
+                await db.flush()
+            created["dimensions"] += await _seed_dimensions(db, rubric, rubric_data["dimensions"])
 
         await db.commit()
 
