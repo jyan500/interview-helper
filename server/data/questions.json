@@ -465,5 +465,61 @@
         }
       ]
     }
+  },
+  "rounds": {
+    "behavioral": {
+      "name": "Behavioral",
+      "description": "A first-round screen: introduce yourself, walk through a project, why this company, and a behavioral question drawn from what the job emphasizes.",
+      "plan_size": 4,
+      "max_followups": 2,
+      "has_code_editor": false,
+      "guidance": "A first-round behavioral screen, the kind run by a recruiter or hiring manager. Ask these four questions, in this order, all of question type \"behavioral\": (1) an opener asking the candidate to introduce themselves and walk through their background, framed around this role; (2) a request to walk through a project they are proud of, steered toward the kind of work, domain, or stack this job involves; (3) why they want to work at this company and in this role specifically; (4) one behavioral 'tell me about a time' question targeting a responsibility or value the job description emphasizes (for example ownership, working through ambiguity, cross-team collaboration, mentoring, or shipping under deadlines). Interviewer style: warm and conversational, like a real screen. Probe for structure (situation, task, action, result), for the candidate's OWN contribution (I versus we), and for concrete, measurable outcomes. On 'why this company', probe whether the candidate actually knows what the company does and how the role fits their goals.",
+      "rubric": {
+        "dimensions": [
+          "Structure (situation, action, result)",
+          "Specificity and ownership",
+          "Impact and results",
+          "Communication",
+          "Company and role fit"
+        ],
+        "scale": "1 (poor) to 5 (excellent) per dimension"
+      }
+    },
+    "coding": {
+      "name": "Coding",
+      "description": "A technical coding round: two leetcode-style problems. Talk through your approach, write the code in the editor, and discuss complexity.",
+      "plan_size": 2,
+      "max_followups": 6,
+      "has_code_editor": true,
+      "guidance": "A technical coding round with leetcode-style data-structure and algorithm problems, all of question type \"coding\". Write the problems so the first is easier than the second, calibrated to the candidate's level (entry: easy then easy-to-medium; mid: medium; senior: medium then medium-to-hard). Where it fits naturally, dress a problem in the company's domain, but keep it a standard, well-defined algorithm problem solvable in about 20 minutes. Each question's text must be a complete, self-contained problem statement in plain text (no markdown headings): the task, the function signature or input and output format, two worked examples with brief explanations, and the constraints. Interviewer style: the candidate first explains an approach, then writes code in an editor; submitted code arrives as a fenced code block in their message. Never reveal the solution or write code for them. Give a small hint only if they are clearly stuck or ask for one. Probe: brute force versus optimal, time and space complexity, edge cases, tracing an example through their code, and any bug you can see in the submitted code. Keep probing until they have submitted working code and stated its complexity.",
+      "rubric": {
+        "dimensions": [
+          "Problem understanding",
+          "Approach and algorithm",
+          "Code correctness",
+          "Complexity analysis",
+          "Communication"
+        ],
+        "scale": "1 (poor) to 5 (excellent) per dimension"
+      }
+    },
+    "system-design": {
+      "name": "System design",
+      "description": "A system-design round: one open-ended design problem drawn from the company's product. Drive requirements, a high-level design, and the deep dives.",
+      "plan_size": 1,
+      "max_followups": 8,
+      "has_code_editor": false,
+      "guidance": "A system-design round with exactly one design problem, of question type \"system-design\". Draw the problem from the company's actual product or domain (for a payments company, design a payment ledger; for a video company, design video upload and playback), sized to the candidate's level. State it at a high level in one to three sentences. The candidate is expected to drive the requirements, so do not list them. Interviewer style: let the candidate lead. Probe in the natural order of a real design interview: functional and non-functional requirements, core entities and API, the high-level design, then deep dives on scaling, the data model, consistency, failure modes, and the tradeoffs behind each choice. Push harder on deep dives and tradeoffs for senior candidates.",
+      "rubric": {
+        "dimensions": [
+          "Requirements and scoping",
+          "High-level design",
+          "Deep dives and scalability",
+          "Tradeoff reasoning",
+          "Communication and structure"
+        ],
+        "scale": "1 (poor) to 5 (excellent) per dimension"
+      }
+    }
   }
 }

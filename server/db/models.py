@@ -93,6 +93,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     Float,
@@ -280,6 +281,43 @@ class QuestionType(Base, TimestampMixin):
     name: Mapped[str] = mapped_column(String(64))                           # "System design"
 
 
+class RoundType(Base, TimestampMixin):
+    """A KIND of interview round an interview simulation can run: behavioral · coding ·
+    system-design (and later, e.g., a recruiter screen).
+
+    DELIBERATELY NOT `question_types`, even though today's three rounds happen to share names with
+    three question types. A round is a FORMAT — how many questions, what mix, how hard the
+    interviewer probes, whether the candidate gets a code editor — while a question type is what
+    ONE question is. They diverge the moment a round mixes kinds (a recruiter screen asks
+    behavioral questions and a light technical one), so each generated question keeps its own
+    `type_id` and the round lives here.
+
+    THE ROW DRIVES THE ROUND, so adding a round is a seed entry, not a code change:
+      guidance         prose describing the round's composition and the interviewer's style. Fed to
+                       BOTH the question generator (what to ask) and the per-turn persona (how to
+                       probe). Stays server-side — the client never needs it.
+      plan_size        how many questions the generator writes (the frozen plan's length).
+      max_followups    the probe budget copied onto each interview — a coding round needs many
+                       more back-and-forths (approach → code → complexity → edge cases) than a
+                       behavioral one.
+      has_code_editor  whether the SPA shows the code editor. A flag, so the client never branches
+                       on a slug.
+    Its grading rubric hangs off it too (Rubric.round_type_id) — see Rubric.
+    """
+    __tablename__ = "round_types"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    slug: Mapped[str] = mapped_column(String(32), unique=True, index=True)  # "coding"
+    name: Mapped[str] = mapped_column(String(64))                           # "Coding"
+    description: Mapped[str] = mapped_column(Text)                          # the round card blurb
+    guidance: Mapped[str] = mapped_column(Text)
+    plan_size: Mapped[int] = mapped_column(Integer)
+    max_followups: Mapped[int] = mapped_column(Integer)
+    has_code_editor: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    rubric: Mapped[Rubric | None] = relationship(back_populates="round_type", lazy="selectin")
+
+
 class Tag(Base, TimestampMixin):
     """A topic a question touches: "debugging", "scalability", "concurrency".
 
@@ -362,18 +400,37 @@ class QuestionRole(Base, TimestampMixin):
 # THE BANK — seeded from data/questions.json, read constantly, written rarely.
 # ===========================================================================
 class Rubric(Base, TimestampMixin):
-    """The scoring rubric for a role — one row per role (the JSON had it nested).
+    """A scoring rubric — owned by EITHER a role (bank interviews) OR a round type (interview
+    simulations). One per owner (the JSON had it nested).
 
     Separate table rather than columns on `roles` because grading reads it independently of
     the bank, and Phase D may hang level-specific expectations off its dimensions.
+
+    TWO POSSIBLE OWNERS, EXACTLY ONE SET (the CHECK below). A simulation round is graded on its
+    round's dimensions — a behavioral round on STAR structure and ownership, not on the role's
+    "Technical depth" — so the round type owns a rubric of its own. Two nullable FKs + a CHECK
+    rather than a polymorphic owner column, so both stay real foreign keys. Each is UNIQUE, so an
+    owner still has at most one rubric (Postgres unique ignores NULLs, so the many rows with a
+    NULL `round_type_id` don't collide).
     """
     __tablename__ = "rubrics"
+    __table_args__ = (
+        CheckConstraint(
+            "(role_id IS NULL) <> (round_type_id IS NULL)", name="ck_rubric_one_owner"
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    role_id: Mapped[int] = mapped_column(ForeignKey("roles.id", ondelete="CASCADE"), unique=True)
+    role_id: Mapped[int | None] = mapped_column(
+        ForeignKey("roles.id", ondelete="CASCADE"), unique=True, nullable=True
+    )
+    round_type_id: Mapped[int | None] = mapped_column(
+        ForeignKey("round_types.id", ondelete="CASCADE"), unique=True, nullable=True
+    )
     scale: Mapped[str] = mapped_column(Text)   # "1 (poor) to 5 (excellent) per dimension"
 
-    role: Mapped[Role] = relationship(back_populates="rubric", lazy="selectin")
+    role: Mapped[Role | None] = relationship(back_populates="rubric", lazy="selectin")
+    round_type: Mapped[RoundType | None] = relationship(back_populates="rubric", lazy="selectin")
     dimensions: Mapped[list[RubricDimension]] = relationship(
         back_populates="rubric", lazy="selectin", order_by="RubricDimension.sort_order",
         cascade="all, delete-orphan",
@@ -409,13 +466,29 @@ class RubricDimension(Base, TimestampMixin):
 
 class Question(Base, TimestampMixin):
     """One bank question. `slug` ("be-1") is what `question://{slug}` resolves and what the
-    API reports; every row that references a question uses `id`."""
+    API reports; every row that references a question uses `id`.
+
+    GENERATED QUESTIONS LIVE HERE TOO. An interview simulation's questions are written by the LLM
+    from a job description, and they're stored as ordinary rows (slug "gen-<hex>", with a generated
+    ReferenceBrief), tagged with `job_id`. That's what lets the WHOLE existing pipeline — the frozen
+    plan, turn FKs, the grader's brief lookup, scorecard entries — run unchanged. They never enter
+    the BANK: they get no `question_roles` pairing, and every bank read (browse, default plan,
+    `next_question`) joins through that table, so a generated question is invisible there without a
+    single extra filter.
+    """
     __tablename__ = "questions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     slug: Mapped[str] = mapped_column(String(64), unique=True, index=True)   # "be-1"
     type_id: Mapped[int] = mapped_column(ForeignKey("question_types.id"), index=True)
     text: Mapped[str] = mapped_column(Text)
+
+    # NULL for every authored bank question; set for a question generated for one job. CASCADE: the
+    # generated questions mean nothing without their job (and their simulation interviews cascade
+    # from the job too, so no turn is left pointing at a deleted question).
+    job_id: Mapped[int | None] = mapped_column(
+        ForeignKey("jobs.id", ondelete="CASCADE"), nullable=True, index=True
+    )
 
     # Phase D fills this. Nullable until then so today's bank — which has no levels — seeds
     # cleanly and next_question can ignore the column. Stays on the QUESTION (not the
@@ -483,6 +556,16 @@ class Interview(Base, TimestampMixin):
     # StartRequest.seniority arrives as a slug ("mid"); the route resolves it to a row.
     level_id: Mapped[int] = mapped_column(ForeignKey("levels.id"))
 
+    # INTERVIEW SIMULATION — both NULL for a bank interview; both set for a simulated round of a
+    # saved job. `job_id` CASCADEs: deleting a job deletes its simulations (whose plan questions are
+    # that job's generated rows, deleted alongside). `round_type_id` is plain vocab, like level_id.
+    job_id: Mapped[int | None] = mapped_column(
+        ForeignKey("jobs.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    round_type_id: Mapped[int | None] = mapped_column(
+        ForeignKey("round_types.id"), nullable=True
+    )
+
     # --- the question spine the BACKEND owns (was: the SESSIONS dict's keys) ------------
     persona: Mapped[str] = mapped_column(Text)   # fetched once from the MCP prompt
     # which question is on the table right now. Nullable only before the first is picked.
@@ -516,6 +599,8 @@ class Interview(Base, TimestampMixin):
     role: Mapped[Role] = relationship(lazy="selectin")
     level: Mapped[Level] = relationship(lazy="selectin")
     current_question: Mapped[Question | None] = relationship(lazy="selectin")
+    job: Mapped[Job | None] = relationship(lazy="selectin")
+    round_type: Mapped[RoundType | None] = relationship(lazy="selectin")
     # Phase C — an interview has AT MOST ONE scorecard (graded once at the end), so this is a
     # 1:1: `uselist=False` makes `interview.scorecard` a single row or None, not a list. It's
     # what lets the History list read each interview's `overall` in the same selectin load
@@ -791,3 +876,45 @@ class ProfileQuestion(Base, TimestampMixin):
     )
 
     question: Mapped[Question] = relationship(lazy="selectin")
+
+
+# ===========================================================================
+# INTERVIEW SIMULATION — a job the candidate is preparing for, pasted in as a JD.
+# ===========================================================================
+class Job(Base, TimestampMixin):
+    """A job description the candidate saved, to simulate that company's interview rounds.
+
+    Pasted once, then REUSED: a behavioral round today and a coding round next week both run
+    against the same row, and the Jobs page groups its simulations under it. Each round's questions
+    are generated fresh from it (Question.job_id), so they're tailored to this company and role.
+
+    WHAT'S EXTRACTED vs WHAT'S RAW. `description` is the JD exactly as pasted — kept so the user can
+    re-read it and so a better extractor could re-run later. The rest is filled by the JD-extraction
+    agent (simulation.py) at create time, and is user-editable afterwards:
+      company / title  display + prompt context ("Stripe · Backend Engineer").
+      summary          a short digest (product, responsibilities, stack, values). The generator and
+                       the interviewer read THIS rather than the whole JD — a 10k-char posting in
+                       every turn's instructions is tokens spent on boilerplate.
+      role_id/level_id mapped onto the EXISTING vocab (the extractor's output is constrained to the
+                       live slugs, so it can't invent one), which is what gives a simulation its
+                       level-calibrated grading and lets its interviews sit beside bank interviews.
+
+    Owned directly (`profile_id` = the auth uid), so RLS is the one-line `auth.uid() = profile_id`,
+    same as interviews. `slug` is a uuid hex like interviews — the wire's `job_id`.
+    """
+    __tablename__ = "jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    slug: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    profile_id: Mapped[uuid_pkg.UUID] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE"), index=True
+    )
+    company: Mapped[str] = mapped_column(String(256))
+    title: Mapped[str] = mapped_column(String(256))
+    description: Mapped[str] = mapped_column(Text)
+    summary: Mapped[str] = mapped_column(Text)
+    role_id: Mapped[int] = mapped_column(ForeignKey("roles.id"), index=True)
+    level_id: Mapped[int] = mapped_column(ForeignKey("levels.id"))
+
+    role: Mapped[Role] = relationship(lazy="selectin")
+    level: Mapped[Level] = relationship(lazy="selectin")
