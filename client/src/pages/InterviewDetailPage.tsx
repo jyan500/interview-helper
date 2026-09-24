@@ -19,7 +19,7 @@ import Donut from "../components/Donut";
 import ScoreBar from "../components/ScoreBar";
 import InterviewDetailSkeleton from "../components/InterviewDetailSkeleton";
 import { useGetInterviewDetailQuery, type AnswerGrade, type Scorecard } from "../api";
-import { formatScore, formatShortDate, formatTime } from "../helpers";
+import { formatScore, formatShortDate, formatTime, interviewTitle } from "../helpers";
 
 // Feedback label pills — three kinds, each its own colour (theme feedback tokens + accent). The
 // real grade carries one sentence per kind: strength -> Strength, gap -> Gap, improvement -> Next.
@@ -56,7 +56,9 @@ export default function InterviewDetailPage() {
         );
     }
 
-    const { role, level, created_at, turns, scorecard } = data;
+    const { created_at, turns, scorecard, job_id } = data;
+    // company · round for a job simulation, role · level for a bank interview
+    const [title, subtitle] = interviewTitle(data);
 
     return (
         <div className="min-h-screen bg-bg text-ink">
@@ -65,14 +67,21 @@ export default function InterviewDetailPage() {
             <div className="mx-auto max-w-[1280px]">
                 {/* Header block */}
                 <div className="border-b border-divider px-7 pb-5 pt-[22px]">
+                    {/* A simulation's crumb leads back to its job (where its other rounds live). */}
                     <div className="text-[13px] text-neutral-400">
-                        <Link to="/interviews" className="text-neutral-400 hover:text-accent">
-                            Interviews
-                        </Link>{" "}
-                        / <span className="text-neutral-300">{formatShortDate(created_at)} · {role}</span>
+                        {job_id ? (
+                            <Link to={`/jobs/${job_id}`} className="text-neutral-400 hover:text-accent">
+                                {title}
+                            </Link>
+                        ) : (
+                            <Link to="/interviews" className="text-neutral-400 hover:text-accent">
+                                Interviews
+                            </Link>
+                        )}{" "}
+                        / <span className="text-neutral-300">{formatShortDate(created_at)} · {job_id ? subtitle : title}</span>
                     </div>
                     <h1 className="mt-2 font-heading text-[29px] font-medium leading-[1.1] tracking-[-0.02em]">
-                        {role} · {level}
+                        {title} · {subtitle}
                     </h1>
                 </div>
 

@@ -29,14 +29,22 @@ export interface InterviewResponse {
     // had saved no questions for this role+level, so the backend chose a default set (the SPA notes it).
     default_selection?: boolean;
     plan_size?: number;
+    // The plan question on the table (never a probe) — the coding panel's problem statement.
+    question?: PlanQuestion;
+}
+// A plan question as the start/answer responses carry it: its slug and full text.
+export interface PlanQuestion {
+    slug: string;
+    text: string;
 }
 // Phase D — the kickoff now carries the candidate's choices. Both are SLUGS (the DB's
 // vocabulary), mirroring StartRequest in server/api.py: `role` = a roles.slug, `seniority` =
 // a levels.slug ("mid"). The backend defaults both, but the picker always sends them.
-export interface StartInterviewRequest {
-    role: string;
-    seniority: string;
-}
+// INTERVIEW SIMULATION — or a saved job's slug + a round_types slug, sent together (the backend
+// 400s on one without the other). The job supplies role + level, so the two shapes never mix.
+export type StartInterviewRequest =
+    | { role: string; seniority: string }
+    | { job: string; round: string };
 // Phase D — the picker's options, from GET /api/roles and GET /api/levels. Each row pairs the
 // slug the client sends back with the name it shows the user (see list_roles/list_levels).
 // The fields every paginated lookup row shares: the `slug` (the app's outward identifier everywhere —
@@ -98,10 +106,51 @@ export interface SaveQuestionsRequest {
 export interface AnswerResponse {
     message: string; // feedback + the next question
     done?: boolean; // true once the client-driven loop exhausts the question bank
+    question?: PlanQuestion; // present only when the turn ADVANCED to the next plan question
 }
 export interface AnswerRequest {
     interview_id: string;
     text: string;
+    // A coding round's editor contents + language, appended server-side as a fenced block.
+    code?: string;
+    language?: string;
+}
+
+// INTERVIEW SIMULATION — a round FORMAT a job can be simulated in (GET /api/round-types), mirroring
+// RoundTypeOut. `has_code_editor` is how the SPA knows a round needs the editor, without a slug check.
+export interface RoundTypeItem extends BasePageItem {
+    description: string;
+    has_code_editor: boolean;
+}
+// A saved job as listed (GET /api/jobs), mirroring JobOut. role/level carry the SLUG (edit pickers)
+// and the NAME (display). JobDetail adds the long fields the list never shows.
+export interface JobItem {
+    job_id: string;
+    company: string;
+    title: string;
+    role: string;
+    role_name: string;
+    level: string;
+    level_name: string;
+    created_at: string; // ISO timestamp
+}
+export interface JobDetail extends JobItem {
+    summary: string; // the extractor's short summary of the posting
+    description: string; // the raw pasted job description
+}
+// PATCH /api/jobs/{id} — correcting the extractor. All optional: an omitted field is left alone.
+export interface JobUpdate {
+    company?: string;
+    title?: string;
+    role?: string;
+    level?: string;
+}
+// The display fields a simulation interview carries (all null for a bank interview): the job's slug
+// + company and the round's NAME. Shared by the list card, the detail view and the resume payload.
+export interface SimulationFields {
+    job_id: string | null;
+    company: string | null;
+    round: string | null;
 }
 
 // Phase 5 — the scorecard shapes. These mirror server/grading.py's Pydantic models plus
@@ -134,7 +183,7 @@ export interface ScorecardRequest {
 // Phase C — the History shapes. These mirror GET /api/interviews and GET /api/interviews/{id}
 // in server/api.py. `InterviewSummary` is the LIST card (no transcript — that's the detail
 // view's job); `overall` is null until the interview has been graded.
-export interface InterviewSummary {
+export interface InterviewSummary extends SimulationFields {
     interview_id: string;
     role: string; // human-readable name ("Backend Engineer")
     level: string; // human-readable name ("Mid level")
@@ -157,7 +206,7 @@ export interface InterviewTurn extends TurnBase {
 // The detail view's payload: transcript + the persisted grade (null until graded, or until the
 // backend's get_scorecard read-back is implemented). The scorecard is the SAME `Scorecard` shape
 // a live grade uses, so the detail view renders it unchanged.
-export interface InterviewDetail {
+export interface InterviewDetail extends SimulationFields {
     interview_id: string;
     role: string; // human-readable name ("Backend Engineer") — for the detail header
     level: string; // human-readable name ("Entry level") — for the detail header
@@ -178,12 +227,14 @@ export interface ResumeTurn extends TurnBase {
 // and human-readable role/level for the header. The backend only returns this while the interview
 // is the user's SINGLE most-recent one and still unfinished (else 409) — starting a newer interview
 // retires this one for good.
-export interface ResumePayload {
+export interface ResumePayload extends SimulationFields {
     interview_id: string;
     role: string; // human-readable name ("Backend Engineer")
     level: string; // human-readable name ("Mid level")
     turns: ResumeTurn[];
     current_question: string | null;
+    has_code_editor: boolean; // a coding round — resume into the editor layout
+    question: PlanQuestion | null; // the PARENT plan question on the table, even mid-probe
 }
 
 // The dashboard signal panel (GET /api/dashboard) — the role-scoped aggregates that replaced the
@@ -369,7 +420,8 @@ export const interviewApi = createApi({
     // "Questions" — the bank list + the user's saved set. getQuestions provides it; saveQuestions
     // invalidates it, so committing a "My questions" edit re-syncs every questions list on screen
     // (the dashboard table, the Add-question modal, the Questions page) with no manual refetch.
-    tagTypes: ["Interviews", "Dashboard", "Profile", "Questions"],
+    // "Jobs" — the saved job descriptions (list + detail); every job write invalidates it.
+    tagTypes: ["Interviews", "Dashboard", "Profile", "Questions", "Jobs"],
     endpoints: (builder) => ({
         // It's a MUTATION, not a query. Even though it "gets" the first question, the POST
         // CREATES server-side state — a row in `interviews` (a side effect). Rule of thumb:
@@ -512,6 +564,35 @@ export const interviewApi = createApi({
             query: (body) => ({ url: "/profile/questions", method: "PUT", body }),
             invalidatesTags: ["Questions"],
         }),
+        // INTERVIEW SIMULATION — the round formats (the Job page's round cards). Only a handful exist,
+        // so one page covers them; the QueryParams bag leaves room for q/page if that ever changes.
+        getRoundTypes: builder.query<Page<RoundTypeItem>, QueryParams | void>({
+            query: (params) => ({ url: "/round-types", params: params || {} }),
+        }),
+        // The caller's saved jobs, newest first. `q` matches company or title server-side.
+        getJobs: builder.query<Page<JobItem>, QueryParams | void>({
+            query: (params) => ({ url: "/jobs", params: params || {} }),
+            providesTags: ["Jobs"],
+        }),
+        getJob: builder.query<JobDetail, string>({
+            query: (jobId) => `/jobs/${encodeURIComponent(jobId)}`,
+            providesTags: ["Jobs"],
+        }),
+        // Paste a posting -> the backend's extractor reads it (a paid LLM call) and saves the job.
+        createJob: builder.mutation<JobDetail, { description: string }>({
+            query: (body) => ({ url: "/jobs", method: "POST", body }),
+            invalidatesTags: ["Jobs"],
+        }),
+        updateJob: builder.mutation<JobDetail, { jobId: string; body: JobUpdate }>({
+            query: ({ jobId, body }) => ({ url: `/jobs/${encodeURIComponent(jobId)}`, method: "PATCH", body }),
+            invalidatesTags: ["Jobs"],
+        }),
+        // Deleting a job cascades its simulation interviews server-side, so the interview lists (and
+        // the resume banner, if one of them was resumable) must re-read too.
+        deleteJob: builder.mutation<{ ok: boolean }, string>({
+            query: (jobId) => ({ url: `/jobs/${encodeURIComponent(jobId)}`, method: "DELETE" }),
+            invalidatesTags: ["Jobs", "Interviews"],
+        }),
     }),
 });
 
@@ -538,4 +619,10 @@ export const {
     useDeleteAvatarMutation,
     useGetQuestionsQuery,
     useSaveQuestionsMutation,
+    useGetRoundTypesQuery,
+    useGetJobsQuery,
+    useGetJobQuery,
+    useCreateJobMutation,
+    useUpdateJobMutation,
+    useDeleteJobMutation,
 } = interviewApi;

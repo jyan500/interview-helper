@@ -3,12 +3,18 @@
  * React-free functions — anything that calls useState/useEffect/etc. lives here.)
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router";
+import { useNavigate, useSearchParams } from "react-router";
 import type { FieldValues, Path, PathValue, UseFormSetValue } from "react-hook-form";
 import hark from "hark";
 import { audioConstraints } from "./voice/helpers";
-import { useSaveQuestionsMutation } from "./api";
+import {
+    useGetMyInterviewsQuery,
+    useSaveQuestionsMutation,
+    useStartInterviewMutation,
+    type StartInterviewRequest,
+} from "./api";
 import type { SelectOption } from "./components/AsyncPaginateSelect";
+import type { SessionNavState } from "./pages/SessionLayout";
 import { useToast } from "./toast/ToastProvider";
 import {
     HARK_POLL_INTERVAL_MS,
@@ -63,6 +69,62 @@ export function useSeededSelectFields<TForm extends FieldValues>(
         }
         seededKey.current = key;
     }, [key]);
+}
+
+/** The session header labels a start hands to /session (everything in SessionNavState but the ids). */
+export type StartLabels = Pick<SessionNavState, "role" | "level" | "company" | "round">;
+
+/**
+ * The interview KICKOFF sequence, shared by every producer (the Dashboard's bank start and a Job page's
+ * round cards): confirm before overwriting an unfinished interview, POST /api/interview, then hand the
+ * fresh interview to /session via route state. We never navigate to /session without a real interview.
+ *
+ * The caller renders the two pieces of UI this drives: <OverwriteInterviewModal> (open = `confirmOpen`,
+ * onConfirm = `confirm`, onClose = `cancel`) and <StartingOverlay> while `starting`. `resumableLoading`
+ * gates the caller's Start button — until it settles we can't know whether to warn. A FAILED check
+ * flips it false with no resumable id, so a broken query degrades to a direct start, not a dead button.
+ */
+export function useStartSequence() {
+    const navigate = useNavigate();
+    const { toast } = useToast();
+    const { data: resumableData, isLoading: resumableLoading } = useGetMyInterviewsQuery({ resumable: true });
+    const resumableId = resumableData?.items[0]?.interview_id ?? null;
+    const [startInterview, { isLoading: starting }] = useStartInterviewMutation();
+
+    // The start held behind the overwrite confirmation (null = no confirm open).
+    const [pending, setPending] = useState<{ request: StartInterviewRequest; labels: StartLabels } | null>(null);
+
+    const run = useCallback(
+        async (request: StartInterviewRequest, labels: StartLabels) => {
+            try {
+                const res = await startInterview(request).unwrap();
+                const state: SessionNavState = { interviewId: res.interview_id, firstMessage: res.message, ...labels };
+                navigate("/session", { state });
+            } catch {
+                toast("Couldn't start your interview. Try again.", { variant: "error" });
+            }
+        },
+        [startInterview, navigate, toast],
+    );
+
+    const start = useCallback(
+        (request: StartInterviewRequest, labels: StartLabels) => {
+            if (resumableId) setPending({ request, labels });
+            else run(request, labels);
+        },
+        [resumableId, run],
+    );
+
+    // Confirmed: close the modal and hand off to the blocking overlay while the POST runs.
+    const confirm = useCallback(() => {
+        if (!pending) return;
+        setPending(null);
+        run(pending.request, pending.labels);
+    }, [pending, run]);
+
+    const cancel = useCallback(() => setPending(null), []);
+
+    return { start, starting, resumableLoading, confirmOpen: pending !== null, confirm, cancel };
 }
 
 /**

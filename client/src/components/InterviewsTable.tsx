@@ -16,7 +16,7 @@
  */
 import { useNavigate } from "react-router";
 import type { InterviewSummary } from "../api";
-import { formatShortDate, formatScore } from "../helpers";
+import { formatShortDate, formatScore, interviewTitle } from "../helpers";
 import { PAGE_SIZE } from "../constants"
 import { SkeletonRow } from "./SkeletonRow"
 import SortableHeader from "./SortableHeader"
@@ -35,11 +35,13 @@ export default function InterviewsTable({
     sort = null,
     order = "desc",
     onSort,
+    emptyMessage = "No interviews yet — finish one and it'll show up here.",
 }: {
     interviews: InterviewSummary[];
     resumableId?: string | null;
     loading?: boolean;
     skeletonRows?: number;
+    emptyMessage?: string;
     // Sort is opt-in: only the standalone Interviews page passes `onSort`, so its Date/Score
     // headers become clickable arrows. The Dashboard card omits it and keeps plain headers — it
     // shows a fixed "newest few" slice, so a sort control there would be meaningless.
@@ -58,6 +60,8 @@ export default function InterviewsTable({
                 interviewId: iv.interview_id,
                 role: iv.role,
                 level: iv.level,
+                company: iv.company,
+                round: iv.round,
                 resume: true,
             },
         });
@@ -66,9 +70,7 @@ export default function InterviewsTable({
     // Empty line only when we're settled with no rows — never mid-fetch, when the skeleton shows.
     if (!loading && interviews.length === 0) {
         return (
-            <p className="px-3 py-6 text-[13.5px] text-neutral-400">
-                No interviews yet — finish one and it'll show up here.
-            </p>
+            <p className="px-3 py-6 text-[13.5px] text-neutral-400">{emptyMessage}</p>
         );
     }
 
@@ -106,10 +108,11 @@ export default function InterviewsTable({
                     {loading && Array.from({ length: skeletonRows }).map((_, i) => <SkeletonRow key={i} />)}
                     {!loading && interviews.map((iv) => {
                         const isResumable = iv.interview_id === resumableId;
+                        const [title, subtitle] = interviewTitle(iv);
                         return (
                             <tr key={iv.interview_id}>
                                 <td className="whitespace-nowrap">
-                                    {iv.role} <span className="text-neutral-400">· {iv.level}</span>
+                                    {title} <span className="text-neutral-400">· {subtitle}</span>
                                 </td>
                                 <td className="whitespace-nowrap text-neutral-300">
                                     {formatShortDate(iv.created_at)}

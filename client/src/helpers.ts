@@ -110,6 +110,30 @@ export function formatScore(overall: number): string {
 }
 
 /**
+ * The FastAPI `detail` string off a rejected RTK Query call (`{ status, data: { detail } }`), or null
+ * when there isn't one (network failure, a 422's list-shaped detail). Lets a form show the server's
+ * own reason — "paste the full job description…" — instead of a generic line.
+ */
+export function errorDetail(e: unknown): string | null {
+    const detail = (e as { data?: { detail?: unknown } })?.data?.detail;
+    return typeof detail === "string" ? detail : null;
+}
+
+/**
+ * The two-part name for an interview wherever one is labelled (tables, the resume banner, the detail
+ * and session headers): company · round for a job simulation, role · level for a bank interview. The
+ * simulation fields are null on a bank interview, which is what picks the fallback.
+ */
+export function interviewTitle(iv: {
+    role: string;
+    level: string;
+    company?: string | null;
+    round?: string | null;
+}): [string, string] {
+    return iv.company && iv.round ? [iv.company, iv.round] : [iv.role, iv.level];
+}
+
+/**
  * A react-select Option seeded from a filter slug in the URL (e.g. role). Its value is the slug; the
  * label STARTS as the slug (a placeholder) so a form's draft mirrors the applied filter even before the
  * real name is fetched, and the caller swaps in the fetched name once it resolves. Null when there's
