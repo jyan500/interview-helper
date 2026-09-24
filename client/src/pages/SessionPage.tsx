@@ -33,7 +33,7 @@ import SettingsModal from "../components/SettingsModal";
 import Button from "../components/Button";
 import { useGetScorecardMutation, useLazyGetResumeQuery, useSubmitAnswerMutation } from "../api";
 import { useSessionNav } from "./SessionLayout";
-import { loadStoredMicDeviceId, saveStoredMicDeviceId } from "../helpers";
+import { interviewTitle, loadStoredMicDeviceId, saveStoredMicDeviceId } from "../helpers";
 import { useAudioInputDevices, useElapsedClock, useNoInputPrompt, useSpeaking } from "../hooks";
 import {
     pickPreferredVoice,
@@ -379,7 +379,7 @@ export default function SessionPage() {
             <div className="flex h-[54px] items-center justify-between border-b border-divider px-6">
                 <div className="flex items-center gap-3.5">
                     <span className="font-heading text-[17px] font-medium tracking-[-0.01em]">
-                        {nav.role} · {nav.level}
+                        {interviewTitle(nav).join(" · ")}
                     </span>
                     <span className="tag tag-outline capitalize">{mode}</span>
                 </div>

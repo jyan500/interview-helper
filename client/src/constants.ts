@@ -150,6 +150,14 @@ export const AVATAR_BUCKET = "avatars";
 export const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
 export const AVATAR_ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 
+/**
+ * The pasted job description's length window — mirrors JD_MIN_CHARS / JD_MAX_CHARS in server/api.py
+ * (400 below, 413 above). Checked in the New-job form so the paid extraction call is never sent with a
+ * paste the server would reject anyway.
+ */
+export const JD_MIN_CHARS = 100;
+export const JD_MAX_CHARS = 20_000;
+
 export const PAGE_SIZE = 12
 // The shimmer look for loading placeholders — animation + shape + fill only. Each consumer adds its
 // own height (and inline-block/width) so one bar's dimensions don't leak into every skeleton.

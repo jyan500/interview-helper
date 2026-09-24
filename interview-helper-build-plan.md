@@ -1210,7 +1210,7 @@ It is built in five phases, each stopped for review:
 
 1. Schema, seed, jobs ✅
 2. Simulation turn loop, backend ✅ (see the 2026-09-23 section below)
-3. Jobs UI, plus the behavioral and system-design rounds in the SPA
+3. Jobs UI, plus the behavioral and system-design rounds in the SPA ✅ (type-checked; browser pass pending)
 4. Coding-round UI (CodeMirror)
 5. Polish and docs
 
@@ -1384,3 +1384,67 @@ profiles, on a real Stripe JD:
   `?job=`, delete).
 - The shared start-sequence hook.
 - The session header showing company · round.
+
+### 2026-09-23 — Interview simulation, Phase 3: Jobs UI + behavioral/system-design rounds (branch `interview-simulation-frontend-ui`)
+
+Frontend only. `tsc` is clean. **Not yet checked in a browser.**
+
+**`api.ts`:**
+- `StartInterviewRequest` is now a union: `{role, seniority} | {job, round}`.
+- New types: `PlanQuestion` (`question` on the start/answer responses), `AnswerRequest.code/language`,
+  `RoundTypeItem`, `JobItem` / `JobDetail` / `JobUpdate`.
+- New shared base `SimulationFields` (`job_id` / `company` / `round`). `InterviewSummary`,
+  `InterviewDetail` and `ResumePayload` extend it. Resume also gains `has_code_editor` and `question`.
+- New endpoints: `getRoundTypes`, `getJobs`, `getJob`, `createJob`, `updateJob`, `deleteJob`, under a
+  new `"Jobs"` tag. `deleteJob` also invalidates `"Interviews"` because the delete cascades.
+
+**Shared pieces:**
+- `useStartSequence()` (`hooks.ts`) is the kickoff: resumable check → overwrite confirm →
+  POST → `/session`. The Dashboard now uses it too, which removed its inline copy.
+- `interviewTitle()` (`helpers.ts`) gives company · round for a simulation, otherwise role · level.
+  Used by the session header, ResumeBanner, InterviewsTable and the detail header.
+- `SessionNavState` gains `company` / `round`, and every producer (start, banner, table Resume) passes
+  them.
+- `errorDetail()` pulls FastAPI's `detail` string off a rejected call.
+- `StartingOverlay` takes an optional `message`. `InterviewsTable` takes an optional `emptyMessage`.
+- `JD_MIN_CHARS` / `JD_MAX_CHARS` constants mirror the server.
+
+**Pages and components:**
+- `/jobs`: `JobsPage` (search in the URL, applied on submit), `JobsTable`, and `NewJobModal` (paste
+  the JD, length-validated, the server's error in the root error, then navigates to the new job).
+- `/jobs/:id`: `JobDetailPage` with a header and summary, `RoundCard`s, a Simulations list (`?job=`,
+  paginated), `JobEditCard` (company/title/role/level, PATCH on submit), the raw posting
+  (ExpandableText), `DeleteJobModal`, and `JobDetailSkeleton`.
+- A "Jobs" link in AppNav.
+- A simulation's detail breadcrumb links back to its job.
+- **The coding round card shows "Coming soon" and is disabled** (`unavailable={round.has_code_editor}`).
+  Phase 4 turns it on together with CodeMirror.
+
+**Bug found in the browser and fixed (backend): a retired interview came back after a job delete.**
+
+Steps to reproduce:
+1. Leave a bank interview unfinished.
+2. Start a simulation, confirming the "overwrite" modal.
+3. Leave the simulation unfinished.
+4. Delete the job.
+
+Result: the banner offered the OLD bank interview again. The cause was that resumability was pure
+recency, with nothing stored. Deleting the newer row made the old one "most recent" again.
+
+The fix is in `create_interview`. In the same transaction as the INSERT, it now marks the caller's
+other unfinished interviews `done=True`, with `updated_at` pinned to itself. Otherwise `onupdate`
+would stamp `now()`, which ties with the new row, and the recency lookup could pick a retired row.
+There was no schema change. Interviews left unfinished before this fix stay unfinished until the
+user's next start retires them.
+
+**Next:**
+- Browser pass:
+  - create a job;
+  - edit it;
+  - start behavioral and system-design rounds;
+  - check the header, resume and the scorecard;
+  - delete the job.
+- Then Sim Phase 4, the coding-round UI:
+  - CodeMirror panel, driven by `question` and `has_code_editor`;
+  - send `code` / `language` on answer;
+  - enable the coding card.

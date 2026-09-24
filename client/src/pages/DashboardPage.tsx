@@ -10,7 +10,7 @@
  * two-column body collapses to one column below ~1024px (lg:).
  */
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router";
+import { Link } from "react-router";
 import { useForm } from "react-hook-form";
 import { skipToken } from "@reduxjs/toolkit/query/react";
 import { useAuth } from "../auth/AuthProvider"
@@ -21,10 +21,9 @@ import {
     useGetQuestionsQuery,
     useLazyGetLevelsQuery,
     useLazyGetRolesQuery,
-    useStartInterviewMutation,
     useUpdateProfileMutation,
 } from "../api";
-import { useQuestionSelection, useSeededSelectFields } from "../hooks";
+import { useQuestionSelection, useSeededSelectFields, useStartSequence } from "../hooks";
 import { optionFromItem } from "../helpers";
 import { ControlledAsyncPaginateSelect } from "../components/ControlledAsyncPaginateSelect";
 import type { SelectOption } from "../components/AsyncPaginateSelect";
@@ -55,7 +54,6 @@ type StartFormValues = {
 const DASHBOARD_ROWS = 5;
 
 export default function DashboardPage() {
-    const navigate = useNavigate();
     const { session } = useAuth();
 
     // The kickoff form — RHF owns the role/level Options; mode "onChange" keeps formState.isValid live
@@ -107,52 +105,20 @@ export default function DashboardPage() {
     // resumable query narrows server-side to a 0-or-1-element list. The unfinished interview isn't
     // lost from this page — the ResumeBanner above surfaces it.
     const { data: interviewsData, isFetching } = useGetMyInterviewsQuery({ size: DASHBOARD_ROWS, scored: true });
-    // `isLoading` gates the Start button below: we can't know whether starting would overwrite an
-    // unfinished interview until this settles. It's true only on the first load with no data, so a
-    // FAILED request flips it back to false — re-enabling Start (resumableId stays null → no confirm,
-    // just a direct start), rather than trapping the user behind a query that never came back.
-    const { data: resumableData, isLoading: resumableLoading } = useGetMyInterviewsQuery({ resumable: true });
+    const { data: resumableData } = useGetMyInterviewsQuery({ resumable: true });
     const interviews = interviewsData?.items ?? [];
     const resumableId = resumableData?.items[0]?.interview_id ?? null;
 
-    // The KICKOFF: POST /api/interview, then hand the fresh interview to /session via route state
-    // (SessionLayout guards on it; SessionPage seeds the first question + speaks it from firstMessage).
-    // We never navigate to /session without a real interview — that's the whole producer/consumer split.
-    // While the POST is in flight, <StartingOverlay> blocks the whole page (see `starting` below).
-    const [startInterview, { isLoading: starting }] = useStartInterviewMutation();
-    async function doStart({ role, level }: StartFormValues) {
-        if (!role || !level) return; // narrows Option | null -> Option; `required` already guarantees it
-        try {
-            const res = await startInterview({ role: role.value, seniority: level.value }).unwrap();
-            navigate("/session", {
-                state: {
-                    interviewId: res.interview_id,
-                    firstMessage: res.message,
-                    role: role.label, // human-readable labels for the session header
-                    level: level.label,
-                },
-            });
-        } catch {
-            toast("Couldn't start your interview. Try again.", { variant: "error" });
-        }
-    }
-
-    // Form submit gate: if the user has an unfinished (resumable) interview, starting a new one would
-    // overwrite it, so confirm first. Otherwise start straight away. handleSubmit only calls this once
-    // both required picks are valid, so `values` are guaranteed present here.
-    const [confirmOverwrite, setConfirmOverwrite] = useState(false);
-    function onStart(values: StartFormValues) {
-        if (resumableId) {
-            setConfirmOverwrite(true);
-            return;
-        }
-        doStart(values);
-    }
-    // Confirmed the overwrite: close the modal and hand off to the blocking overlay while doStart runs.
-    // The picks are still in the form (never reset), so we read them from the watched values.
-    function onConfirmOverwrite() {
-        setConfirmOverwrite(false);
-        doStart({ role: roleValue, level: levelValue });
+    // The KICKOFF — the shared sequence (overwrite confirm -> POST /api/interview -> /session), the
+    // same one a Job page's round cards use. handleSubmit only calls onStart once both required picks
+    // are valid, so the narrowing below never actually bails.
+    const startSequence = useStartSequence();
+    function onStart({ role, level }: StartFormValues) {
+        if (!role || !level) return;
+        startSequence.start(
+            { role: role.value, seniority: level.value },
+            { role: role.label, level: level.label }, // human-readable labels for the session header
+        );
     }
 
     // ── My questions ──────────────────────────────────────────────────────────────────────────
@@ -180,12 +146,12 @@ export default function DashboardPage() {
         <div className="min-h-screen bg-bg text-ink">
             {/* Confirm overwriting an unfinished interview (only reached when one exists). */}
             <OverwriteInterviewModal
-                open={confirmOverwrite}
-                onClose={() => setConfirmOverwrite(false)}
-                onConfirm={onConfirmOverwrite}
+                open={startSequence.confirmOpen}
+                onClose={startSequence.cancel}
+                onConfirm={startSequence.confirm}
             />
             {/* Blocks the page for BOTH start paths while the kickoff POST is in flight. */}
-            {starting && <StartingOverlay />}
+            {startSequence.starting && <StartingOverlay />}
 
             {/* Browse all role+level questions to add to the saved set. Mounted only while open, so
                 closing discards any unsaved staging. Reachable only once role+level are picked. */}
@@ -268,11 +234,11 @@ export default function DashboardPage() {
                                     // disabled until BOTH required selects are valid, while the POST is in
                                     // flight, and until the resumable-check query settles (so we know
                                     // whether to warn about overwriting an unfinished interview)
-                                    disabled={starting || !formState.isValid || resumableLoading}
+                                    disabled={startSequence.starting || !formState.isValid || startSequence.resumableLoading}
                                     className="text-[15px] disabled:opacity-50"
                                     style={{ padding: "11px 26px" }}
                                 >
-                                    {starting ? "Starting…" : "Start interview"}
+                                    {startSequence.starting ? "Starting…" : "Start interview"}
                                 </Button>
                             </div>
                         </form>

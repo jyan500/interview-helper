@@ -17,7 +17,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
 import { useGetMyInterviewsQuery } from "../api";
-import { addIgnoredInterviewId, loadIgnoredInterviewIds } from "../helpers";
+import { addIgnoredInterviewId, interviewTitle, loadIgnoredInterviewIds } from "../helpers";
 import Button from "./Button";
 
 export default function ResumeBanner({ className = "" }: { className?: string }) {
@@ -41,6 +41,8 @@ export default function ResumeBanner({ className = "" }: { className?: string })
                 interviewId: resumable.interview_id,
                 role: resumable.role,
                 level: resumable.level,
+                company: resumable.company,
+                round: resumable.round,
                 resume: true,
             },
         });
@@ -62,7 +64,7 @@ export default function ResumeBanner({ className = "" }: { className?: string })
             <div>
                 <div className="kicker text-accent-300">Unfinished session</div>
                 <div className="mt-0.5 font-heading text-[20px]">
-                    {resumable.level} {resumable.role}
+                    {interviewTitle(resumable).join(" · ")}
                 </div>
             </div>
             <div className="flex gap-2">

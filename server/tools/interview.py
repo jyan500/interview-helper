@@ -48,7 +48,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi_pagination import Params
 from fastapi_pagination.ext.sqlalchemy import apaginate
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 
 from db.engine import get_session
 from db.models import (
@@ -172,6 +172,21 @@ async def create_interview(
             ).scalar_one_or_none()
             if job_row is None or round_row is None:
                 return {"ok": False, "error": f"unknown job or round: {job} / {round_type}"}
+
+        # RETIRE the caller's other unfinished interviews — starting one abandons the resumable slot
+        # for good (the SPA's overwrite modal promises exactly that). Recency alone can't keep that
+        # promise: delete the newer interview (a job delete cascades its simulations) and the older
+        # unfinished one would become "most recent" and resumable again. `done` is the marker every
+        # reader already honours (resume and /api/answer 409, the banner skips it).
+        # `updated_at` is pinned to itself: otherwise onupdate stamps now() — the same instant as
+        # the new row's INSERT in this transaction — and the recency tie could pick a retired row.
+        # Same transaction as the INSERT below, so a failed start retires nothing.
+        if profile_id is not None:
+            await db.execute(
+                update(Interview)
+                .where(Interview.profile_id == profile_id, Interview.done.is_(False))
+                .values(done=True, updated_at=Interview.updated_at)
+            )
 
         # the same id scheme api.py always used — short enough to eyeball in a URL, random
         # enough that nobody guesses someone else's interview

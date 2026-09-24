@@ -42,6 +42,9 @@ export default function AppNav() {
                     <NavLink to="/questions" className={navLinkClass}>
                         Questions
                     </NavLink>
+                    <NavLink to="/jobs" className={navLinkClass}>
+                        Jobs
+                    </NavLink>
                 </div>
             </div>
 

@@ -26,12 +26,15 @@ import { Navigate, Outlet, useLocation, useNavigate, useOutletContext } from "re
 //                  producer). There's no firstMessage then — SessionPage fetches the transcript +
 //                  current question from GET /api/interviews/{id}/resume and redraws instead of seeding.
 //   role / level — human-readable LABELS for the header (both flows carry them).
+//   company / round — a job SIMULATION's header labels instead (null/absent for a bank interview).
 export type SessionNavState = {
     interviewId: string;
     firstMessage?: string;
     resume?: boolean;
     role: string;
     level: string;
+    company?: string | null;
+    round?: string | null;
 };
 
 export default function SessionLayout() {
