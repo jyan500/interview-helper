@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranscribeMutation, useTtsMutation } from "../api";
 import { MicVAD } from "@ricky0123/vad-web";
 import { VAD_SPEECH_THRESHOLD, VAD_REDEMPTION_MS, CONFIRM_COUNTDOWN_MS, VAD_ONNX_WASM_BASE } from "../constants";
-import { pickRecordingType, filenameFor, audioConstraints } from "./helpers";
+import { pickRecordingType, filenameFor, audioConstraints, toSpeechText } from "./helpers";
 
 // ============================ TTS — the OUTPUT adapter ============================
 // SpeechSynthesis + SpeechSynthesisUtterance ARE in TypeScript's DOM lib, so no extra typing.
@@ -173,10 +173,15 @@ export function useSpeak(engine: TtsEngine): { speak: (text: string, onReady?: (
     // Dispatch on the chosen engine — SAME (text, onReady) contract either way, so App stays engine-blind
     // (the whole edge-adapter thesis: the loop never learns WHICH voice engine spoke). Wrap the browser
     // path in Promise.resolve so both branches satisfy the Promise<void> return.
+    // The markdown is stripped HERE, once, for both engines: the model's `code` / *emphasis* marks are
+    // formatting for the eye, and a voice reads them out literally ("backtick … backtick").
     const speak = useCallback((text: string, onReady?: () => void): Promise<void> => {
+        const spoken = toSpeechText(text)
+        // All code, nothing to say -> reveal now (an empty utterance may never fire the browser's onstart)
+        if (!spoken) { onReady?.(); return Promise.resolve() }
         return engine === "browser"
-            ? Promise.resolve(speakBrowser(text, onReady))
-            : speakOpenAI(text, onReady)
+            ? Promise.resolve(speakBrowser(spoken, onReady))
+            : speakOpenAI(spoken, onReady)
     }, [engine, speakOpenAI, speakBrowser]);
 
     // speaking = the whole audible window (synth wait OR playback). The synth half masks the latency

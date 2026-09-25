@@ -53,7 +53,13 @@ export default function JobDetailPage() {
     function onStartRound(job: JobDetail, round: RoundTypeItem) {
         startSequence.start(
             { job: job.job_id, round: round.slug },
-            { role: job.role_name, level: job.level_name, company: job.company, round: round.name },
+            {
+                role: job.role_name,
+                level: job.level_name,
+                company: job.company,
+                round: round.name,
+                hasCodeEditor: round.has_code_editor,
+            },
         );
     }
 
@@ -143,8 +149,6 @@ export default function JobDetailPage() {
                                           <RoundCard
                                               key={round.slug}
                                               round={round}
-                                              // the coding round waits for the code editor (next phase)
-                                              unavailable={round.has_code_editor}
                                               disabled={startSequence.starting || startSequence.resumableLoading}
                                               onStart={() => onStartRound(job, round)}
                                           />

@@ -71,8 +71,11 @@ export function useSeededSelectFields<TForm extends FieldValues>(
     }, [key]);
 }
 
-/** The session header labels a start hands to /session (everything in SessionNavState but the ids). */
-export type StartLabels = Pick<SessionNavState, "role" | "level" | "company" | "round">;
+/**
+ * What a producer knows about the start that /session needs: the header labels, plus whether the round
+ * opens the coding panel (everything in SessionNavState the POST response doesn't supply).
+ */
+export type StartLabels = Pick<SessionNavState, "role" | "level" | "company" | "round" | "hasCodeEditor">;
 
 /**
  * The interview KICKOFF sequence, shared by every producer (the Dashboard's bank start and a Job page's
@@ -98,7 +101,12 @@ export function useStartSequence() {
         async (request: StartInterviewRequest, labels: StartLabels) => {
             try {
                 const res = await startInterview(request).unwrap();
-                const state: SessionNavState = { interviewId: res.interview_id, firstMessage: res.message, ...labels };
+                const state: SessionNavState = {
+                    interviewId: res.interview_id,
+                    firstMessage: res.message,
+                    question: res.question ?? null,
+                    ...labels,
+                };
                 navigate("/session", { state });
             } catch {
                 toast("Couldn't start your interview. Try again.", { variant: "error" });

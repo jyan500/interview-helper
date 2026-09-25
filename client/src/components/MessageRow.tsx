@@ -10,6 +10,7 @@
 import type { ReactNode } from "react";
 import { Sparkle } from "@phosphor-icons/react";
 import UserAvatar from "./UserAvatar";
+import FormattedText from "./FormattedText";
 
 type Props = {
     who: "interviewer" | "you";
@@ -37,7 +38,7 @@ export default function MessageRow({ who, kicker, text, timestamp, maxWidth = 56
                 </div>
             )}
 
-            <div className="flex flex-col gap-2" style={{ maxWidth }}>
+            <div className="flex min-w-0 flex-col gap-2" style={{ maxWidth }}>
                 <div
                     className={
                         "rounded-md border px-4 py-3.5 " + (isYou ? "border-accent" : "border-divider")
@@ -47,7 +48,8 @@ export default function MessageRow({ who, kicker, text, timestamp, maxWidth = 56
                         <span className={"kicker" + (isYou ? " text-accent-300" : "")}>{kicker}</span>
                         {timestamp && <span className="text-[12px] text-neutral-400">{timestamp}</span>}
                     </div>
-                    <p className="m-0 text-[15px] leading-[1.55] [text-wrap:pretty]">{text}</p>
+                    {/* pre-wrap prose + fenced code as <pre>, so a coding answer keeps its indentation */}
+                    <FormattedText text={text} className="text-[15px] leading-[1.55]" />
                 </div>
                 {children}
             </div>

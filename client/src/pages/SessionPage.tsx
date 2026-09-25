@@ -30,10 +30,21 @@ import MessageRow from "../components/MessageRow";
 import UserAvatar from "../components/UserAvatar";
 import LoadingDots from "../components/LoadingDots";
 import SettingsModal from "../components/SettingsModal";
+import CodingPanel from "../components/CodingPanel";
 import Button from "../components/Button";
-import { useGetScorecardMutation, useLazyGetResumeQuery, useSubmitAnswerMutation } from "../api";
+import { useGetScorecardMutation, useLazyGetResumeQuery, useSubmitAnswerMutation, type PlanQuestion } from "../api";
 import { useSessionNav } from "./SessionLayout";
-import { interviewTitle, loadStoredMicDeviceId, saveStoredMicDeviceId } from "../helpers";
+import {
+    cueProblem,
+    interviewTitle,
+    lastFencedCode,
+    loadStoredCodeLanguage,
+    loadStoredMicDeviceId,
+    saveStoredCodeLanguage,
+    saveStoredMicDeviceId,
+    withCodeFence,
+} from "../helpers";
+import { CODING_PROBLEM_CUE, type CodeLanguage } from "../constants";
 import { useAudioInputDevices, useElapsedClock, useNoInputPrompt, useSpeaking } from "../hooks";
 import {
     pickPreferredVoice,
@@ -87,6 +98,21 @@ export default function SessionPage() {
     // different instants, leaving one-render gaps where all read false and the previous question
     // flashed. A single latch set-at-start / cleared-at-reveal has no such gap by construction.
     const [preparing, setPreparing] = useState(false);
+
+    // CODING ROUNDS — the coding panel beside the conversation. A fresh start knows from the producer
+    // (nav); a resume learns it from the resume payload. `problem` is the PLAN question on the table
+    // (never a probe), swapped when a turn advances. `code` rides along with the next answer whenever it
+    // differs from `lastSentCode`, so an unchanged editor isn't re-sent (and re-read) every turn.
+    const [hasCodeEditor, setHasCodeEditor] = useState(nav.hasCodeEditor ?? false);
+    const [problem, setProblem] = useState<PlanQuestion | null>(nav.question ?? null);
+    const [code, setCode] = useState("");
+    const [lastSentCode, setLastSentCode] = useState("");
+    const [language, setLanguage] = useState<CodeLanguage>(loadStoredCodeLanguage);
+    function handleChangeLanguage(next: CodeLanguage) {
+        setLanguage(next);
+        saveStoredCodeLanguage(next); // the next coding round opens in it too
+    }
+    const codeChanged = hasCodeEditor && code.trim() !== "" && code !== lastSentCode;
 
     // The RTK Query mutations — the only two the in-session loop needs. startInterview already ran
     // on the producer; the scorecard is fetched once, on end.
@@ -214,18 +240,39 @@ export default function SessionPage() {
                 // interviewer prompt + your answer. Fresh line ids keep later reveals race-safe. (The
                 // model's own memory — reactions, clarifications — is already in message_history on the
                 // server; this is just the human transcript, same as the History detail view.)
+                // A coding round resumes into the panel: the problem on the table, and the editor seeded
+                // with the last code sent for it (marked as sent, so it isn't re-sent unchanged).
+                const coding = payload.has_code_editor;
+                const problemText = payload.question?.text;
+                const shown = (text: string) => (coding ? cueProblem(text, problemText, CODING_PROBLEM_CUE) : text);
+                if (coding) {
+                    setHasCodeEditor(true);
+                    setProblem(payload.question);
+                    const lastCode = payload.turns
+                        .filter((t) => t.question_id === payload.question?.slug)
+                        .map((t) => lastFencedCode(t.answer))
+                        .filter((c) => c !== null)
+                        // turns are oldest-first and code can be re-sent (e.g. a fix after review), so
+                        // pop() takes only the LAST block — the most up-to-date version of the code.
+                        .pop();
+                    if (lastCode) {
+                        setCode(lastCode);
+                        setLastSentCode(lastCode);
+                    }
+                }
                 const lines: Line[] = [];
                 for (const turn of payload.turns) {
-                    lines.push({ id: nextId(), who: "interviewer", text: turn.question_text });
+                    lines.push({ id: nextId(), who: "interviewer", text: shown(turn.question_text) });
                     lines.push({ id: nextId(), who: "you", text: turn.answer });
                 }
                 // The open turn — the question awaiting an answer — is the current interviewer line.
                 // A not-done interview always has one; guard anyway. Speak it (text is already on
                 // screen, so no reveal callback) so a voice user can just answer.
                 if (payload.current_question) {
-                    lines.push({ id: nextId(), who: "interviewer", text: payload.current_question });
+                    const current = shown(payload.current_question);
+                    lines.push({ id: nextId(), who: "interviewer", text: current });
                     setTranscript(lines);
-                    speak(payload.current_question);
+                    speak(current);
                 } else {
                     setTranscript(lines);
                 }
@@ -238,7 +285,10 @@ export default function SessionPage() {
         // because the click that allowed it happened before the route change; if so onReady still
         // fires immediately and the text just reveals without sound — same graceful path as a synth
         // failure.)
-        const first = nav.firstMessage ?? "";
+        // A coding problem isn't read aloud — the interviewer points at the panel instead.
+        const first = hasCodeEditor
+            ? cueProblem(nav.firstMessage ?? "", nav.question?.text, CODING_PROBLEM_CUE)
+            : (nav.firstMessage ?? "");
         const id = nextId();
         setPreparing(true); // hold "…" until the first question's TTS is ready (revealLine clears it)
         setTranscript([{ id, who: "interviewer", text: "", pending: true }]);
@@ -249,11 +299,14 @@ export default function SessionPage() {
     // send the candidate's answer (POST /api/answer) — one iteration of the loop. `textOverride` lets
     // the VOICE path submit the Whisper transcript directly (the hook calls us before `draft` would
     // have updated); typed answers call handleSend() with no arg and fall back to `draft`.
+    // In a coding round the editor's contents ride along (both paths) when they've changed since the
+    // last send — and code alone is a valid turn ("here's my solution").
     async function handleSend(textOverride?: string) {
         const text = (textOverride ?? draft).trim();
+        const sentCode = codeChanged ? code : undefined;
         // Nothing to send: a pure-silence voice misfire (onCaptureStopped already raised `preparing`),
         // or a terminal state. Release the flag so the "…" doesn't hang, and bail without POSTing.
-        if (!interviewId || !text || done || ended) {
+        if (!interviewId || (!text && !sentCode) || done || ended) {
             setPreparing(false);
             return;
         }
@@ -264,25 +317,45 @@ export default function SessionPage() {
         // — that gap briefly unhid the PREVIOUS question ("flash → back to thinking → real question").
         const youId = nextId();
         const pendingId = nextId();
+        // The "you" line shows the same text + fence the server stores for the turn.
         setTranscript((t) => [
             ...t,
-            { id: youId, who: "you", text },
+            { id: youId, who: "you", text: withCodeFence(text, sentCode, language) },
             { id: pendingId, who: "interviewer", text: "", pending: true },
         ]);
         setDraft("");
+        const previousSentCode = lastSentCode;
+        if (sentCode) setLastSentCode(sentCode);
         let res;
         try {
-            res = await submitAnswer({ interview_id: interviewId, text }).unwrap();
+            res = await submitAnswer({
+                interview_id: interviewId,
+                text,
+                ...(sentCode ? { code: sentCode, language } : {}),
+            }).unwrap();
         } catch (e) {
             // Surface the failure IN the pending bubble — don't leave it "thinking" forever, and don't
             // add a second interviewer line. (A 409 here would mean the interview finished under us —
-            // rare, since we gate on `done`, but honest to show.)
+            // rare, since we gate on `done`, but honest to show.) The code wasn't recorded, so it
+            // counts as unsent again and goes with the retry.
             console.error(e);
+            setLastSentCode(previousSentCode);
             revealLine(pendingId, "Sorry — I couldn't record that. Try again.");
             return;
         }
+        // Advanced to the next plan question: a coding round swaps the panel to the new problem, with a
+        // fresh editor, and points at it instead of reading it aloud.
+        let message = res.message;
+        if (hasCodeEditor && res.question) {
+            message = cueProblem(message, res.question.text, CODING_PROBLEM_CUE);
+            if (res.question.slug !== problem?.slug) {
+                setProblem(res.question);
+                setCode("");
+                setLastSentCode("");
+            }
+        }
         // Reveal the pending bubble's text in sync with the voice via onReady.
-        speak(res.message, () => revealLine(pendingId, res.message));
+        speak(message, () => revealLine(pendingId, message));
         if (res.done) setDone(true);
     }
 
@@ -396,10 +469,21 @@ export default function SessionPage() {
                 </div>
             </div>
 
-            {/* ── Body: centre column + right rail ────────────────────────────── */}
-            <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[1fr_300px]">
+            {/* ── Body: centre column + right rail — or, in a coding round, the conversation beside the
+                coding panel (stacked on narrow screens, where the panel still has to be reachable) ── */}
+            {/* minmax(0,1fr) rows pin the body to the viewport: a column that outgrows it (a long question,
+                a long rail list) scrolls INSIDE itself instead of stretching the row and scrolling the page. */}
+            <div
+                className={
+                    "grid min-h-0 flex-1 grid-cols-1 " +
+                    (hasCodeEditor
+                        ? "grid-rows-[minmax(0,1fr)_minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] lg:grid-rows-[minmax(0,1fr)]"
+                        : "grid-rows-[minmax(0,1fr)] lg:grid-cols-[1fr_300px]")
+                }
+            >
                 {mode === "voice" ? (
                     <VoiceColumn
+                        compact={hasCodeEditor}
                         question={currentQuestion}
                         listening={listening}
                         userSpeaking={userSpeaking}
@@ -430,6 +514,9 @@ export default function SessionPage() {
                         waiting={preparing}
                         answering={answering}
                         transcribing={transcribing}
+                        coding={hasCodeEditor}
+                        // a coding turn can be code alone, so changed code enables Send with an empty draft
+                        canSend={draft.trim() !== "" || codeChanged}
                         done={done}
                         ended={ended}
                         onSend={() => handleSend()}
@@ -438,7 +525,18 @@ export default function SessionPage() {
                     />
                 )}
 
-                <RightRail isResume={nav?.resume ?? false} mode={mode} interviewerLines={interviewerLines} scoring={scoring} />
+                {hasCodeEditor ? (
+                    <CodingPanel
+                        problem={problem}
+                        code={code}
+                        onChangeCode={setCode}
+                        language={language}
+                        onChangeLanguage={handleChangeLanguage}
+                        readOnly={done || ended}
+                    />
+                ) : (
+                    <RightRail isResume={nav?.resume ?? false} mode={mode} interviewerLines={interviewerLines} scoring={scoring} />
+                )}
             </div>
 
             {/* In-session settings (mic + live test meter, TTS engine, voice/text mode), behind the
@@ -464,6 +562,7 @@ export default function SessionPage() {
    Voice mode — centre column (mock 2a), wired
    ══════════════════════════════════════════════════════════════════════ */
 function VoiceColumn({
+    compact,
     question,
     listening,
     userSpeaking,
@@ -483,6 +582,8 @@ function VoiceColumn({
     onSwitch,
     onEnd,
 }: {
+    // Beside the coding panel: half the width, so a smaller question and tighter gutters.
+    compact: boolean;
     question?: Line;
     listening: boolean;
     userSpeaking: boolean;
@@ -506,12 +607,25 @@ function VoiceColumn({
     // round-trip, and TTS synthesis, ending the instant the next question is revealed. One source of
     // truth, so there's no frame where it reads false while a turn is still being prepared.
     const thinking = preparing;
+    // justify-center-SAFE, not plain center: in a scrolling column, plain centering pushes overflow out
+    // of BOTH ends, and the top half of a long question can't be scrolled back to. Safe centering centres
+    // while it fits and falls back to top-aligned (scrollable) when it doesn't.
     return (
-        <div className="flex flex-col items-center justify-center gap-[34px] px-[60px] py-8">
+        <div
+            className={
+                "flex min-h-0 flex-col items-center justify-center-safe overflow-y-auto py-8 " +
+                (compact ? "gap-7 px-8" : "gap-[34px] px-[60px]")
+            }
+        >
             {/* Current question — the latest interviewer turn, or "thinking…" while we wait on the next */}
             <div className="max-w-[680px] text-center">
                 <div className="kicker">{thinking ? "Interviewer is thinking" : "Interviewer asked"}</div>
-                <p className="mt-2 font-heading text-[31px] font-medium leading-[1.18] [text-wrap:pretty]">
+                <p
+                    className={
+                        "mt-2 whitespace-pre-wrap font-heading font-medium [text-wrap:pretty] " +
+                        (compact ? "text-[22px] leading-[1.3]" : "text-[31px] leading-[1.18]")
+                    }
+                >
                     {thinking || !question?.text ? <LoadingDots className="text-[26px]" /> : question.text}
                 </p>
             </div>
@@ -689,6 +803,8 @@ function TextColumn({
     waiting,
     answering,
     transcribing,
+    coding,
+    canSend,
     done,
     ended,
     onSend,
@@ -701,6 +817,8 @@ function TextColumn({
     waiting: boolean;
     answering: boolean;
     transcribing: boolean;
+    coding: boolean; // a coding round: no word-count target, and the code goes with the answer
+    canSend: boolean;
     done: boolean;
     ended: boolean;
     onSend: () => void;
@@ -764,12 +882,13 @@ function TextColumn({
                                     }
                                 }}
                                 rows={2}
-                                placeholder="Type your answer…"
+                                placeholder={coding ? "Talk through your approach, or just send your code…" : "Type your answer…"}
                                 className="m-0 w-full resize-none border-0 bg-transparent p-0 text-[15px] leading-[1.5] text-neutral-100 outline-none placeholder:text-neutral-500"
                             />
                             <div className="flex items-center justify-between text-[12.5px] text-neutral-400">
                                 <span>Shift + Enter for a new line</span>
-                                <span>{words} words · aim for 150–250</span>
+                                {/* a word target means nothing for a coding answer */}
+                                {!coding && <span>{words} words · aim for 150–250</span>}
                             </div>
                         </div>
                     )}
@@ -800,7 +919,7 @@ function TextColumn({
                                 className="text-[15px] disabled:opacity-50"
                                 style={{ padding: "11px 28px" }}
                                 onClick={onSend}
-                                disabled={answering || transcribing || ended || !draft.trim()}
+                                disabled={answering || transcribing || ended || !canSend}
                             >
                                 {transcribing ? "Transcribing…" : answering ? "Sending…" : "Send answer"}
                             </Button>
@@ -829,8 +948,9 @@ function RightRail({
     // A private, local-only scratchpad (not persisted — deliberately, it's throwaway thinking space).
     const [scratch, setScratch] = useState("");
 
+    // Scrolls on its own: the "This session" list grows every turn and must not stretch the page.
     return (
-        <div className="hidden flex-col gap-[22px] border-l border-divider p-5 lg:flex">
+        <div className="hidden min-h-0 flex-col gap-[22px] overflow-y-auto border-l border-divider p-5 lg:flex">
             {/* This session — the interviewer turns asked so far, newest = current. No total: an
                 interview's length isn't fixed (follow-ups are dynamic), so this just grows as we go. */}
             <div>

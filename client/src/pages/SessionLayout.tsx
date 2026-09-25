@@ -15,6 +15,7 @@
  */
 import { useEffect, useState } from "react";
 import { Navigate, Outlet, useLocation, useNavigate, useOutletContext } from "react-router";
+import type { PlanQuestion } from "../api";
 
 // What the producer hands over via navigate("/session", { state }). TWO producers, two shapes that
 // share the same guard (interviewId + labels):
@@ -27,6 +28,8 @@ import { Navigate, Outlet, useLocation, useNavigate, useOutletContext } from "re
 //                  current question from GET /api/interviews/{id}/resume and redraws instead of seeding.
 //   role / level — human-readable LABELS for the header (both flows carry them).
 //   company / round — a job SIMULATION's header labels instead (null/absent for a bank interview).
+//   hasCodeEditor / question — FRESH START of a coding round: open with the coding panel, showing the
+//                  first plan question. A RESUME learns both from the resume payload instead.
 export type SessionNavState = {
     interviewId: string;
     firstMessage?: string;
@@ -35,6 +38,8 @@ export type SessionNavState = {
     level: string;
     company?: string | null;
     round?: string | null;
+    hasCodeEditor?: boolean;
+    question?: PlanQuestion | null;
 };
 
 export default function SessionLayout() {

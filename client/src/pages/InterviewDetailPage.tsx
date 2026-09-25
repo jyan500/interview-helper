@@ -15,6 +15,7 @@
 import { useParams, Link } from "react-router";
 import AppNav from "../components/AppNav";
 import MessageRow from "../components/MessageRow";
+import FormattedText from "../components/FormattedText";
 import Donut from "../components/Donut";
 import ScoreBar from "../components/ScoreBar";
 import InterviewDetailSkeleton from "../components/InterviewDetailSkeleton";
@@ -174,7 +175,10 @@ function ScorecardPanel({ card }: { card: Scorecard }) {
                             <span className="kicker">Question {i + 1}</span>
                             <span className="text-[13px] text-neutral-300">{formatScore(questionRating(grade))}</span>
                         </div>
-                        <p className="mt-2 text-[14px] leading-[1.45] [text-wrap:pretty]">{grade.question_text}</p>
+                        {/* a generated coding problem keeps its line breaks (and any example code block) */}
+                        <div className="mt-2">
+                            <FormattedText text={grade.question_text} className="text-[14px] leading-[1.45]" />
+                        </div>
 
                         {/* Chip row — this question's score per dimension. Wraps, since a rubric can carry
                             more dimensions than fit one row. */}
