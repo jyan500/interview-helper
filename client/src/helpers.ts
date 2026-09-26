@@ -10,9 +10,14 @@ import {
     CODE_LANGUAGE_STORAGE_KEY,
     CODE_LANGUAGES,
     DEFAULT_CODE_LANGUAGE,
+    DEFAULT_EDITOR_SETTINGS,
+    EDITOR_FONT_SIZES,
+    EDITOR_KEYMAPS,
+    EDITOR_SETTINGS_STORAGE_KEY,
     IGNORED_INTERVIEWS_STORAGE_KEY,
     MIC_DEVICE_STORAGE_KEY,
     type CodeLanguage,
+    type EditorSettings,
 } from "./constants";
 
 /**
@@ -81,6 +86,27 @@ export function loadStoredCodeLanguage(): CodeLanguage {
 
 export function saveStoredCodeLanguage(language: CodeLanguage): void {
     localStorage.setItem(CODE_LANGUAGE_STORAGE_KEY, language);
+}
+
+/**
+ * The coding editor's preferences, persisted as one JSON blob. Each field is validated on its own
+ * against the allowed values, so a stale or hand-edited blob keeps what's still valid and falls back
+ * to the default for the rest, instead of dropping everything.
+ */
+export function loadStoredEditorSettings(): EditorSettings {
+    const raw = localStorage.getItem(EDITOR_SETTINGS_STORAGE_KEY);
+    const stored: Partial<EditorSettings> = raw ? JSON.parse(raw) : {};
+    const d = DEFAULT_EDITOR_SETTINGS;
+    return {
+        fontSize: EDITOR_FONT_SIZES.find((s) => s.value === stored.fontSize)?.value ?? d.fontSize,
+        keymap: EDITOR_KEYMAPS.find((k) => k.value === stored.keymap)?.value ?? d.keymap,
+        tabSize: stored.tabSize === 2 || stored.tabSize === 4 ? stored.tabSize : d.tabSize,
+        autocomplete: typeof stored.autocomplete === "boolean" ? stored.autocomplete : d.autocomplete,
+    };
+}
+
+export function saveStoredEditorSettings(settings: EditorSettings): void {
+    localStorage.setItem(EDITOR_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
 }
 
 /**

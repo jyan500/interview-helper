@@ -176,6 +176,41 @@ export const DEFAULT_CODE_LANGUAGE: CodeLanguage = "python";
 export const CODE_LANGUAGE_STORAGE_KEY = "ih.codeLanguage";
 
 /**
+ * The coding panel's editor preferences (the gear next to the language picker). Persisted as one JSON
+ * blob under EDITOR_SETTINGS_STORAGE_KEY so they follow the candidate across rounds.
+ *
+ *   fontSize     — px; applied through the editor theme (CodeMirror has no font-size option of its own).
+ *   keymap       — extra key bindings on top of the defaults (Vim/Emacs via @replit/codemirror-*).
+ *   tabSize      — the width of a tab AND what one indent inserts (that many spaces).
+ *   autocomplete — OFF by default: most real coding interviews hand you a plain editor.
+ */
+export type EditorKeymap = "default" | "vim" | "emacs";
+export type EditorSettings = {
+    fontSize: number;
+    keymap: EditorKeymap;
+    tabSize: 2 | 4;
+    autocomplete: boolean;
+};
+export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
+    fontSize: 13.5,
+    keymap: "default",
+    tabSize: 4,
+    autocomplete: false,
+};
+export const EDITOR_FONT_SIZES = [
+    { value: 12, label: "S" },
+    { value: 13.5, label: "M" },
+    { value: 15, label: "L" },
+    { value: 17, label: "XL" },
+] as const;
+export const EDITOR_KEYMAPS: { value: EditorKeymap; label: string }[] = [
+    { value: "default", label: "Default" },
+    { value: "vim", label: "Vim" },
+    { value: "emacs", label: "Emacs" },
+];
+export const EDITOR_SETTINGS_STORAGE_KEY = "ih.editorSettings";
+
+/**
  * What the interviewer SAYS (and the live transcript shows) in place of a coding problem's statement —
  * the full statement lives in the coding panel, and reading a problem aloud is useless to a candidate.
  * The detail page still shows the stored full text.
