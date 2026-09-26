@@ -7,8 +7,17 @@ import type { BasePageItem } from "./api";
 import {
     AVATAR_ACCEPTED_TYPES,
     AVATAR_MAX_BYTES,
+    CODE_LANGUAGE_STORAGE_KEY,
+    CODE_LANGUAGES,
+    DEFAULT_CODE_LANGUAGE,
+    DEFAULT_EDITOR_SETTINGS,
+    EDITOR_FONT_SIZES,
+    EDITOR_KEYMAPS,
+    EDITOR_SETTINGS_STORAGE_KEY,
     IGNORED_INTERVIEWS_STORAGE_KEY,
     MIC_DEVICE_STORAGE_KEY,
+    type CodeLanguage,
+    type EditorSettings,
 } from "./constants";
 
 /**
@@ -64,6 +73,92 @@ export function loadStoredMicDeviceId(): string {
 
 export function saveStoredMicDeviceId(deviceId: string): void {
     localStorage.setItem(MIC_DEVICE_STORAGE_KEY, deviceId);
+}
+
+/**
+ * The coding panel's language, persisted so the next coding round opens in the one last used. An
+ * unknown or missing value falls back to the default.
+ */
+export function loadStoredCodeLanguage(): CodeLanguage {
+    const stored = localStorage.getItem(CODE_LANGUAGE_STORAGE_KEY);
+    return CODE_LANGUAGES.find((l) => l.value === stored)?.value ?? DEFAULT_CODE_LANGUAGE;
+}
+
+export function saveStoredCodeLanguage(language: CodeLanguage): void {
+    localStorage.setItem(CODE_LANGUAGE_STORAGE_KEY, language);
+}
+
+/**
+ * The coding editor's preferences, persisted as one JSON blob. Each field is validated on its own
+ * against the allowed values, so a stale or hand-edited blob keeps what's still valid and falls back
+ * to the default for the rest, instead of dropping everything.
+ */
+export function loadStoredEditorSettings(): EditorSettings {
+    const raw = localStorage.getItem(EDITOR_SETTINGS_STORAGE_KEY);
+    const stored: Partial<EditorSettings> = raw ? JSON.parse(raw) : {};
+    const d = DEFAULT_EDITOR_SETTINGS;
+    return {
+        fontSize: EDITOR_FONT_SIZES.find((s) => s.value === stored.fontSize)?.value ?? d.fontSize,
+        keymap: EDITOR_KEYMAPS.find((k) => k.value === stored.keymap)?.value ?? d.keymap,
+        tabSize: stored.tabSize === 2 || stored.tabSize === 4 ? stored.tabSize : d.tabSize,
+        autocomplete: typeof stored.autocomplete === "boolean" ? stored.autocomplete : d.autocomplete,
+    };
+}
+
+export function saveStoredEditorSettings(settings: EditorSettings): void {
+    localStorage.setItem(EDITOR_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+}
+
+/**
+ * The combined turn a coding answer becomes — the same fold POST /api/answer does server-side (the
+ * spoken/typed text, then the code as a ```lang fence), so the live transcript shows exactly what gets
+ * stored. Code alone is a valid turn; with no code this is just the text.
+ */
+export function withCodeFence(text: string, code: string | undefined, language: string): string {
+    if (!code?.trim()) return text;
+    const fence = "```" + language + "\n" + code.trimEnd() + "\n```";
+    return text.trim() ? `${text.trimEnd()}\n\n${fence}` : fence;
+}
+
+/** One run of a message: plain prose, or a fenced code block (its info string + body). */
+export type MessagePart = { kind: "text"; text: string } | { kind: "code"; language: string; code: string };
+
+// A ``` fence: an optional info string on the opening line, then the body up to the closing ```.
+const FENCE_RE = /```([^\n`]*)\n([\s\S]*?)\n?```/g;
+
+/**
+ * Split a message into prose and fenced code, in order, so a transcript can render the code as a <pre>
+ * that keeps its indentation. Blank prose between parts is dropped; a message without a fence is one
+ * text part.
+ */
+export function splitFencedCode(text: string): MessagePart[] {
+    const parts: MessagePart[] = [];
+    let last = 0;
+    for (const m of text.matchAll(FENCE_RE)) {
+        const start = m.index ?? 0;
+        const before = text.slice(last, start).trim();
+        if (before) parts.push({ kind: "text", text: before });
+        parts.push({ kind: "code", language: m[1].trim(), code: m[2] });
+        last = start + m[0].length;
+    }
+    const rest = text.slice(last).trim();
+    if (rest) parts.push({ kind: "text", text: rest });
+    return parts;
+}
+
+/** The last fenced code block in a message, or null — seeds the editor on resume. */
+export function lastFencedCode(text: string): string | null {
+    const code = splitFencedCode(text).filter((p) => p.kind === "code").pop();
+    return code?.kind === "code" ? code.code : null;
+}
+
+/**
+ * An interviewer message with the coding problem's statement swapped for `cue` — what's spoken and shown
+ * in the live session, since the statement itself sits in the coding panel. A message that doesn't
+ * quote the statement (a reaction, a probe) comes back unchanged.
+ */
+export function cueProblem(message: string, problemText: string | undefined, cue: string): string {
+    return problemText && message.includes(problemText) ? message.replace(problemText, cue) : message;
 }
 
 /**

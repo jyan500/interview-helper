@@ -68,3 +68,41 @@ export function filenameFor(mimeType: string): string {
 export function audioConstraints(deviceId?: string | null): MediaTrackConstraints | boolean {
     return deviceId ? { deviceId: { exact: deviceId } } : true;
 }
+
+/**
+ * The interviewer's message as it should be SPOKEN: the model writes markdown (`code`, *emphasis*,
+ * **bold**, ``` fences), and a TTS voice reads that punctuation aloud ("backtick robot_ids backtick").
+ * Strip the markup, keep the words. A fenced code block has no sensible spoken form, so it's dropped;
+ * the transcript still shows it. Only the spoken copy changes. The caller keeps the original for display.
+ */
+export function toSpeechText(text: string): string {
+    return text
+        .replace(/```[^\n]*\n[\s\S]*?```/g, " ") // fenced code block -> nothing to read aloud
+        .replace(/`([^`\n]+)`/g, "$1") // `inline code` -> inline code
+        // **bold** (not __bold__: that form would eat Python dunders like __init__)
+        .replace(/\*\*(?=\S)([^\n]*?\S)\*\*/g, "$1")
+        .replace(/(^|[^\w*])\*(?=\S)([^*\n]*?\S)\*(?![\w*])/g, "$1$2") // *emphasis* (not a*b arithmetic)
+        .replace(BIG_O_RE, (_, inner: string) => `O of ${speakComplexity(inner)}`)
+        .replace(/[ \t]{2,}/g, " ")
+        .trim();
+}
+
+// Big-O notation: O( … ), allowing one level of nested parens, e.g. O(n log(n)).
+const BIG_O_RE = /\bO\(((?:[^()]|\([^()]*\))*)\)/g;
+
+/**
+ * The inside of a Big-O as it's said aloud. Browser voices mangle the written form (`O(N)` came out as
+ * "oxygen mononitride": the voice's own text normalization reads it as a chemical formula), so we hand
+ * both engines the spoken form instead: n^2 -> "n squared", n*m -> "n times m", log(n) -> "log n".
+ */
+function speakComplexity(inner: string): string {
+    return inner
+        .replace(/\(([^()]*)\)/g, " $1 ") // log(n) -> log n
+        .replace(/\^\s*2\b|²/g, " squared")
+        .replace(/\^\s*3\b|³/g, " cubed")
+        .replace(/\^\s*(\w+)/g, " to the $1")
+        .replace(/\s*\*\s*|\s*·\s*/g, " times ")
+        .replace(/\s*\+\s*/g, " plus ")
+        .replace(/\s+/g, " ")
+        .trim();
+}

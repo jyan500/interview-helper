@@ -16,12 +16,18 @@
 import Select from "react-select";
 import Modal from "./Modal";
 import MicMeter from "./MicMeter";
+import SegmentedControl from "./SegmentedControl";
 import { nocturneSelectStyles } from "../selectStyles";
 import type { TtsEngine } from "../voice/speech";
 
 type Mode = "voice" | "text";
 type EngineOption = { value: TtsEngine; label: string };
 type MicOption = { value: string; label: string };
+
+const MODE_OPTIONS: { value: Mode; label: string }[] = [
+    { value: "voice", label: "Voice" },
+    { value: "text", label: "Text" },
+];
 
 // The TTS engine picker options (react-select shape). Static, so module scope.
 const TTS_ENGINE_OPTIONS: EngineOption[] = [
@@ -59,19 +65,13 @@ export default function SettingsModal({
                 {/* ── Mode ─────────────────────────────────────────────────── */}
                 <div>
                     <div className="kicker">Mode</div>
-                    <div className="mt-2 flex overflow-hidden rounded-md border border-divider">
-                        {(["voice", "text"] as Mode[]).map((m) => (
-                            <button
-                                key={m}
-                                onClick={() => onChangeMode(m)}
-                                className={
-                                    "flex-1 px-4 py-2 text-[14px] capitalize transition " +
-                                    (mode === m ? "bg-accent text-white" : "text-neutral-300 hover:text-ink")
-                                }
-                            >
-                                {m}
-                            </button>
-                        ))}
+                    <div className="mt-2">
+                        <SegmentedControl<Mode>
+                            label="Mode"
+                            options={MODE_OPTIONS}
+                            value={mode}
+                            onChange={onChangeMode}
+                        />
                     </div>
                 </div>
 

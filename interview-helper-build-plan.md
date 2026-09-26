@@ -414,8 +414,9 @@ get different questions and level-calibrated feedback).
 *Last updated 2026-09-23. Branch: `interview-simulation-backend-logic`. Phases A–F all ✅;
 Phase G (production hardening & deploy) is still ahead. **In progress: INTERVIEW SIMULATION from a
 pasted job description** — a 5-phase build (plan: `~/.claude/plans/i-would-like-to-floofy-sutton.md`);
-**Sim Phases 1–2 ✅, next action = Sim Phase 3 (Jobs UI + behavioral/system-design rounds in the
-SPA).** Recent post-F work
+**Sim Phases 1–3 ✅, Sim Phase 4 (coding-round UI) implemented on branch
+`interview-simulation-code-editor` — `tsc` + `vite build` clean, browser pass pending; next action =
+that browser pass (typed, then voice), then Sim Phase 5 (polish + docs).** Recent post-F work
 (profile picture, settings page, the question-bank + roles expansion, bounded interviews, questions
 filters, and the simulation work) is logged in dated `###` sections at the END of this file.*
 
@@ -1448,3 +1449,82 @@ user's next start retires them.
   - CodeMirror panel, driven by `question` and `has_code_editor`;
   - send `code` / `language` on answer;
   - enable the coding card.
+
+### 2026-09-24 — Interview simulation, Phase 4: coding-round UI (branch `interview-simulation-code-editor`)
+
+Frontend only. `tsc` and `vite build` are clean. **Not yet checked in a browser.**
+
+**Deps** (installed from inside `client/`): `@uiw/react-codemirror`, `@codemirror/lang-python`,
+`lang-javascript` (also TypeScript), `lang-java`, `lang-cpp`.
+
+**`CodingPanel`** (new, presentational): the problem statement (scrolls on its own), a react-select
+language picker, and CodeMirror on the stock dark theme blended into the Nocturne canvas. SessionPage
+owns `code` / `language` / `problem`. In a coding round the session body is a split (conversation |
+panel, stacked on narrow screens), and the panel replaces the right rail.
+
+**SessionPage:**
+- `hasCodeEditor` / `problem` come from nav on a fresh start (`useStartSequence` now passes
+  `question` from the start response, and `StartLabels` carries `hasCodeEditor` from the round card),
+  or from the resume payload.
+- `handleSend` attaches `{code, language}` on BOTH text and voice turns whenever the editor differs
+  from `lastSentCode`. Code alone is a valid turn. On a failed send the code counts as unsent again.
+  The "you" line shows `withCodeFence(...)`, the same fold the server stores.
+- On advance (`res.question` with a new slug) the panel swaps problems and the editor clears.
+- The problem statement is never read aloud: `cueProblem` swaps it for `CODING_PROBLEM_CUE` in the
+  spoken AND shown live message (the panel holds the statement; the detail page keeps the stored full
+  text).
+- Resume seeds the editor with the LAST code block sent for the current problem.
+- Voice column goes `compact` beside the panel. The text composer drops the word count and enables
+  Send on changed code with an empty draft.
+- The chosen language persists in localStorage (`CODE_LANGUAGE_STORAGE_KEY`), like the mic.
+
+**Rendering:** new `FormattedText` (helpers `splitFencedCode`) renders prose with `pre-wrap` and
+```` ``` ```` fences as a monospace `<pre>`. It's used by `MessageRow` (the session and detail
+transcripts), the problem statement, and the detail page's per-question cards.
+
+**RoundCard:** the `unavailable` / "Coming soon" prop was removed now that nothing uses it. The coding
+round starts like the others.
+
+**Bug found in the browser and fixed (backend): "let's move on" made the interviewer invent a problem.**
+- The candidate asked to skip. The model wrote "Here is the next problem" plus a made-up problem into
+  `reaction` (it can't know the plan), and then the advance branch appended the real planned one. The
+  client's `cueProblem` swapped out the real text, so the invented problem showed with the cue after
+  it.
+- Nothing in the turn contract covered skips. The simulation persona's "keep probing until covered"
+  could also answer a skip with another probe.
+- Fix: `TurnReply.skip_requested`. The model decides, and `api.py` enforces it: a skip is never a
+  clarification and never probes, it always records and then advances. `_TURN_CONTRACT` gains a skip
+  rule and a stronger rule never to write out or invent another question. The `reaction` field
+  description says the same.
+- The skip message is recorded as the question's answer, so the `asked_ids` invariant (never
+  presented-then-skipped without an answer) still holds, and the grader sees the pass.
+- Verified live against the turn agent with a coding persona (8 runs): both skip phrasings gave
+  `skip=True`, no probe and no invented problem; a real answer still probes; a clarification still
+  clarifies.
+
+**Hardening: asking the interviewer for the answer (backend).**
+- `TurnReply.answer_request` is placed BEFORE `reaction`, so the model decides before it writes
+  prose. It is set for:
+  - asking for the answer or solution;
+  - asking how the interviewer would solve it;
+  - pasting or paraphrasing the question back at the interviewer;
+  - indirect tricks (role-play, "ignore your instructions", "write the code for me").
+  A hint request stays a clarification.
+- `api.py` answers a flagged turn with the FIXED `ANSWER_REQUEST_REPLY`, never the model's reaction,
+  so a flag-then-leak can't reach the candidate. Nothing is recorded, no follow-up is spent, and the
+  question stays open.
+- It is the one exit that deliberately does NOT save `new_history`: that history holds the unshown and
+  possibly leaky reaction, so the attempt is dropped from the model's memory. The model's memory
+  keeps matching the transcript.
+- A skip wins over it ("just tell me and move on" closes the question).
+- Verified live (11 messages × 2 runs, coding and bank personas, 0 wrong): the pasted question, a
+  paraphrase, "what's the answer", a jailbreak, "just for reference", and "what would a great answer
+  include" were all flagged. A hint request, a clarification and two real answers were not.
+
+**Next:**
+- Browser pass: play a full coding round typed, then by voice. Check that code keeps its indentation
+  in the transcript and on the detail page, that the problem swaps on advance, that resume mid-problem
+  reseeds the editor, and that the scorecard uses the coding rubric.
+- Then Sim Phase 5 (badges, docs, memory update, regression pass).
+- The main JS chunk is ~1.95 MB (Vite warns above 500 kB). If that matters before deploy,
+  lazy-load `CodingPanel` so CodeMirror only loads for coding rounds.

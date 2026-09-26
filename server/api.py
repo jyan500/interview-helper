@@ -474,6 +474,11 @@ async def start_interview(
 # what one turn (and every later replay of message_history) can cost.
 ANSWER_CODE_MAX_CHARS = 20_000
 
+# What the candidate sees when they fish for the answer (TurnReply.answer_request). FIXED text, not the
+# model's reaction: the flag is the model's judgement, but what's shown can't leak what it never says.
+ANSWER_REQUEST_REPLY = ("I can't give you the answer, since that part's yours. I'd like to hear how you'd "
+                        "approach it: talk me through your thinking, even if it's rough.")
+
 
 @app.post("/api/answer")
 async def submit_answer(
@@ -543,7 +548,22 @@ async def submit_answer(
     #    still not a free `return` — the conversation grew, so the history must be persisted
     #    or the model forgets it ever clarified. "No state change" and "no write" stopped
     #    being the same thing the moment the state became a row.
-    if decision.is_clarification:
+    #    ANSWER REQUEST — the candidate asked for the answer, or asked the question back at us. Decline
+    #    with the FIXED line and STAY on the question: nothing recorded, no follow-up spent.
+    #
+    #    THE ONE EXIT THAT DELIBERATELY DOESN'T WRITE `new_history` BACK. That history holds the model's
+    #    own reaction, which the candidate never saw and which could contain the very answer we're
+    #    withholding. Saving it would put that text in every later turn's replay, and the model's memory
+    #    would disagree with the transcript. Dropping the exchange means the model never saw the
+    #    attempt, and the next turn replays the conversation the candidate actually had.
+    #
+    #    A SKIP wins over this: "just tell me and move on" closes the question, so it advances below.
+    if decision.answer_request and not decision.skip_requested:
+        return {"message": ANSWER_REQUEST_REPLY, "done": False}
+
+    #    A SKIP request is never a clarification, whatever the model set: it falls through to record +
+    #    advance below, so "let's move on" can't strand the candidate on the question.
+    if decision.is_clarification and not decision.skip_requested:
         await save_interview_state(req.interview_id, message_history=new_history)
         return {"message": decision.reaction, "done": False}
 
@@ -570,7 +590,11 @@ async def submit_answer(
     #      None as "don't touch this column", so OMITTING a field is how you say "unchanged".
     #      One call, one UPDATE, one transaction: the spine can't end up out of step with the
     #      history sitting beside it in the same row.
-    if decision.ask_followup and state["followups_used"] < state["max_followups"]:
+    #        A SKIP request always advances. The candidate's "let's move on" is recorded above as the
+    #        question's answer, so the question is never presented-then-skipped without one (the
+    #        invariant Interview.asked_ids rests on), and the grader sees that they passed on it.
+    if (decision.ask_followup and not decision.skip_requested
+            and state["followups_used"] < state["max_followups"]):
         followups_used = state["followups_used"] + 1
         await save_interview_state(req.interview_id, followups_used=followups_used, message_history=new_history)
         # OPEN the next turn — the probe, filed under the SAME parent question (current_qid), so

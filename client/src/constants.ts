@@ -158,6 +158,69 @@ export const AVATAR_ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp", "
 export const JD_MIN_CHARS = 100;
 export const JD_MAX_CHARS = 20_000;
 
+/**
+ * The coding round's editor languages — the slug is what POST /api/answer sends as `language` (and so
+ * the fence's info string the model and the grader read); the label is the picker's. CodingPanel maps
+ * each slug to its CodeMirror syntax extension. The chosen language persists across coding rounds under
+ * CODE_LANGUAGE_STORAGE_KEY, like the mic.
+ */
+export const CODE_LANGUAGES = [
+    { value: "python", label: "Python" },
+    { value: "javascript", label: "JavaScript" },
+    { value: "typescript", label: "TypeScript" },
+    { value: "java", label: "Java" },
+    { value: "cpp", label: "C++" },
+] as const;
+export type CodeLanguage = (typeof CODE_LANGUAGES)[number]["value"];
+export const DEFAULT_CODE_LANGUAGE: CodeLanguage = "python";
+export const CODE_LANGUAGE_STORAGE_KEY = "ih.codeLanguage";
+
+/**
+ * The coding panel's editor preferences (the gear next to the language picker). Persisted as one JSON
+ * blob under EDITOR_SETTINGS_STORAGE_KEY so they follow the candidate across rounds.
+ *
+ *   fontSize     — px, 12–24; applied through the editor theme (CodeMirror has no font-size option).
+ *   keymap       — extra key bindings on top of the defaults (Vim/Emacs via @replit/codemirror-*).
+ *   tabSize      — the width of a tab AND what one indent inserts (that many spaces).
+ *   autocomplete — OFF by default: most real coding interviews hand you a plain editor.
+ */
+export type EditorKeymap = "default" | "vim" | "emacs";
+export type EditorSettings = {
+    fontSize: number;
+    keymap: EditorKeymap;
+    tabSize: 2 | 4;
+    autocomplete: boolean;
+};
+export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
+    fontSize: 14,
+    keymap: "default",
+    tabSize: 4,
+    autocomplete: false,
+};
+// Every whole px size from 12 to 24, as react-select options.
+export const EDITOR_FONT_SIZES: { value: number; label: string }[] = Array.from({ length: 13 }, (_, i) => ({
+    value: 12 + i,
+    label: `${12 + i}px`,
+}));
+export const EDITOR_KEYMAPS: { value: EditorKeymap; label: string }[] = [
+    { value: "default", label: "Default" },
+    { value: "vim", label: "Vim" },
+    { value: "emacs", label: "Emacs" },
+];
+export const EDITOR_SETTINGS_STORAGE_KEY = "ih.editorSettings";
+
+/**
+ * What the interviewer SAYS (and the live transcript shows) in place of a coding problem's statement —
+ * the full statement lives in the coding panel, and reading a problem aloud is useless to a candidate.
+ * The detail page still shows the stored full text.
+ *
+ * It asks for the complexity UP FRONT, explicitly: the coding rubric grades it, and a candidate who
+ * wasn't asked could otherwise lose points on a turn where the interviewer never probed for it.
+ */
+export const CODING_PROBLEM_CUE =
+    "Here's your problem — it's in the panel on the right. Take a minute to read it, then walk me through " +
+    "your approach, and be sure to state the time and space complexity of your solution.";
+
 export const PAGE_SIZE = 12
 // The shimmer look for loading placeholders — animation + shape + fill only. Each consumer adds its
 // own height (and inline-block/width) so one bar's dimensions don't leak into every skeleton.
