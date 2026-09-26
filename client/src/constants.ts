@@ -179,7 +179,7 @@ export const CODE_LANGUAGE_STORAGE_KEY = "ih.codeLanguage";
  * The coding panel's editor preferences (the gear next to the language picker). Persisted as one JSON
  * blob under EDITOR_SETTINGS_STORAGE_KEY so they follow the candidate across rounds.
  *
- *   fontSize     — px; applied through the editor theme (CodeMirror has no font-size option of its own).
+ *   fontSize     — px, 12–24; applied through the editor theme (CodeMirror has no font-size option).
  *   keymap       — extra key bindings on top of the defaults (Vim/Emacs via @replit/codemirror-*).
  *   tabSize      — the width of a tab AND what one indent inserts (that many spaces).
  *   autocomplete — OFF by default: most real coding interviews hand you a plain editor.
@@ -192,17 +192,16 @@ export type EditorSettings = {
     autocomplete: boolean;
 };
 export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
-    fontSize: 13.5,
+    fontSize: 14,
     keymap: "default",
     tabSize: 4,
     autocomplete: false,
 };
-export const EDITOR_FONT_SIZES = [
-    { value: 12, label: "S" },
-    { value: 13.5, label: "M" },
-    { value: 15, label: "L" },
-    { value: 17, label: "XL" },
-] as const;
+// Every whole px size from 12 to 24, as react-select options.
+export const EDITOR_FONT_SIZES: { value: number; label: string }[] = Array.from({ length: 13 }, (_, i) => ({
+    value: 12 + i,
+    label: `${12 + i}px`,
+}));
 export const EDITOR_KEYMAPS: { value: EditorKeymap; label: string }[] = [
     { value: "default", label: "Default" },
     { value: "vim", label: "Vim" },

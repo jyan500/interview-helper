@@ -6,9 +6,13 @@
  *
  * Presentational: renders the current settings and hands back a patch.
  */
+import Select from "react-select";
 import Modal from "./Modal";
 import SegmentedControl from "./SegmentedControl";
+import { nocturneSelectStyles } from "../selectStyles";
 import { EDITOR_FONT_SIZES, EDITOR_KEYMAPS, type EditorSettings } from "../constants";
+
+type FontSizeOption = (typeof EDITOR_FONT_SIZES)[number];
 
 const TAB_SIZES: { value: EditorSettings["tabSize"]; label: string }[] = [
     { value: 2, label: "2 spaces" },
@@ -36,11 +40,13 @@ export default function EditorSettingsModal({
                 <div>
                     <div className="kicker">Font size</div>
                     <div className="mt-2">
-                        <SegmentedControl
-                            label="Font size"
+                        <Select<FontSizeOption>
+                            aria-label="Font size"
                             options={EDITOR_FONT_SIZES}
-                            value={settings.fontSize}
-                            onChange={(fontSize) => onChange({ fontSize })}
+                            value={EDITOR_FONT_SIZES.find((o) => o.value === settings.fontSize)}
+                            onChange={(opt) => opt && onChange({ fontSize: opt.value })}
+                            isSearchable={false}
+                            styles={nocturneSelectStyles}
                         />
                     </div>
                 </div>
