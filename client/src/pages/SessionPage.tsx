@@ -32,17 +32,18 @@ import LoadingDots from "../components/LoadingDots";
 import SettingsModal from "../components/SettingsModal";
 import CodingPanel from "../components/CodingPanel";
 import Button from "../components/Button";
+import Tooltip from "../components/Tooltip";
 import { useGetScorecardMutation, useLazyGetResumeQuery, useSubmitAnswerMutation, type PlanQuestion } from "../api";
 import { useSessionNav } from "./SessionLayout";
 import {
     cueProblem,
     defaultVoiceMode,
     interviewTitle,
-    lastFencedCode,
     loadStoredCodeLanguage,
     loadStoredMicDeviceId,
     saveStoredCodeLanguage,
     saveStoredMicDeviceId,
+    sentCodeByLanguage,
     withCodeFence,
 } from "../helpers";
 import { CODING_PROBLEM_CUE, type CodeLanguage } from "../constants";
@@ -109,7 +110,14 @@ export default function SessionPage() {
     const [code, setCode] = useState("");
     const [lastSentCode, setLastSentCode] = useState("");
     const [language, setLanguage] = useState<CodeLanguage>(loadStoredCodeLanguage);
+    // What was written in the OTHER languages for this problem: switching languages parks the editor's
+    // contents under the old one and opens the new one blank (or with what was written in it before).
+    // `code` is always the current language's draft. Cleared along with `code` on a new problem.
+    const [codeDrafts, setCodeDrafts] = useState<Partial<Record<CodeLanguage, string>>>({});
     function handleChangeLanguage(next: CodeLanguage) {
+        if (next === language) return;
+        setCodeDrafts((drafts) => ({ ...drafts, [language]: code }));
+        setCode(codeDrafts[next] ?? "");
         setLanguage(next);
         saveStoredCodeLanguage(next); // the next coding round opens in it too
     }
@@ -249,7 +257,8 @@ export default function SessionPage() {
                 // model's own memory — reactions, clarifications — is already in message_history on the
                 // server; this is just the human transcript, same as the History detail view.)
                 // A coding round resumes into the panel: the problem on the table, and the editor seeded
-                // with the last code sent for it (marked as sent, so it isn't re-sent unchanged).
+                // with the code sent for it — each language's latest as its draft, opening in the language
+                // last sent (marked as sent, so it isn't re-sent unchanged).
                 // Set before the current question is spoken below, so a smart round's mic auto-arms
                 // when that speech ends (the edge effect) and a manual-only round's never does.
                 setAllowsSmartVoice(payload.allows_smart_voice);
@@ -260,16 +269,14 @@ export default function SessionPage() {
                 if (coding) {
                     setHasCodeEditor(true);
                     setProblem(payload.question);
-                    const lastCode = payload.turns
-                        .filter((t) => t.question_id === payload.question?.slug)
-                        .map((t) => lastFencedCode(t.answer))
-                        .filter((c) => c !== null)
-                        // turns are oldest-first and code can be re-sent (e.g. a fix after review), so
-                        // pop() takes only the LAST block — the most up-to-date version of the code.
-                        .pop();
-                    if (lastCode) {
-                        setCode(lastCode);
-                        setLastSentCode(lastCode);
+                    const sent = sentCodeByLanguage(
+                        payload.turns.filter((t) => t.question_id === payload.question?.slug).map((t) => t.answer),
+                    );
+                    if (sent.last) {
+                        setCodeDrafts(sent.byLanguage);
+                        setLanguage(sent.last.language);
+                        setCode(sent.last.code);
+                        setLastSentCode(sent.last.code);
                     }
                 }
                 const lines: Line[] = [];
@@ -363,6 +370,7 @@ export default function SessionPage() {
             if (res.question.slug !== problem?.slug) {
                 setProblem(res.question);
                 setCode("");
+                setCodeDrafts({}); // every language starts blank on the new problem
                 setLastSentCode("");
             }
         }
@@ -623,6 +631,17 @@ function VoiceColumn({
     // round-trip, and TTS synthesis, ending the instant the next question is revealed. One source of
     // truth, so there's no frame where it reads false while a turn is still being prepared.
     const thinking = preparing;
+    const voiceModeButton = (
+        <Button
+            variant="ghost"
+            className="flex items-center gap-2 border-l border-divider disabled:opacity-50"
+            style={{ padding: "13px 18px" }}
+            onClick={onToggleVoiceMode}
+            disabled={smartVoiceLocked || listening || confirming || preparing}
+        >
+            Mode: {voiceMode}
+        </Button>
+    );
     // justify-center-SAFE, not plain center: in a scrolling column, plain centering pushes overflow out
     // of BOTH ends, and the top half of a long question can't be scrolled back to. Safe centering centres
     // while it fits and falls back to top-aligned (scrollable) when it doesn't.
@@ -703,20 +722,15 @@ function VoiceColumn({
                             <Microphone size={17} weight="regular" />
                             {micLabel(listening, voiceMode)}
                         </Button>
-                        <Button
-                            variant="ghost"
-                            className="flex items-center gap-2 border-l border-divider disabled:opacity-50"
-                            style={{ padding: "13px 18px" }}
-                            onClick={onToggleVoiceMode}
-                            disabled={smartVoiceLocked || listening || confirming || preparing}
-                            title={
-                                smartVoiceLocked
-                                    ? "Smart mode is off for this round — thinking pauses would end your turn early"
-                                    : undefined
-                            }
-                        >
-                            Mode: {voiceMode}
-                        </Button>
+                        {/* When the round locks smart mode off, a Tooltip explains why the toggle is disabled.
+                            Only wrapped when locked — an empty Tooltip would still show a blank bubble on hover. */}
+                        {smartVoiceLocked ? (
+                            <Tooltip content="Smart mode is off for this round">
+                                {voiceModeButton}
+                            </Tooltip>
+                        ) : (
+                            voiceModeButton
+                        )}
                     </>
                 )}
                 <Button

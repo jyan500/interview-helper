@@ -147,10 +147,29 @@ export function splitFencedCode(text: string): MessagePart[] {
     return parts;
 }
 
-/** The last fenced code block in a message, or null — seeds the editor on resume. */
-export function lastFencedCode(text: string): string | null {
-    const code = splitFencedCode(text).filter((p) => p.kind === "code").pop();
-    return code?.kind === "code" ? code.code : null;
+/** Code sent for one problem, as the coding panel restores it on resume. */
+export interface SentCode {
+    byLanguage: Partial<Record<CodeLanguage, string>>; // the latest block per editor language
+    last: { language: CodeLanguage; code: string } | null; // the most recent block overall
+}
+
+/**
+ * The fenced code in a problem's answers (oldest-first) — seeds the editor's per-language drafts on
+ * resume. Code can be re-sent (e.g. a fix after review), so a later block for a language replaces an
+ * earlier one. A fence whose info string isn't an editor language is skipped.
+ */
+export function sentCodeByLanguage(answers: string[]): SentCode {
+    const result: SentCode = { byLanguage: {}, last: null };
+    for (const answer of answers) {
+        for (const part of splitFencedCode(answer)) {
+            if (part.kind !== "code") continue;
+            const language = CODE_LANGUAGES.find((l) => l.value === part.language)?.value;
+            if (!language) continue;
+            result.byLanguage[language] = part.code;
+            result.last = { language, code: part.code };
+        }
+    }
+    return result;
 }
 
 /**
