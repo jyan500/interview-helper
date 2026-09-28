@@ -59,6 +59,7 @@ export default function JobDetailPage() {
                 company: job.company,
                 round: round.name,
                 hasCodeEditor: round.has_code_editor,
+                allowsSmartVoice: round.allows_smart_voice,
             },
         );
     }

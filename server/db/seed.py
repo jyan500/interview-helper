@@ -319,6 +319,7 @@ async def seed() -> None:
                 "plan_size": round_data["plan_size"],
                 "max_followups": round_data["max_followups"],
                 "has_code_editor": round_data["has_code_editor"],
+                "allows_smart_voice": round_data["allows_smart_voice"],
             }
             round_type, was_new = await _get_or_create(db, RoundType, slug=round_slug, **fields)
             created["rounds"] += was_new

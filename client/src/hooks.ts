@@ -73,9 +73,13 @@ export function useSeededSelectFields<TForm extends FieldValues>(
 
 /**
  * What a producer knows about the start that /session needs: the header labels, plus whether the round
- * opens the coding panel (everything in SessionNavState the POST response doesn't supply).
+ * opens the coding panel and its voice-mode rule (everything in SessionNavState the POST response
+ * doesn't supply).
  */
-export type StartLabels = Pick<SessionNavState, "role" | "level" | "company" | "round" | "hasCodeEditor">;
+export type StartLabels = Pick<
+    SessionNavState,
+    "role" | "level" | "company" | "round" | "hasCodeEditor" | "allowsSmartVoice"
+>;
 
 /**
  * The interview KICKOFF sequence, shared by every producer (the Dashboard's bank start and a Job page's

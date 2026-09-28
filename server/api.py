@@ -259,13 +259,15 @@ class QuestionTypeOut(BaseModel):
 
 # INTERVIEW SIMULATION — the round cards on a Job page. Coerced off the RoundType ORM row. Only what
 # the client needs to render and branch: `guidance` (the generator/interviewer prose) and the budgets
-# stay server-side. `has_code_editor` is how the SPA knows to show the editor without a slug check.
+# stay server-side. `has_code_editor` is how the SPA knows to show the editor without a slug check;
+# `allows_smart_voice` likewise decides the voice turn-taking mode (smart default vs. manual-only).
 class RoundTypeOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     slug: str
     name: str
     description: str
     has_code_editor: bool
+    allows_smart_voice: bool
 
 
 # POST /api/jobs body — just the pasted posting; everything else is extracted from it.
@@ -1039,6 +1041,7 @@ async def resume_interview(
         "company": payload["company"],
         "round": payload["round"],
         "has_code_editor": payload["has_code_editor"],
+        "allows_smart_voice": payload["allows_smart_voice"],
         "question": payload["question"],
     }
 

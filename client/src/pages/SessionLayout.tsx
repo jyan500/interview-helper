@@ -30,6 +30,9 @@ import type { PlanQuestion } from "../api";
 //   company / round — a job SIMULATION's header labels instead (null/absent for a bank interview).
 //   hasCodeEditor / question — FRESH START of a coding round: open with the coding panel, showing the
 //                  first plan question. A RESUME learns both from the resume payload instead.
+//   allowsSmartVoice — FRESH START of a round: whether smart voice turn-taking is offered (then the
+//                  default) or the round is manual-only. Absent for a bank interview. A RESUME learns it
+//                  from the resume payload.
 export type SessionNavState = {
     interviewId: string;
     firstMessage?: string;
@@ -39,6 +42,7 @@ export type SessionNavState = {
     company?: string | null;
     round?: string | null;
     hasCodeEditor?: boolean;
+    allowsSmartVoice?: boolean | null;
     question?: PlanQuestion | null;
 };
 
