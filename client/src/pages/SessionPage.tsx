@@ -36,6 +36,7 @@ import { useGetScorecardMutation, useLazyGetResumeQuery, useSubmitAnswerMutation
 import { useSessionNav } from "./SessionLayout";
 import {
     cueProblem,
+    defaultVoiceMode,
     interviewTitle,
     lastFencedCode,
     loadStoredCodeLanguage,
@@ -132,7 +133,14 @@ export default function SessionPage() {
     // "smart" = VAD notices silence -> "still there?" countdown -> auto stop+submit, and the mic
     // auto-opens after the AI finishes speaking (the edge effect below). onFinalTranscript is the
     // COMBINED stop+send: the hook hands us the Whisper text and we submit it like a typed answer.
-    const [voiceMode, setVoiceMode] = useState<TurnMode>("manual");
+    //
+    // The ROUND decides the mode (allows_smart_voice on its row): behavioral opens in smart with manual
+    // still selectable; coding and system design are manual-only, since their long thinking pauses
+    // would trip the silence countdown and submit a half-answer. A bank interview (no round, so
+    // null/absent) keeps the free choice and opens in manual. A resume learns the rule from its payload.
+    const [allowsSmartVoice, setAllowsSmartVoice] = useState(nav.allowsSmartVoice);
+    const [voiceMode, setVoiceMode] = useState<TurnMode>(() => defaultVoiceMode(nav.allowsSmartVoice));
+    const smartVoiceLocked = allowsSmartVoice === false;
 
     // Which microphone to capture from. "" = system default; a real deviceId pins that exact mic —
     // the picker exists because a wrong default mic silently recorded nothing on Firefox. Threaded
@@ -242,6 +250,10 @@ export default function SessionPage() {
                 // server; this is just the human transcript, same as the History detail view.)
                 // A coding round resumes into the panel: the problem on the table, and the editor seeded
                 // with the last code sent for it (marked as sent, so it isn't re-sent unchanged).
+                // Set before the current question is spoken below, so a smart round's mic auto-arms
+                // when that speech ends (the edge effect) and a manual-only round's never does.
+                setAllowsSmartVoice(payload.allows_smart_voice);
+                setVoiceMode(defaultVoiceMode(payload.allows_smart_voice));
                 const coding = payload.has_code_editor;
                 const problemText = payload.question?.text;
                 const shown = (text: string) => (coding ? cueProblem(text, problemText, CODING_PROBLEM_CUE) : text);
@@ -493,6 +505,7 @@ export default function SessionPage() {
                         // recording starts mid-preparation. No OR of transcribing/answering -> no gap.
                         preparing={preparing}
                         voiceMode={voiceMode}
+                        smartVoiceLocked={smartVoiceLocked}
                         supported={supported}
                         confirming={confirming}
                         countdownMs={countdownMs}
@@ -569,6 +582,7 @@ function VoiceColumn({
     speaking,
     preparing,
     voiceMode,
+    smartVoiceLocked,
     supported,
     confirming,
     countdownMs,
@@ -590,6 +604,8 @@ function VoiceColumn({
     speaking: boolean;
     preparing: boolean;
     voiceMode: TurnMode;
+    // A manual-only round (coding, system design): the mode toggle stays visible but can't be flipped.
+    smartVoiceLocked: boolean;
     supported: boolean;
     confirming: boolean;
     countdownMs: number;
@@ -692,7 +708,12 @@ function VoiceColumn({
                             className="flex items-center gap-2 border-l border-divider disabled:opacity-50"
                             style={{ padding: "13px 18px" }}
                             onClick={onToggleVoiceMode}
-                            disabled={listening || confirming || preparing}
+                            disabled={smartVoiceLocked || listening || confirming || preparing}
+                            title={
+                                smartVoiceLocked
+                                    ? "Smart mode is off for this round — thinking pauses would end your turn early"
+                                    : undefined
+                            }
                         >
                             Mode: {voiceMode}
                         </Button>

@@ -302,6 +302,10 @@ class RoundType(Base, TimestampMixin):
                        behavioral one.
       has_code_editor  whether the SPA shows the code editor. A flag, so the client never branches
                        on a slug.
+      allows_smart_voice  whether the SPA offers "smart" voice turn-taking (VAD silence -> countdown
+                       -> auto-submit) — and, when offered, opens in it. Off for coding and system
+                       design: long thinking pauses there blow past the silence threshold and would
+                       submit a half-answer, so those rounds are manual-only.
     Its grading rubric hangs off it too (Rubric.round_type_id) — see Rubric.
     """
     __tablename__ = "round_types"
@@ -314,6 +318,7 @@ class RoundType(Base, TimestampMixin):
     plan_size: Mapped[int] = mapped_column(Integer)
     max_followups: Mapped[int] = mapped_column(Integer)
     has_code_editor: Mapped[bool] = mapped_column(Boolean, default=False)
+    allows_smart_voice: Mapped[bool] = mapped_column(Boolean, default=False)
 
     rubric: Mapped[Rubric | None] = relationship(back_populates="round_type", lazy="selectin")
 

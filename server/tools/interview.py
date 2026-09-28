@@ -1270,6 +1270,9 @@ async def load_resume_payload(interview_id: str) -> dict:
             **_simulation_fields(interview),
             "has_code_editor": (interview.round_type.has_code_editor
                                 if interview.round_type is not None else False),
+            # None for a bank interview (no round) — the SPA keeps its free manual/smart choice there.
+            "allows_smart_voice": (interview.round_type.allows_smart_voice
+                                   if interview.round_type is not None else None),
             "question": ({"slug": interview.current_question.slug,
                           "text": interview.current_question.text}
                          if interview.current_question is not None else None),

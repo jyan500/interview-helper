@@ -117,10 +117,12 @@ export interface AnswerRequest {
 }
 
 // INTERVIEW SIMULATION — a round FORMAT a job can be simulated in (GET /api/round-types), mirroring
-// RoundTypeOut. `has_code_editor` is how the SPA knows a round needs the editor, without a slug check.
+// RoundTypeOut. `has_code_editor` is how the SPA knows a round needs the editor, without a slug check;
+// `allows_smart_voice` says whether smart voice turn-taking is offered (and is then the default).
 export interface RoundTypeItem extends BasePageItem {
     description: string;
     has_code_editor: boolean;
+    allows_smart_voice: boolean;
 }
 // A saved job as listed (GET /api/jobs), mirroring JobOut. role/level carry the SLUG (edit pickers)
 // and the NAME (display). JobDetail adds the long fields the list never shows.
@@ -234,6 +236,7 @@ export interface ResumePayload extends SimulationFields {
     turns: ResumeTurn[];
     current_question: string | null;
     has_code_editor: boolean; // a coding round — resume into the editor layout
+    allows_smart_voice: boolean | null; // the round's voice-mode rule; null for a bank interview (no round)
     question: PlanQuestion | null; // the PARENT plan question on the table, even mid-probe
 }
 

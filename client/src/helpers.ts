@@ -4,6 +4,7 @@
  */
 import type { SelectOption } from "./components/AsyncPaginateSelect";
 import type { BasePageItem } from "./api";
+import type { TurnMode } from "./voice/speech";
 import {
     AVATAR_ACCEPTED_TYPES,
     AVATAR_MAX_BYTES,
@@ -150,6 +151,15 @@ export function splitFencedCode(text: string): MessagePart[] {
 export function lastFencedCode(text: string): string | null {
     const code = splitFencedCode(text).filter((p) => p.kind === "code").pop();
     return code?.kind === "code" ? code.code : null;
+}
+
+/**
+ * The voice turn-taking mode a session opens in. A round that offers smart mode (behavioral) opens in
+ * it; a manual-only round (coding, system design — long thinking pauses would trip the silence
+ * countdown) opens in manual. A bank interview has no round (`null`/absent) and keeps manual.
+ */
+export function defaultVoiceMode(allowsSmartVoice: boolean | null | undefined): TurnMode {
+    return allowsSmartVoice ? "smart" : "manual";
 }
 
 /**
