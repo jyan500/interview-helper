@@ -124,7 +124,6 @@ from tools.interview import (
     get_scorecard,
     get_resumable_interview,
     list_interviews,
-    list_interviewed_roles,
     load_grading_context,
     load_interview_state,
     load_resume_payload,
@@ -1193,9 +1192,10 @@ async def new_job(body: JobCreate, user_id: str = Depends(require_user)):
 async def my_jobs(
     params: Params = Depends(),
     q: str | None = None,
+    graded: bool | None = None,   # only jobs with a graded simulation (the signal panel's picker)
     user_id: str = Depends(require_user),
 ):
-    return await list_jobs_page(user_id, params, q=q)
+    return await list_jobs_page(user_id, params, q=q, graded=graded)
 
 
 async def _owned_job(job_id: str, user_id: str) -> dict:
@@ -1292,9 +1292,9 @@ async def save_profile_questions(
 # GET  /api/profile        — this user's display name + default role/level (for the kickoff
 #                            form's pre-fill and the panel's initial role).
 # PATCH /api/profile       — set that default (the "Set as default" control).
-# GET  /api/dashboard/roles — the roles the user has a graded interview for (the picker's options),
-#                            PAGINATED like /api/roles because a heavy user's list can exceed a page.
-# GET  /api/dashboard      — the role-scoped readiness / skill breakdown / work-on-next.
+# GET  /api/dashboard      — the SIMULATION signal: round-scoped (optionally job-narrowed) readiness /
+#                            skill breakdown / work-on-next. The job picker's options come from
+#                            GET /api/jobs?graded=true; the round picker's from /api/round-types.
 #
 # All owner-scoped the same way as /api/interviews: the VERIFIED uid goes straight into the query,
 # never an id from the request, so there's nothing to authorize separately — "my dashboard" can't
@@ -1358,22 +1358,14 @@ async def delete_profile_avatar(user_id: str = Depends(require_user)) -> dict:
     return result
 
 
-@app.get("/api/dashboard/roles", response_model=Page[RoleOut])
-async def dashboard_roles(
-    params: Params = Depends(),
-    q: str | None = None,
-    user_id: str = Depends(require_user),
-):
-    return await list_interviewed_roles(user_id, params, search=q)
-
-
 @app.get("/api/dashboard")
 async def dashboard(
-    role: str | None = None,
+    round: str | None = None,    # round-type slug (omit => the most recently graded simulation's round)
+    job: str | None = None,      # job slug (omit => across every job)
     period: str | None = None,   # "week"|"month"|"year" — the time window (get_dashboard defaults it)
     user_id: str = Depends(require_user),
 ) -> dict:
-    return await get_dashboard(user_id, role_slug=role, period=period)
+    return await get_dashboard(user_id, round_slug=round, job_slug=job, period=period)
 
 
 # NOTE — deliberately NOT calling `add_pagination(app)`. In fastapi-pagination 0.15.16 that helper

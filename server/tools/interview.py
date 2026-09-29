@@ -892,9 +892,11 @@ async def get_scorecard(interview_id: str) -> dict:
 #   Readiness       -> each graded interview's `scorecards.overall`, oldest -> newest (a trend)
 #   Skill breakdown -> per-dimension averages across those interviews' ScorecardEntryScore rows
 #   Work on next    -> the `improvement` line off recent ScorecardEntry rows
-# All THREE are scoped to ONE role, because a rubric's dimensions are role-specific — averaging
-# "Tradeoff reasoning" for a backend role together with a PM role would blend two different bars.
-# The role is the user's pick (the picker), else their profile default, else their most-recent.
+# The dashboard tracks INTERVIEW SIMULATIONS (the app's main mode), and all THREE cards are scoped
+# to ONE ROUND TYPE, because a simulation is graded on its round's rubric — averaging a coding
+# round's "Code correctness" with a behavioral round's dimensions would blend two different bars.
+# The round is the user's pick, else the round of their most recently graded simulation. An
+# optional job narrows it further (one company's rounds); omitted = across every job.
 # ===========================================================================
 
 # How many "work on next" improvement lines the dashboard surfaces — the most recent few, so
@@ -989,121 +991,113 @@ async def set_profile_avatar(profile_id: str, avatar_url: str | None) -> dict:
         return {"ok": True}
 
 
-async def list_interviewed_roles(profile_id: str, params: Params, *, search: str | None = None):
-    """A PAGE of the DISTINCT roles this user has a GRADED interview for — the signal panel's role
-    picker options. Paginated (the picker is an async-paginate select, and a heavy user's role
-    count can exceed one page) and owner-scoped by the same WHERE clause as list_interviews.
-
-    GRADED only (an inner join to `scorecards`): the three cards are all built from the grade, so a
-    role with only ungraded interviews has nothing to show and would be a dead option. `.distinct()`
-    collapses the one-row-per-interview the join produces back to one row per role; ordered by name
-    so the menu is stable. Returns fastapi-pagination's Page[Role]; RoleOut serializes each row (same
-    as list_roles), so the picker reads {slug, name} exactly like GET /api/roles."""
-    async with get_session() as db:
-        stmt = (
-            select(Role)
-            .join(Interview, Interview.role_id == Role.id)
-            .join(Scorecard, Scorecard.interview_id == Interview.id)
-            # bank interviews only — see get_dashboard's SIMULATIONS note
-            .where(Interview.profile_id == profile_id, Interview.job_id.is_(None))
-        )
-        if search:
-            stmt = stmt.where(Role.name.ilike(f"%{search}%"))
-        stmt = stmt.distinct().order_by(Role.name)
-        return await apaginate(db, stmt, params)
-
-
 def _empty_readiness() -> dict:
-    """The readiness block when there's nothing graded for the selected role — no series, no
+    """The readiness block when there's nothing graded for the selected round — no series, no
     latest, no delta. The client renders the empty-state placeholder from `count == 0`."""
     return {"series": [], "latest": None, "delta": None, "count": 0}
 
 
 async def get_dashboard(
-    profile_id: str, role_slug: str | None = None, period: str | None = None
+    profile_id: str,
+    round_slug: str | None = None,
+    job_slug: str | None = None,
+    period: str | None = None,
 ) -> dict:
-    """The signal panel's role-scoped aggregates — readiness trend, skill breakdown, work-on-next.
+    """The signal panel's round-scoped aggregates over the user's SIMULATIONS — readiness trend,
+    skill breakdown, work-on-next.
 
-    ROLE RESOLUTION (the "effective role" the panel opens on):
+    ROUND RESOLUTION (the "effective round" the panel opens on):
       1. the slug the client asked for (the picker's current value), if given and real;
-      2. else the profile's default role;
-      3. else the user's most-recently-graded role;
-      4. else None — the user has no graded interviews at all (a first-visit empty state).
-    The chosen role's slug + name are echoed back so the picker can seed its label without a
-    second lookup. Role resolution is NOT time-bounded — we pick a sensible role first, then the
-    window filters its interviews (so a too-narrow window shows that role's empty state, not a
-    different role's data).
+      2. else the round of the user's most-recently-graded simulation;
+      3. else None — the user has no graded simulations at all (a first-visit empty state).
+    The chosen round's slug + name are echoed back so the picker can seed its label without a
+    second lookup. Resolution is NOT time-bounded — we pick a sensible round first, then the
+    window filters its interviews (so a too-narrow window shows that round's empty state, not a
+    different round's data).
+
+    JOB FILTER: `job_slug` narrows to one job's simulations (an EXISTS on the job's slug, like
+    list_interviews(job=)); omitted = across every job. The query is owner-scoped on the verified
+    uid, so another user's job slug just matches nothing — no separate authorization needed. The
+    job's "company · title" is echoed back (None when unfiltered or not the caller's).
 
     TIME WINDOW: `period` ("week"|"month"|"year", default "month") bounds the aggregates to
     interviews graded within that lookback — the client's window control. The effective period is
     echoed back so the client can reflect what was actually applied.
 
-    Then, over this user's GRADED interviews FOR THAT ROLE within the window, oldest -> newest:
+    Then, over this user's GRADED simulations OF THAT ROUND within the window, oldest -> newest:
       readiness       — `overall` per interview as a series (the sparkline), plus latest, the
                         delta across the window (latest - earliest, None with < 2), and the count.
-      skill_breakdown — every ScorecardEntryScore averaged per dimension, in the rubric's own
+      skill_breakdown — every ScorecardEntryScore averaged per dimension, in the ROUND rubric's own
                         dimension order (aggregate_scores with that whitelist both orders and drops
                         any stray name). One {dimension, average} per bar.
       work_on_next    — the `improvement` line off recent entries (newest interview first), capped.
 
-    All the nested rows (scorecard -> entries -> scores -> dimension, and role.rubric.dimensions)
+    All the nested rows (scorecard -> entries -> scores -> dimension, and round.rubric.dimensions)
     are selectin-loaded, so this walks them in Python — no GROUP BY SQL — exactly like get_scorecard.
 
-    SIMULATIONS ARE EXCLUDED (`job_id IS NULL` on every query here and in list_interviewed_roles).
-    A simulation is graded on its ROUND's rubric, not the role's, so its dimensions wouldn't line up
-    with this role's skill bars, and its overall would blend a different bar into the readiness trend.
+    BANK INTERVIEWS ARE EXCLUDED (`job_id IS NOT NULL` on every query here). A bank interview is
+    graded on its ROLE's rubric, so its dimensions wouldn't line up with the round's skill bars.
     """
     period = period if period in DASHBOARD_PERIODS else DASHBOARD_DEFAULT_PERIOD
     cutoff = datetime.now(timezone.utc) - DASHBOARD_PERIODS[period]
     async with get_session() as db:
-        # (1)-(4) resolve the effective role.
-        role_row = None
-        if role_slug:
-            role_row = (
-                await db.execute(select(Role).where(Role.slug == role_slug))
+        # (1)-(3) resolve the effective round.
+        round_row = None
+        if round_slug:
+            round_row = (
+                await db.execute(select(RoundType).where(RoundType.slug == round_slug))
             ).scalar_one_or_none()
-        if role_row is None and not role_slug:
-            profile = (
-                await db.execute(select(Profile).where(Profile.id == profile_id))
+        if round_row is None and not round_slug:
+            recent = (
+                await db.execute(
+                    select(Interview)
+                    .join(Interview.scorecard)   # inner join -> graded interviews only
+                    .where(Interview.profile_id == profile_id, Interview.job_id.is_not(None))
+                    .order_by(Interview.created_at.desc())
+                    .limit(1)
+                )
             ).scalar_one_or_none()
-            if profile is not None and profile.role is not None:
-                role_row = profile.role
-            if role_row is None:
-                recent = (
-                    await db.execute(
-                        select(Interview)
-                        .join(Interview.scorecard)   # inner join -> graded interviews only
-                        .where(Interview.profile_id == profile_id, Interview.job_id.is_(None))
-                        .order_by(Interview.created_at.desc())
-                        .limit(1)
-                    )
-                ).scalar_one_or_none()
-                if recent is not None:
-                    role_row = recent.role
-        if role_row is None:
+            if recent is not None:
+                round_row = recent.round_type
+
+        # the job filter's display name — owner-scoped, so a stranger's slug resolves to None.
+        job_row = None
+        if job_slug:
+            job_row = (
+                await db.execute(
+                    select(Job).where(Job.slug == job_slug, Job.profile_id == profile_id)
+                )
+            ).scalar_one_or_none()
+        job_name = f"{job_row.company} · {job_row.title}" if job_row is not None else None
+
+        if round_row is None:
             return {
-                "role": None,
-                "role_name": None,
+                "round": None,
+                "round_name": None,
+                "job": job_row.slug if job_row is not None else None,
+                "job_name": job_name,
                 "period": period,
                 "readiness": _empty_readiness(),
                 "skill_breakdown": [],
                 "work_on_next": [],
             }
 
-        # this role's graded interviews WITHIN THE WINDOW, oldest -> newest (the trend's natural
+        # this round's graded simulations WITHIN THE WINDOW, oldest -> newest (the trend's natural
         # order). The `created_at >= cutoff` predicate is the time-window filter.
-        interviews = (
-            await db.execute(
-                select(Interview)
-                .join(Interview.scorecard)
-                .where(
-                    Interview.profile_id == profile_id,
-                    Interview.role_id == role_row.id,
-                    Interview.job_id.is_(None),
-                    Interview.created_at >= cutoff,
-                )
-                .order_by(Interview.created_at.asc())
+        stmt = (
+            select(Interview)
+            .join(Interview.scorecard)
+            .where(
+                Interview.profile_id == profile_id,
+                Interview.job_id.is_not(None),
+                Interview.round_type_id == round_row.id,
+                Interview.created_at >= cutoff,
             )
+        )
+        if job_slug:
+            stmt = stmt.where(Interview.job.has(Job.slug == job_slug))
+        interviews = (
+            await db.execute(stmt.order_by(Interview.created_at.asc()))
         ).scalars().all()
 
         series = [iv.scorecard.overall for iv in interviews]
@@ -1125,7 +1119,7 @@ async def get_dashboard(
                 for score in entry.scores:
                     pairs.append((score.dimension.name, score.score))
         dim_names = (
-            [d.name for d in role_row.rubric.dimensions] if role_row.rubric is not None else None
+            [d.name for d in round_row.rubric.dimensions] if round_row.rubric is not None else None
         )
         agg = aggregate_scores(pairs, dim_names)
         skill_breakdown = [
@@ -1145,8 +1139,10 @@ async def get_dashboard(
                 break
 
         return {
-            "role": role_row.slug,
-            "role_name": role_row.name,
+            "round": round_row.slug,
+            "round_name": round_row.name,
+            "job": job_row.slug if job_row is not None else None,
+            "job_name": job_name,
             "period": period,
             "readiness": readiness,
             "skill_breakdown": skill_breakdown,

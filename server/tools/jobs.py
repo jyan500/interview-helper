@@ -25,7 +25,7 @@ from fastapi_pagination.ext.sqlalchemy import apaginate
 from sqlalchemy import delete, or_, select
 
 from db.engine import get_session
-from db.models import Interview, Job, Level, Role
+from db.models import Interview, Job, Level, Role, Scorecard
 
 
 def _job_dict(job: Job, *, detail: bool = False) -> dict:
@@ -111,16 +111,28 @@ async def get_job(job_id: str) -> dict:
         return {"status": "ok", "profile_id": job.profile_id, "job": _job_dict(job, detail=True)}
 
 
-async def list_jobs_page(profile_id: str, params: Params, *, q: str | None = None) -> dict:
+async def list_jobs_page(
+    profile_id: str, params: Params, *, q: str | None = None, graded: bool | None = None
+) -> dict:
     """A PAGE of one user's jobs, newest first — backs GET /api/jobs.
 
     Owner-scoped by the WHERE on `profile_id` (the verified uid, never a request field). `q` is a
     case-insensitive substring match on company OR title — the two things a person remembers a
-    posting by. Returns the {items, total, page, size, pages} envelope with list-shaped items."""
+    posting by. `graded=True` keeps only jobs with at least one GRADED simulation (an EXISTS over
+    interviews joined to scorecards) — the dashboard signal panel's job picker, where a job with
+    nothing graded would be a dead option. Returns the {items, total, page, size, pages} envelope
+    with list-shaped items."""
     async with get_session() as db:
         stmt = select(Job).where(Job.profile_id == profile_id)
         if q:
             stmt = stmt.where(or_(Job.company.ilike(f"%{q}%"), Job.title.ilike(f"%{q}%")))
+        if graded:
+            stmt = stmt.where(
+                select(Interview.id)
+                .join(Scorecard, Scorecard.interview_id == Interview.id)
+                .where(Interview.job_id == Job.id)
+                .exists()
+            )
         stmt = stmt.order_by(Job.created_at.desc())
         page = await apaginate(db, stmt, params)
         return {
