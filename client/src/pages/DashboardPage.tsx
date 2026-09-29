@@ -79,7 +79,7 @@ export default function DashboardPage() {
     );
 
     // "Set as default" — persist the currently-picked role + level to the profile (PATCH /api/profile),
-    // so it becomes next visit's pre-fill and the signal panel's default scope. Watched so the button
+    // so it becomes next visit's pre-fill. Watched so the button
     // enables only once both are picked; a toast confirms (or reports) the write without a route change.
     const { toast } = useToast();
     const [saveDefault, { isLoading: savingDefault }] = useUpdateProfileMutation();
@@ -310,8 +310,8 @@ export default function DashboardPage() {
                         </div>
                     </div>
 
-                    {/* ── Right column (signal) — role- and window-scoped readiness / skill breakdown /
-                        work on next, self-contained (fetches its own data). ─────────────────────── */}
+                    {/* ── Right column (signal) — simulation readiness / skill breakdown / work on next,
+                        scoped by round (+ optional job) and window; self-contained. ─────────────── */}
                     <SignalPanel />
                 </div>
             </div>

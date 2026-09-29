@@ -1,10 +1,10 @@
 /**
  * Readiness card — the signal panel's headline trend (Nocturne mock 1a), now data-driven.
  *
- * The big number is the latest graded interview's overall (the app's 1-5 scale, same as the
+ * The big number is the latest graded simulation's overall (the app's 1-5 scale, same as the
  * scorecard Donut and the interviews table); the delta is the change across the selected window,
  * and the Sparkline plots the series. All of it comes from GET /api/dashboard, scoped to the
- * chosen role + time window.
+ * chosen round (+ optional job) and time window.
  *
  * THREE STATES inside the shared SignalCard shell: `loading` shows a shape-matching skeleton (so the
  * panel holds its layout while the fetch is in flight); with nothing graded in the window
@@ -37,7 +37,7 @@ export default function ReadinessCard({
                 </>
             ) : latest === null ? (
                 <p className="mt-2 text-[13px] text-neutral-400">
-                    Complete an interview for this role to see your readiness trend.
+                    Complete a simulation of this round to see your readiness trend.
                 </p>
             ) : (
                 <>

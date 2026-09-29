@@ -1,6 +1,6 @@
 /**
  * Work on next card (Nocturne mock 1a) — a short numbered list of the most recent `improvement`
- * lines from the selected role's graded interviews (GET /api/dashboard), newest first. It's the
+ * lines from the selected round's graded simulations (GET /api/dashboard), newest first. It's the
  * "what to fix next" prompt, capped server-side so it stays a nudge, not a backlog.
  *
  * States inside the shared SignalCard shell: `loading` -> shape-matching skeleton rows (an index box
@@ -39,7 +39,7 @@ export default function WorkOnNextCard({
                 </div>
             ) : items.length === 0 ? (
                 <p className="mt-2 text-[13px] text-neutral-400">
-                    No suggestions yet — finish an interview to get targeted next steps.
+                    No suggestions yet — finish a simulation to get targeted next steps.
                 </p>
             ) : (
                 <div className="mt-3 flex flex-col gap-3 text-[13.5px] leading-[1.4]">

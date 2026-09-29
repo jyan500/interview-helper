@@ -1528,3 +1528,42 @@ round starts like the others.
 - Then Sim Phase 5 (badges, docs, memory update, regression pass).
 - The main JS chunk is ~1.95 MB (Vite warns above 500 kB). If that matters before deploy,
   lazy-load `CodingPanel` so CodeMirror only loads for coding rounds.
+
+### 2026-09-29 — Simulation dashboard: the signal panel tracks simulations, scoped by round
+
+**Backend (PR #43, merged 2026-09-28):**
+- `GET /api/dashboard` now aggregates SIMULATIONS only (`job_id IS NOT NULL`) and takes `round` + an
+  optional `job` in place of `role`. With no `round`, it uses the round of the most recently graded
+  simulation; the profile default no longer plays a part. It echoes `round`/`round_name` and
+  `job`/`job_name`.
+- `GET /api/dashboard/roles` and `list_interviewed_roles` are removed. The job picker uses
+  `GET /api/jobs?graded=true` (jobs that have a graded simulation). The round picker uses
+  `/api/round-types`.
+
+**Frontend (this phase).** `tsc` and `vite build` are clean. **Not yet checked in a browser.**
+- `api.ts`: `DashboardData` and `DashboardQuery` switch to round/job. `getInterviewedRoles` is
+  removed. A new `getGradedJobOptions` calls `/jobs?graded=true` and reshapes each job into a
+  `{slug: job_id, name: "company · title"}` picker row. `useLazyGetRoundTypesQuery` is exported.
+  `OptionPageQuery` is now a type alias, so the round-types trigger (which takes a `QueryParams`) can
+  feed a picker.
+- Tags:
+  - `updateProfile` no longer invalidates "Dashboard", because the panel doesn't read the default.
+  - `updateJob` invalidates "Dashboard", because the panel shows the job's name.
+  - `deleteJob` invalidates "Dashboard", because the cascade removes graded simulations.
+- `SignalPanel` has three pickers, applied on submit:
+  - round (required; its label comes from the round the backend resolved);
+  - job (optional, clearable, placeholder "All jobs");
+  - period.
+- `AsyncPaginateSelect` takes a new `isClearable` pass-through.
+- The empty-state text and comments on the Readiness, Skill breakdown and Work on next cards now say
+  round/simulation instead of role/interview.
+
+**Next:**
+- Browser pass:
+  - a cold load resolves the round and seeds its label;
+  - switching rounds changes the skill bars to that round's rubric;
+  - the job filter narrows the results, and clearing it returns to "All jobs";
+  - grading a new simulation refetches the panel and can add a job to the picker;
+  - deleting a job refreshes the panel.
+- Open question: the left column (Start an interview / My questions / Past interviews) is still
+  bank-oriented, while the signal panel now tracks simulations only.

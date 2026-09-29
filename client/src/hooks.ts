@@ -37,7 +37,7 @@ export interface SeededSelectField<TForm extends FieldValues> {
 
 /**
  * Pre-fill one or more react-select form fields from async source data (a profile default, the
- * dashboard's resolved role, …), re-seeding whenever `key` changes and NEVER on a same-key refetch.
+ * dashboard's resolved round, …), re-seeding whenever `key` changes and NEVER on a same-key refetch.
  * Pass `key = null` while there's nothing to seed from yet (data not loaded, no default set).
  *
  * WHY A KEY, NOT A FIRE-ONCE BOOLEAN — the bug this replaces: a boolean latches on whatever data is

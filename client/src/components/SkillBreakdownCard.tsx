@@ -1,6 +1,6 @@
 /**
  * Skill breakdown card (Nocturne mock 1a) — one <ScoreBar> per rubric dimension, filled to its
- * average score across the selected role's graded interviews in the window (GET /api/dashboard). The
+ * average score across the selected round's graded simulations in the window (GET /api/dashboard). The
  * bar itself is shared with the interview detail page (see ScoreBar); this card only supplies the
  * data and marks the weakest dimension as the low bar.
  *
