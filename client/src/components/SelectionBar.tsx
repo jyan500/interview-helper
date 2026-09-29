@@ -1,8 +1,8 @@
 /**
  * The sticky "you've changed your selection" bar for the QuestionsTable curation flow. Renders only
  * when there are unsaved changes (`dirty`), showing the running count of selected questions plus
- * Reset and Save. Shared by the dashboard "My questions" section, the Add-question modal, and the
- * Questions page — a dumb presentational strip; the staging + Save live in useQuestionSelection.
+ * Reset and Save. Used by the Questions page — a dumb presentational strip; the staging + Save live
+ * in useQuestionSelection.
  *
  * Sticky to the bottom of its scroll container so it stays reachable while paging through a long
  * list. Its own visibility is toggled with the `hidden` attribute (never display) per the app rule.

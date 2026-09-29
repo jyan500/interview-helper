@@ -218,7 +218,7 @@ export const EDITOR_SETTINGS_STORAGE_KEY = "ih.editorSettings";
  * wasn't asked could otherwise lose points on a turn where the interviewer never probed for it.
  */
 export const CODING_PROBLEM_CUE =
-    "Here's your problem — it's in the panel on the right. Take a minute to read it, then walk me through " +
+    "Here's your problem. It's in the panel on the right. Take a minute to read it, then walk me through " +
     "your approach, and be sure to state the time and space complexity of your solution.";
 
 export const PAGE_SIZE = 12

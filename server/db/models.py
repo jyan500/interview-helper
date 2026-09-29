@@ -193,7 +193,7 @@ class Profile(Base, TimestampMixin):
     # upload under storage RLS. String(512): a public object URL plus the cache-busting `?v=` query.
     avatar_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
-    # THE DASHBOARD DEFAULT — the role/level this user usually practises, so the kickoff form
+    # THE DASHBOARD DEFAULT — the role/level this user usually practices, so the kickoff form
     # opens pre-filled and the signal panel opens scoped to it instead of making them re-pick
     # every visit. Both NULLABLE: a fresh profile has no default until the user sets one, and
     # the dashboard falls back to their most-recently-graded role in the meantime.
@@ -854,7 +854,7 @@ class ProfileQuestion(Base, TimestampMixin):
     """A question a user has saved to their "My questions" set — a plain N:N of profile to question.
 
     THE DURABLE CURATION, distinct from the per-interview InterviewQuestion plan: this is the pool
-    the candidate maintains ("I want to practise these"); a plan is a snapshot of it frozen at one
+    the candidate maintains ("I want to practice these"); a plan is a snapshot of it frozen at one
     interview's kickoff. Toggling a checkbox in the UI inserts/deletes a row here (batched on Save);
     starting an interview reads the rows for the chosen role+level to build that interview's plan.
 

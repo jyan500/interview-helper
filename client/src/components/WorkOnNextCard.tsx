@@ -39,7 +39,7 @@ export default function WorkOnNextCard({
                 </div>
             ) : items.length === 0 ? (
                 <p className="mt-2 text-[13px] text-neutral-400">
-                    No suggestions yet — finish a simulation to get targeted next steps.
+                    No suggestions yet. Finish an interview to get targeted next steps.
                 </p>
             ) : (
                 <div className="mt-3 flex flex-col gap-3 text-[13.5px] leading-[1.4]">

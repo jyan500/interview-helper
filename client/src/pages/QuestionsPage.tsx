@@ -1,6 +1,7 @@
 /**
- * Questions — browse the bank and curate the saved "My questions" set, the full-page counterpart of
- * the dashboard's Add-question modal.
+ * Questions — bank practice: start a bank interview (BankKickoffCard, role + level), and browse the
+ * bank to curate the saved "My questions" set that interview asks. The dashboard is simulation-first,
+ * so this page is where bank interviews start.
  *
  * TWO TABLES so the current selection is obvious at a glance instead of hunting through pages:
  *   Saved            — the questions already in the set (server `saved=true`).
@@ -23,6 +24,7 @@ import { useGetProfileQuery, useGetQuestionsQuery } from "../api";
 import { useQuestionSelection, useSectionFilters } from "../hooks";
 import { PAGE_SIZE } from "../constants";
 import AppNav from "../components/AppNav";
+import BankKickoffCard from "../components/BankKickoffCard";
 import QuestionFilters from "../components/QuestionFilters";
 import QuestionsTable from "../components/QuestionsTable";
 import SelectionBar from "../components/SelectionBar";
@@ -87,12 +89,16 @@ export default function QuestionsPage() {
                         Questions
                     </h1>
                     <p className="mt-2 text-[13.5px] text-neutral-400">
-                        Tick the ones you want to practise, then Save — your next interview asks your saved
+                        Tick the ones you want to practice, then Save. Your next interview asks your saved
                         questions. If you don't save any, we'll choose 3 of increasing difficulty for you.
                     </p>
                 </div>
 
                 <div className="px-7 pb-[26px] pt-2">
+                    <div className="mb-8">
+                        <BankKickoffCard />
+                    </div>
+
                     {/* Saved — the current set (server truth). Unticking one stages a removal; on Save
                         it drops into "Other questions" below. */}
                     <h2 className="mb-4 font-heading text-[19px] font-medium">
@@ -117,7 +123,7 @@ export default function QuestionsPage() {
                         emptyMessage={
                             saved.hasFilters
                                 ? "No saved questions match these filters."
-                                : "No saved questions yet — tick some below, or start and we'll pick 3 for you."
+                                : "No saved questions yet. Tick some below, or start and we'll pick 3 for you."
                         }
                     />
                     <Pagination
@@ -147,7 +153,7 @@ export default function QuestionsPage() {
                         emptyMessage={
                             other.hasFilters
                                 ? "No questions match these filters."
-                                : "Nothing left — you've saved every question for this role."
+                                : "Nothing left. You've saved every question for this role."
                         }
                     />
                     <Pagination

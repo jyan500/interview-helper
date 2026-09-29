@@ -586,6 +586,7 @@ async def list_interviews(
     order: str | None = None,
     scored: bool = False,
     job: str | None = None,
+    simulation: bool | None = None,
 ) -> dict:
     """A PAGE of one user's interviews, newest first, optionally filtered — backs GET /api/interviews.
 
@@ -609,6 +610,9 @@ async def list_interviews(
       - job: a job SLUG — only that job's simulations (the Job page's "Simulations" list). Also an
         EXISTS (`Interview.job.has(...)`), for the same reason as `scored`. Another user's job slug
         just matches nothing: the owner predicate above still applies.
+      - simulation: tri-state on the interview's KIND — True = simulations only (`job_id IS NOT
+        NULL`, the dashboard's Past interviews card, matching its simulation-only signal panel),
+        False = bank interviews only, None = both. A plain column predicate, no join.
     Each relationship is joined AT MOST ONCE (guarded on whether any filter references it), which is
     why q + role can coexist without joining Role twice. The joins are 1:1 so they can't multiply
     rows; selectin still loads role/level for display via its own query — these joins are WHERE-only.
@@ -646,6 +650,10 @@ async def list_interviews(
             stmt = stmt.where(Interview.scorecard.has())
         if job:
             stmt = stmt.where(Interview.job.has(Job.slug == job))
+        if simulation is not None:
+            stmt = stmt.where(
+                Interview.job_id.is_not(None) if simulation else Interview.job_id.is_(None)
+            )
         if sort == "date":
             col = Interview.created_at
             stmt = stmt.order_by(col.desc() if descending else col.asc())

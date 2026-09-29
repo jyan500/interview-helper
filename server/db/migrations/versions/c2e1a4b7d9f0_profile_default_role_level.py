@@ -4,7 +4,7 @@ Revision ID: c2e1a4b7d9f0
 Revises: f3b9c1d5a7e2
 Create Date: 2026-09-11
 
-The dashboard default. A profile can now remember the role/level the user usually practises,
+The dashboard default. A profile can now remember the role/level the user usually practices,
 so the kickoff form opens pre-filled and the signal panel (readiness / skill breakdown / work
 on next) opens scoped to that role instead of making them re-pick every visit.
 

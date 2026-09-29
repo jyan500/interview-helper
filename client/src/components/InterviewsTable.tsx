@@ -35,7 +35,7 @@ export default function InterviewsTable({
     sort = null,
     order = "desc",
     onSort,
-    emptyMessage = "No interviews yet — finish one and it'll show up here.",
+    emptyMessage = "No interviews yet. Finish one and it'll show up here.",
 }: {
     interviews: InterviewSummary[];
     resumableId?: string | null;

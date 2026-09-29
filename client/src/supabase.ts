@@ -32,7 +32,7 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
     // Fail here, at startup, with a sentence that names the fix — rather than 40 lines
     // deep in a login handler with a "fetch failed to undefined/auth/v1/token".
     throw new Error(
-        "Missing VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY in client/.env — copy them " +
+        "Missing VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY in client/.env. Copy them " +
         "from the Supabase dashboard (Project Settings -> API), then restart `npm run dev` " +
         "(Vite only reads .env at startup)."
     );
