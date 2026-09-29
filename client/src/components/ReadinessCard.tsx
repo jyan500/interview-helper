@@ -37,7 +37,7 @@ export default function ReadinessCard({
                 </>
             ) : latest === null ? (
                 <p className="mt-2 text-[13px] text-neutral-400">
-                    Complete a simulation of this round to see your readiness trend.
+                    Complete an interview in this round to see your readiness trend.
                 </p>
             ) : (
                 <>

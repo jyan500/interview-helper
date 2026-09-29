@@ -77,7 +77,7 @@ export default function SimulationKickoff() {
             {newOpen && <NewJobModal onClose={() => setNewOpen(false)} />}
 
             <div className="flex items-center justify-between gap-3">
-                <h2 className="font-heading text-[23px] font-medium">Start a simulation</h2>
+                <h2 className="font-heading text-[23px] font-medium">Start an interview</h2>
                 <Button variant="secondary" className="text-[13px]" onClick={() => setNewOpen(true)}>
                     New job
                 </Button>

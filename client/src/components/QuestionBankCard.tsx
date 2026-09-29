@@ -44,7 +44,7 @@ export default function QuestionBankCard() {
                 <Skeleton className="mt-2 h-3.5 w-3/4" />
             ) : !role || !level ? (
                 <p className="mt-2 pb-3 text-[13.5px] text-neutral-400">
-                    Beyond job simulations, you can practice general questions for a role and level. Pick a
+                    Besides interviews for your saved jobs, you can practice general questions for a role and level. Pick a
                     default role and level on the{" "}
                     <Link to="/questions" className="text-accent-300">Questions page</Link> to see your
                     saved questions here.

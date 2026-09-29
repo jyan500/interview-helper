@@ -72,7 +72,7 @@ export default function DashboardPage() {
                             the full Interviews page. "View all" routes to that page. */}
                         <div className="rounded-md border border-divider px-[22px] pb-2 pt-[18px]">
                             <div className="mb-2 flex items-baseline justify-between">
-                                <h2 className="font-heading text-[23px] font-medium">Past simulations</h2>
+                                <h2 className="font-heading text-[23px] font-medium">Past interviews</h2>
                                 <Link to="/interviews" className="text-[13px] text-accent-300">
                                     View all
                                 </Link>
@@ -82,7 +82,7 @@ export default function DashboardPage() {
                                 resumableId={resumableId}
                                 loading={isFetching}
                                 skeletonRows={DASHBOARD_ROWS}
-                                emptyMessage="No graded simulations yet. Run a round from a job and it'll show up here."
+                                emptyMessage="No graded interviews yet. Run a round from a job and it'll show up here."
                             />
                         </div>
 

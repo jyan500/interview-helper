@@ -143,7 +143,7 @@ export default function JobDetailPage() {
                         </section>
 
                         <section className="rounded-md border border-divider px-[22px] pb-2 pt-[18px]">
-                            <h2 className="mb-2 font-heading text-[23px] font-medium">Simulations</h2>
+                            <h2 className="mb-2 font-heading text-[23px] font-medium">Interviews</h2>
                             <InterviewsTable
                                 interviews={simsData?.items ?? []}
                                 resumableId={resumableId}
