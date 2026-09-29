@@ -73,11 +73,12 @@ export interface Page<T> {
     pages: number;
 }
 // The query arg for the paginated option endpoints: an optional search term (`q`) and 1-based
-// page. Both optional — omitting them asks for page 1 unfiltered.
-export interface OptionPageQuery {
+// page. Both optional — omitting them asks for page 1 unfiltered. A type alias (not an interface) so
+// it's assignable to the QueryParams bag, letting a QueryParams endpoint's trigger feed a picker.
+export type OptionPageQuery = {
     q?: string;
     page?: number;
-}
+};
 // A generic bag of URL query params, handed to fetchBaseQuery's `params` (which serializes it into
 // the query string). Kept generic rather than per-endpoint fields so adding a filter is just another
 // key — no signature change. `undefined` values are dropped by the serializer.
@@ -240,11 +241,13 @@ export interface ResumePayload extends SimulationFields {
     question: PlanQuestion | null; // the PARENT plan question on the table, even mid-probe
 }
 
-// The dashboard signal panel (GET /api/dashboard) — the role-scoped aggregates that replaced the
-// three hardcoded cards. Mirrors get_dashboard in tools/interview.py; keep in sync by hand.
-// `role`/`role_name` echo the EFFECTIVE role the backend resolved (the picker's value, else the
-// profile default, else the most-recently-graded role, else null when nothing is graded yet) so
-// the picker can seed its label without a second lookup. All scores are on the app's 1-5 scale.
+// The dashboard signal panel (GET /api/dashboard) — aggregates over the user's SIMULATIONS, scoped
+// to ONE round type (a simulation is graded on its round's rubric) and optionally one job. Mirrors
+// get_dashboard in tools/interview.py; keep in sync by hand. `round`/`round_name` echo the EFFECTIVE
+// round the backend resolved (the picker's value, else the most-recently-graded simulation's round,
+// else null when nothing is graded yet) so the picker can seed its label without a second lookup.
+// `job`/`job_name` echo the job filter ("company · title"), null when unfiltered. All scores are on
+// the app's 1-5 scale.
 //
 // The three time windows the panel can aggregate over — the client's window control sends one and
 // the response echoes the effective `period` back. Mirrors DASHBOARD_PERIODS in tools/interview.py.
@@ -257,25 +260,28 @@ export interface Readiness {
 }
 export interface SkillScore {
     dimension: string; // rubric dimension name ("Tradeoff reasoning")
-    average: number; // 1-5, averaged across the role's graded interviews in the window
+    average: number; // 1-5, averaged across the round's graded simulations in the window
 }
 export interface DashboardData {
-    role: string | null; // effective role slug, or null when the user has nothing graded
-    role_name: string | null; // its display name, for seeding the picker's label
+    round: string | null; // effective round slug, or null when the user has nothing graded
+    round_name: string | null; // its display name, for seeding the picker's label
+    job: string | null; // the job filter's slug, or null = across every job
+    job_name: string | null; // "company · title" of that job
     period: DashboardPeriod; // the window actually applied
     readiness: Readiness;
     skill_breakdown: SkillScore[];
     work_on_next: string[]; // recent improvement lines, newest first
 }
-// The query arg: the picker's chosen role slug (omit to let the backend pick the default) and the
-// chosen time window (omit to let the backend default it).
+// The query arg: the picked round slug (omit to let the backend pick the most recent), an optional
+// job slug (omit = every job), and the time window (omit to let the backend default it).
 export interface DashboardQuery {
-    role?: string;
+    round?: string;
+    job?: string;
     period?: DashboardPeriod;
 }
 
 // GET /api/profile — the user's default role/level (each slug + name, or null if unset), for the
-// kickoff form's pre-fill and the signal panel's initial role. Mirrors get_profile.
+// kickoff form's pre-fill. Mirrors get_profile.
 export interface ProfileData {
     display_name: string | null;
     avatar_url: string | null; // the profile picture's public URL, or null => render initials
@@ -418,7 +424,7 @@ export const interviewApi = createApi({
     // answering (bumps updated_at / can finish it), grading — invalidate it so the banner recomputes
     // without a manual refresh.
     // "Interviews" — the user's interview list (see above). "Dashboard" — the signal panel's
-    // aggregates + the picker's graded-role list: a new grade changes both, so getScorecard
+    // aggregates + its graded-job picker list: a new grade changes both, so getScorecard
     // invalidates it. "Profile" — the user's default role/level, invalidated when they set it.
     // "Questions" — the bank list + the user's saved set. getQuestions provides it; saveQuestions
     // invalidates it, so committing a "My questions" edit re-syncs every questions list on screen
@@ -450,7 +456,7 @@ export const interviewApi = createApi({
         getScorecard: builder.mutation<Scorecard, ScorecardRequest>({
             query: (body) => ({ url: "/scorecard", method: "POST", body }),
             // grading changes both the list order (overall) AND every dashboard aggregate (a new
-            // graded interview shifts readiness, the skill averages, and can add a role to the picker).
+            // graded simulation shifts readiness, the skill averages, and can add a job to the picker).
             invalidatesTags: ["Interviews", "Dashboard"],
         }),
         // Phase 5 robust STT — transcribe one recorded utterance via /api/transcribe (OpenAI
@@ -496,20 +502,24 @@ export const interviewApi = createApi({
         getRole: builder.query<RolePageItem, string>({
             query: (slug) => `/roles/${encodeURIComponent(slug)}`,
         }),
-        // The dashboard signal panel — role- and window-scoped aggregates. A QUERY (cacheable GET);
-        // omit `role`/`period` to let the backend pick the effective role (default/most-recent) and
-        // default window. Tagged "Dashboard" so a new grade refetches it.
+        // The dashboard signal panel — round-, job- and window-scoped aggregates over simulations. A
+        // QUERY (cacheable GET); omit `round`/`job`/`period` to let the backend pick the most recent
+        // round, span every job, and default the window. Tagged "Dashboard" so a new grade refetches it.
         getDashboard: builder.query<DashboardData, DashboardQuery | void>({
             query: (arg) => ({ url: "/dashboard", params: (arg as DashboardQuery) ?? {} }),
             providesTags: ["Dashboard"],
         }),
-        // The picker's options — the roles the user has a GRADED interview for. Paginated + searchable
-        // (an async-paginate select feeds it { q, page }), same shape as getRoles. Tagged "Dashboard"
-        // so a newly graded role appears without a manual refresh.
-        getInterviewedRoles: builder.query<Page<RolePageItem>, OptionPageQuery>({
-            query: ({ q = "", page = 1 }) =>
-                `/dashboard/roles?q=${encodeURIComponent(q)}&page=${page}`,
-            providesTags: ["Dashboard"],
+        // The signal panel's job picker — the caller's jobs with at least one GRADED simulation
+        // (GET /api/jobs?graded=true), reshaped into the {slug, name} rows the async-paginate select
+        // reads (a job has no `name`; its label is "company · title"). Tagged "Jobs" (an edit renames
+        // it) and "Dashboard" (a new grade can add one).
+        getGradedJobOptions: builder.query<Page<BasePageItem>, OptionPageQuery>({
+            query: ({ q = "", page = 1 }) => ({ url: "/jobs", params: { q, page, graded: true } }),
+            transformResponse: (res: Page<JobItem>) => ({
+                ...res,
+                items: res.items.map((job) => ({ slug: job.job_id, name: `${job.company} · ${job.title}` })),
+            }),
+            providesTags: ["Jobs", "Dashboard"],
         }),
         // The user's default role/level — seeds the kickoff form pre-fill and the panel's first role.
         getProfile: builder.query<ProfileData, void>({
@@ -517,13 +527,11 @@ export const interviewApi = createApi({
             providesTags: ["Profile"],
         }),
         // Set the default (the "Set as default" control). A mutation (PATCH); invalidates the profile
-        // so the pre-fill reflects the new default on next read. Also invalidates "Dashboard": the
-        // signal panel's effective role is backend-resolved FROM the profile default (when no role is
-        // applied), so a changed default must refetch getDashboard / the interviewed-roles list — else
-        // the panel keeps showing the old default's role and aggregates.
+        // so the pre-fill reflects the new default on next read. (The signal panel no longer reads the
+        // default — it's round-scoped over simulations — so "Dashboard" isn't invalidated here.)
         updateProfile: builder.mutation<{ ok: boolean }, ProfileUpdate>({
             query: (body) => ({ url: "/profile", method: "PATCH", body }),
-            invalidatesTags: ["Profile", "Dashboard"],
+            invalidatesTags: ["Profile"],
         }),
         // Set/replace the profile PICTURE. The file itself is uploaded client-direct to Supabase
         // Storage (see SettingsPage); this only stores the resulting public URL. PUT because the
@@ -586,15 +594,17 @@ export const interviewApi = createApi({
             query: (body) => ({ url: "/jobs", method: "POST", body }),
             invalidatesTags: ["Jobs"],
         }),
+        // Also "Dashboard": the signal panel echoes the filtered job's "company · title".
         updateJob: builder.mutation<JobDetail, { jobId: string; body: JobUpdate }>({
             query: ({ jobId, body }) => ({ url: `/jobs/${encodeURIComponent(jobId)}`, method: "PATCH", body }),
-            invalidatesTags: ["Jobs"],
+            invalidatesTags: ["Jobs", "Dashboard"],
         }),
         // Deleting a job cascades its simulation interviews server-side, so the interview lists (and
-        // the resume banner, if one of them was resumable) must re-read too.
+        // the resume banner, if one of them was resumable) must re-read too — and the dashboard, whose
+        // aggregates are built from those graded simulations.
         deleteJob: builder.mutation<{ ok: boolean }, string>({
             query: (jobId) => ({ url: `/jobs/${encodeURIComponent(jobId)}`, method: "DELETE" }),
-            invalidatesTags: ["Jobs", "Interviews"],
+            invalidatesTags: ["Jobs", "Interviews", "Dashboard"],
         }),
     }),
 });
@@ -615,7 +625,7 @@ export const {
     useLazyGetQuestionTypesQuery,
     useGetQuestionTypeQuery,
     useGetDashboardQuery,
-    useLazyGetInterviewedRolesQuery,
+    useLazyGetGradedJobOptionsQuery,
     useGetProfileQuery,
     useUpdateProfileMutation,
     useSetAvatarMutation,
@@ -623,6 +633,7 @@ export const {
     useGetQuestionsQuery,
     useSaveQuestionsMutation,
     useGetRoundTypesQuery,
+    useLazyGetRoundTypesQuery,
     useGetJobsQuery,
     useGetJobQuery,
     useCreateJobMutation,

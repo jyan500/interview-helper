@@ -50,6 +50,8 @@ export interface AsyncPaginateSelectProps {
     onBlur?: () => void;
     placeholder?: string;
     isDisabled?: boolean;
+    // Show the clear (x) control — for an OPTIONAL filter where null is a real choice (e.g. "All jobs").
+    isClearable?: boolean;
     // Force the loading spinner in the control — for when the SELECTED value is still being fetched by
     // a SEPARATE query (e.g. the profile default / dashboard role that seeds this picker), a gap during
     // which the control would otherwise just look empty and un-picked. This is independent of the option
@@ -68,6 +70,7 @@ export function AsyncPaginateSelect({
     onBlur,
     placeholder,
     isDisabled,
+    isClearable,
     isLoading,
     cacheUniqs,
 }: AsyncPaginateSelectProps) {
@@ -116,6 +119,7 @@ export function AsyncPaginateSelect({
             additional={{ page: 1 }}
             placeholder={placeholder}
             isDisabled={isDisabled}
+            isClearable={isClearable}
             // `|| undefined` (not `?? false`): a boolean here OVERRIDES the library's own option-loading
             // spinner (it uses the prop when it's a boolean, else its internal state). We want to FORCE
             // the spinner only while an external seed query loads, and otherwise let the internal state
