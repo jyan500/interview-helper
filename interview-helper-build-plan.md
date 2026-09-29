@@ -1565,5 +1565,87 @@ round starts like the others.
   - the job filter narrows the results, and clearing it returns to "All jobs";
   - grading a new simulation refetches the panel and can add a job to the picker;
   - deleting a job refreshes the panel.
-- Open question: the left column (Start an interview / My questions / Past interviews) is still
-  bank-oriented, while the signal panel now tracks simulations only.
+- Open question (decided 2026-09-29): the left column (Start an interview / My questions / Past
+  interviews) was still bank-oriented. We're moving it to simulations in two phases: (A) Past
+  interviews → simulations, then (B) replace the bank kickoff + My questions with a simulation
+  (jobs) kickoff.
+
+### 2026-09-29 — Simulation dashboard, Phase A: Past interviews → Past simulations
+
+`tsc` is clean and the server files parse. **Not yet checked against a live DB or in a browser.**
+- Backend: `list_interviews` and `GET /api/interviews` accept a new filter,
+  `simulation: bool | None`. `true` keeps only simulations (`job_id IS NOT NULL`), `false` only
+  bank interviews, and leaving it out returns both. It's a plain column predicate with no join, and
+  it's added to the existing endpoint, following the server-side-filtering convention.
+- DashboardPage: the card is renamed "Past simulations" and queries
+  `{size: 5, scored: true, simulation: true}`. It has a new empty message pointing the user at jobs.
+  "View all" still goes to the unfiltered Interviews page.
+
+**Next (Phase B):** replace the dashboard's bank kickoff ("Start an interview" role/level form +
+"Set as default") and "My questions" with a simulation kickoff built around jobs.
+
+### 2026-09-29 — Simulation dashboard, Phase B: simulation kickoff on the dashboard, bank practice → Questions page
+
+Frontend only. `tsc` and `vite build` are clean. **Not yet checked in a browser.**
+
+Decisions (user, 2026-09-29):
+- Bank practice moves to the Questions page, which already curates "My questions". The dashboard
+  is now simulation-only.
+- The kickoff is a job picker plus the Job page's RoundCards.
+
+**Dashboard** (left column: ResumeBanner → SimulationKickoff → Past simulations; right: SignalPanel):
+- New `SimulationKickoff`: "Start a simulation" with a "New job" button (NewJobModal), a job picker,
+  and one RoundCard per round type.
+  - The picker defaults to the MOST RECENT job (`getJobs {size: 1}`). The default is derived as
+    `picked ?? mostRecent`, not seeded into state. It applies on change, because it chooses which job
+    the cards start rather than filtering anything.
+  - The full job row comes from `getJob`, because the header needs role/level names.
+  - With no saved jobs, the card shows a prompt to save one instead of the round cards.
+  - Like SignalPanel, it's self-contained: it owns its start sequence, overwrite modal and overlay.
+- `useStartSequence` gains `startRound(job, round)`, which builds the `{job, round}` request and the
+  header labels. JobDetailPage now uses it instead of its inline copy.
+- `api.ts`: a new `getJobOptions` (every job) sits beside `getGradedJobOptions`. Both share the
+  module-level `jobOptionsPage` reshape.
+
+**Questions page:** the new `BankKickoffCard` ("practice from the bank") heads the page. It's the old
+dashboard form moved as-is (role/level pickers pre-filled from the profile default, "Set as
+default", Start), and it's self-contained. Its overwrite modal renders outside the `<form>`, because
+Modal isn't portaled.
+
+**Removed:**
+- `AddQuestionModal`: the dashboard's My questions section was its only user.
+- The "Saved only" checkbox (`showSavedFilter` / `savedOnly` in QuestionFilters and
+  `AppliedSectionFilters`), which only that modal used.
+- Stale comments in QuestionsTable, SelectionBar and api.ts that referred to them.
+
+**Next:**
+- Browser pass:
+  - a cold load picks the newest job and shows its round cards;
+  - switching jobs swaps the cards, and starting a round shows the overwrite confirm when an
+    interview is unfinished;
+  - an account with no jobs gets the empty state, and "New job" works;
+  - on the Questions page, the bank kickoff pre-fills from the default, "Set as default" works, and
+    Start works.
+- Optional: have "View all" open the Interviews page filtered to simulations (that needs a
+  simulation filter there).
+
+**Follow-up (same day): the kickoff's job picker.**
+- It now defaults to the job of your most recent simulation (`getMyInterviews {simulation: true,
+  size: 1}`, last-active first, unfinished ones included). With no simulations yet it falls back to
+  your newest job. The default's label comes from the `getJob` row, because the interview row doesn't
+  carry the job title.
+- The option list is alphabetical. `GET /api/jobs` gains `sort=name`
+  (`lower(company), lower(title), id`), and `getJobOptions` sends it. The default order
+  (`created_at desc`) now also breaks ties on `id` so paging is stable.
+
+**Follow-up (same day): "Your question bank" card**, added to balance the left column against the
+taller signal panel.
+- New `QuestionBankCard` goes at the bottom of the dashboard's left column. It's a read-only preview
+  of bank practice, which lives on the Questions page.
+- It shows the first 4 saved questions for the profile's default role + level, then "+N more".
+  It uses the interview plan's at-or-below level rule, so the list is what a bank interview at that
+  level would ask.
+- Links: "practice & manage" goes to /questions. With no saved questions, it explains the
+  3-question fallback. With no default role/level, it prompts the user to set one.
+- `QuestionsTable`'s selection is now optional: with no `isChecked` or `onToggle` it drops the
+  checkbox column, and the row isn't clickable.

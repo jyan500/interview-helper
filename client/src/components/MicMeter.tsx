@@ -46,8 +46,8 @@ export default function MicMeter({
 // The one line under the bar: an open error wins, then sustained silence, else the neutral prompt.
 function micStatusText(error: string | null, silent: boolean): string {
     if (error) return error;
-    if (silent) return "No audio detected — check the right mic is selected and unmuted.";
-    return "Speak to test — the bar moves with your voice.";
+    if (silent) return "No audio detected. Check the right mic is selected and unmuted.";
+    return "Speak to test: the bar moves with your voice.";
 }
 
 function micStatusClass(error: string | null, silent: boolean): string {

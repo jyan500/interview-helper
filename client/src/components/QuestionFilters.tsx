@@ -31,13 +31,12 @@ import Button from "./Button";
 import { optionFromSlug } from "../helpers";
 
 // The RHF draft — each picker holds a full Option (value=slug, label=name) so it feeds the async
-// select directly; `q` is the raw search text; `savedOnly` backs the optional "Saved only" checkbox.
+// select directly; `q` is the raw search text.
 type FiltersForm = {
     q: string;
     role: SelectOption | null;
     level: SelectOption | null;
     questionType: SelectOption | null;
-    savedOnly: boolean;
 };
 
 interface QuestionFiltersProps {
@@ -52,10 +51,6 @@ interface QuestionFiltersProps {
     defaultRole: SelectOption | null;
     // Show the Clear button (the parent computes this from whether any filter diverges from default).
     showClear: boolean;
-    // Opt into the "Saved only" checkbox (the Add-question modal; the Questions page splits Saved/Other
-    // into two tables instead, so it leaves this off). `savedOnly` seeds its applied state.
-    showSavedFilter?: boolean;
-    savedOnly?: boolean;
     onApply: (values: AppliedSectionFilters) => void;
     onClear: () => void;
 }
@@ -67,8 +62,6 @@ export default function QuestionFilters({
     q,
     defaultRole,
     showClear,
-    showSavedFilter = false,
-    savedOnly = false,
     onApply,
     onClear,
 }: QuestionFiltersProps) {
@@ -85,7 +78,6 @@ export default function QuestionFilters({
             role: optionFromSlug(roleSlug),
             level: optionFromSlug(levelSlug ?? null),
             questionType: optionFromSlug(questionTypeSlug ?? null),
-            savedOnly,
         },
     });
 
@@ -116,14 +108,13 @@ export default function QuestionFilters({
             role: values.role?.value ?? null,
             level: values.level?.value ?? null,
             questionType: values.questionType?.value ?? null,
-            savedOnly: values.savedOnly,
         });
     }
 
     function clear() {
         // role reverts to the default (the bank always needs a concrete role); the optional filters go
-        // back to "all"/off. The parent's onClear then wipes this section's URL params.
-        reset({ q: "", role: defaultRole, level: null, questionType: null, savedOnly: false });
+        // back to "all". The parent's onClear then wipes this section's URL params.
+        reset({ q: "", role: defaultRole, level: null, questionType: null });
         onClear();
     }
 
@@ -158,16 +149,6 @@ export default function QuestionFilters({
                     placeholder="All types"
                 />
             </div>
-            {showSavedFilter && (
-                <label className="flex cursor-pointer items-center gap-1.5 text-[13px] text-neutral-300">
-                    <input
-                        type="checkbox"
-                        {...register("savedOnly")}
-                        className="h-4 w-4 cursor-pointer accent-accent"
-                    />
-                    Saved only
-                </label>
-            )}
             <Button type="submit" variant="primary" className="text-[13px]">
                 Search
             </Button>

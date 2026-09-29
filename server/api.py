@@ -924,6 +924,7 @@ async def my_interviews(
     order: str | None = None,
     scored: bool = False,
     job: str | None = None,
+    simulation: bool | None = None,   # True = simulations only, False = bank only, omit = both
 ) -> dict:
     # `?resumable=true` NARROWS to the ONE resumable interview (the banner's question). It returns the
     # SAME page envelope as the full list — a 0-or-1-item page — so the client reads `items[0]` and the
@@ -936,10 +937,11 @@ async def my_interviews(
     # The full history: server-side paged (page/size from the query string via `params`) and filtered
     # by role/level SLUG + search — see list_interviews. `?scored=true` keeps only graded interviews
     # (the list's default view; the "Show all" toggle drops it). `?job=<slug>` keeps one job's
-    # simulations (the Job page's list). Same {items,...} envelope.
+    # simulations (the Job page's list). `?simulation=true|false` keeps one KIND (the dashboard card
+    # asks for simulations only). Same {items,...} envelope.
     return await list_interviews(
         user_id, params, q=q, role=role, level=level, sort=sort, order=order, scored=scored,
-        job=job,
+        job=job, simulation=simulation,
     )
 
 
@@ -1193,9 +1195,10 @@ async def my_jobs(
     params: Params = Depends(),
     q: str | None = None,
     graded: bool | None = None,   # only jobs with a graded simulation (the signal panel's picker)
+    sort: str | None = None,      # "name" = alphabetical by company, title; omit = newest first
     user_id: str = Depends(require_user),
 ):
-    return await list_jobs_page(user_id, params, q=q, graded=graded)
+    return await list_jobs_page(user_id, params, q=q, graded=graded, sort=sort)
 
 
 async def _owned_job(job_id: str, user_id: str) -> dict:

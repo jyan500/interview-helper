@@ -359,7 +359,7 @@ export default function SessionPage() {
             // counts as unsent again and goes with the retry.
             console.error(e);
             setLastSentCode(previousSentCode);
-            revealLine(pendingId, "Sorry — I couldn't record that. Try again.");
+            revealLine(pendingId, "Sorry, I couldn't record that. Try again.");
             return;
         }
         // Advanced to the next plan question: a coding round swaps the panel to the new problem, with a
@@ -755,7 +755,7 @@ function VoiceColumn({
 
             {done && (
                 <p className="m-0 text-[13px] text-accent-300">
-                    That's the last question — end the session to see your scorecard.
+                    That's the last question. End the session to see your scorecard.
                 </p>
             )}
 
@@ -770,7 +770,7 @@ function VoiceColumn({
 // stops (the countdown/VAD submits).
 function micLabel(listening: boolean, voiceMode: TurnMode): string {
     if (!listening) return "Record your answer";
-    return voiceMode === "manual" ? "Speaking — tap to stop & send" : "Speaking — tap to stop";
+    return voiceMode === "manual" ? "Speaking: tap to stop & send" : "Speaking: tap to stop";
 }
 
 function ParticipantCell({
@@ -902,7 +902,7 @@ function TextColumn({
                 <div className="flex w-[720px] max-w-full flex-col gap-3">
                     {done ? (
                         <p className="m-0 rounded-md border border-accent px-3.5 py-3 text-[15px] text-accent-300">
-                            That's the last question — end the session to see your scorecard.
+                            That's the last question. End the session to see your scorecard.
                         </p>
                     ) : (
                         <div className="flex min-h-[78px] flex-col justify-between rounded-md border border-accent px-3.5 py-3">

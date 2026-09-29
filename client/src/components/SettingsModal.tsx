@@ -31,8 +31,8 @@ const MODE_OPTIONS: { value: Mode; label: string }[] = [
 
 // The TTS engine picker options (react-select shape). Static, so module scope.
 const TTS_ENGINE_OPTIONS: EngineOption[] = [
-    { value: "openai", label: "OpenAI — neural (uses tokens)" },
-    { value: "browser", label: "Browser — free (robotic)" },
+    { value: "openai", label: "OpenAI (neural, uses tokens)" },
+    { value: "browser", label: "Browser (free, robotic)" },
 ];
 
 export default function SettingsModal({

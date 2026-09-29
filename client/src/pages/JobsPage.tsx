@@ -63,7 +63,7 @@ export default function JobsPage() {
                                 Jobs
                             </h1>
                             <p className="mt-1.5 text-[13.5px] text-neutral-400">
-                                Save a job posting, then practise the interview rounds that company would run.
+                                Save a job posting, then practice the interview rounds that company would run.
                             </p>
                         </div>
                         <Button variant="primary" className="text-sm" onClick={() => setNewOpen(true)}>
@@ -99,7 +99,7 @@ export default function JobsPage() {
                                 emptyMessage={
                                     q
                                         ? "No jobs match that search."
-                                        : "No jobs yet — add a job posting to practise its interview rounds."
+                                        : "No jobs yet, add a job posting to practice its interview rounds."
                                 }
                             />
                             {!isFetching && (

@@ -11,6 +11,8 @@ import {
     useGetMyInterviewsQuery,
     useSaveQuestionsMutation,
     useStartInterviewMutation,
+    type JobItem,
+    type RoundTypeItem,
     type StartInterviewRequest,
 } from "./api";
 import type { SelectOption } from "./components/AsyncPaginateSelect";
@@ -82,9 +84,11 @@ export type StartLabels = Pick<
 >;
 
 /**
- * The interview KICKOFF sequence, shared by every producer (the Dashboard's bank start and a Job page's
- * round cards): confirm before overwriting an unfinished interview, POST /api/interview, then hand the
- * fresh interview to /session via route state. We never navigate to /session without a real interview.
+ * The interview KICKOFF sequence, shared by every producer (the Questions page's bank start, and the
+ * round cards on a Job page and the Dashboard): confirm before overwriting an unfinished interview,
+ * POST /api/interview, then hand the fresh interview to /session via route state. We never navigate to
+ * /session without a real interview. `startRound(job, round)` is the simulation shorthand — it builds
+ * the {job, round} request and the header labels from the two rows, so every round card starts alike.
  *
  * The caller renders the two pieces of UI this drives: <OverwriteInterviewModal> (open = `confirmOpen`,
  * onConfirm = `confirm`, onClose = `cancel`) and <StartingOverlay> while `starting`. `resumableLoading`
@@ -136,12 +140,28 @@ export function useStartSequence() {
 
     const cancel = useCallback(() => setPending(null), []);
 
-    return { start, starting, resumableLoading, confirmOpen: pending !== null, confirm, cancel };
+    const startRound = useCallback(
+        (job: JobItem, round: RoundTypeItem) =>
+            start(
+                { job: job.job_id, round: round.slug },
+                {
+                    role: job.role_name,
+                    level: job.level_name,
+                    company: job.company,
+                    round: round.name,
+                    hasCodeEditor: round.has_code_editor,
+                    allowsSmartVoice: round.allows_smart_voice,
+                },
+            ),
+        [start],
+    );
+
+    return { start, startRound, starting, resumableLoading, confirmOpen: pending !== null, confirm, cancel };
 }
 
 /**
- * The staged "My questions" selection behind the QuestionsTable + SelectionBar (the dashboard section,
- * the Add-question modal, and the Questions page all use it). Checkbox toggles are LOCAL until Save —
+ * The staged "My questions" selection behind the Questions page's QuestionsTables + SelectionBar.
+ * Checkbox toggles are LOCAL until Save —
  * the user reviews a running count first, then commits the whole edit in one batch.
  *
  * WHY TWO DELTA SETS (add / remove) instead of one "checked" set: the table is paginated, so at any
@@ -213,9 +233,6 @@ export interface AppliedSectionFilters {
     role: string | null;
     level: string | null;
     questionType: string | null;
-    // Optional "saved only" toggle — only the Add-question modal uses it (its single table stands in for
-    // the Questions page's Saved/Other split). useSectionFilters ignores it (it's not a URL param).
-    savedOnly?: boolean;
 }
 
 /**

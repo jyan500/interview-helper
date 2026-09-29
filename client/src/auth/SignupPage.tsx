@@ -152,7 +152,7 @@ export default function SignupPage() {
 
                 {checkEmail && (
                     <div className="rounded-md border border-strength-border bg-strength-bg px-3.5 py-[11px] text-[13.5px] leading-[1.45] text-strength">
-                        Account created — check your email to confirm before signing in.
+                        Account created. Check your email to confirm before signing in.
                     </div>
                 )}
 

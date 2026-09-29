@@ -416,6 +416,15 @@ const baseQueryWithReauth: BaseQueryFn<
     return result
 };
 
+// A page of jobs as picker rows: a job has no `name`, so its label is "company · title" and its slug
+// is the job_id (which IS the job's slug). Shared by the two job-picker endpoints below.
+function jobOptionsPage(res: Page<JobItem>): Page<BasePageItem> {
+    return {
+        ...res,
+        items: res.items.map((job) => ({ slug: job.job_id, name: `${job.company} · ${job.title}` })),
+    };
+}
+
 export const interviewApi = createApi({
     reducerPath: "interviewApi",
     baseQuery: baseQueryWithReauth,
@@ -427,8 +436,8 @@ export const interviewApi = createApi({
     // aggregates + its graded-job picker list: a new grade changes both, so getScorecard
     // invalidates it. "Profile" — the user's default role/level, invalidated when they set it.
     // "Questions" — the bank list + the user's saved set. getQuestions provides it; saveQuestions
-    // invalidates it, so committing a "My questions" edit re-syncs every questions list on screen
-    // (the dashboard table, the Add-question modal, the Questions page) with no manual refetch.
+    // invalidates it, so committing a "My questions" edit re-syncs both of the Questions page's
+    // tables with no manual refetch.
     // "Jobs" — the saved job descriptions (list + detail); every job write invalidates it.
     tagTypes: ["Interviews", "Dashboard", "Profile", "Questions", "Jobs"],
     endpoints: (builder) => ({
@@ -509,16 +518,19 @@ export const interviewApi = createApi({
             query: (arg) => ({ url: "/dashboard", params: (arg as DashboardQuery) ?? {} }),
             providesTags: ["Dashboard"],
         }),
-        // The signal panel's job picker — the caller's jobs with at least one GRADED simulation
-        // (GET /api/jobs?graded=true), reshaped into the {slug, name} rows the async-paginate select
-        // reads (a job has no `name`; its label is "company · title"). Tagged "Jobs" (an edit renames
-        // it) and "Dashboard" (a new grade can add one).
+        // Job pickers — GET /api/jobs reshaped into the {slug, name} rows the async-paginate select
+        // reads (see jobOptionsPage). getJobOptions is every job, ALPHABETICAL (`sort=name` — the
+        // dashboard's simulation kickoff, where you scan for a company by name); getGradedJobOptions
+        // only those with a GRADED simulation (the signal panel's filter, where a job with nothing
+        // graded would be a dead option) — also tagged "Dashboard", since a new grade can add one.
+        getJobOptions: builder.query<Page<BasePageItem>, OptionPageQuery>({
+            query: ({ q = "", page = 1 }) => ({ url: "/jobs", params: { q, page, sort: "name" } }),
+            transformResponse: jobOptionsPage,
+            providesTags: ["Jobs"],
+        }),
         getGradedJobOptions: builder.query<Page<BasePageItem>, OptionPageQuery>({
             query: ({ q = "", page = 1 }) => ({ url: "/jobs", params: { q, page, graded: true } }),
-            transformResponse: (res: Page<JobItem>) => ({
-                ...res,
-                items: res.items.map((job) => ({ slug: job.job_id, name: `${job.company} · ${job.title}` })),
-            }),
+            transformResponse: jobOptionsPage,
             providesTags: ["Jobs", "Dashboard"],
         }),
         // The user's default role/level — seeds the kickoff form pre-fill and the panel's first role.
@@ -625,6 +637,7 @@ export const {
     useLazyGetQuestionTypesQuery,
     useGetQuestionTypeQuery,
     useGetDashboardQuery,
+    useLazyGetJobOptionsQuery,
     useLazyGetGradedJobOptionsQuery,
     useGetProfileQuery,
     useUpdateProfileMutation,

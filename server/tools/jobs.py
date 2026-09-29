@@ -22,7 +22,7 @@ import uuid
 
 from fastapi_pagination import Params
 from fastapi_pagination.ext.sqlalchemy import apaginate
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, func, or_, select
 
 from db.engine import get_session
 from db.models import Interview, Job, Level, Role, Scorecard
@@ -112,9 +112,18 @@ async def get_job(job_id: str) -> dict:
 
 
 async def list_jobs_page(
-    profile_id: str, params: Params, *, q: str | None = None, graded: bool | None = None
+    profile_id: str,
+    params: Params,
+    *,
+    q: str | None = None,
+    graded: bool | None = None,
+    sort: str | None = None,
 ) -> dict:
-    """A PAGE of one user's jobs, newest first — backs GET /api/jobs.
+    """A PAGE of one user's jobs (newest first by default) — backs GET /api/jobs.
+
+    SORT: default `created_at desc` (the Jobs page). `sort="name"` orders alphabetically by company,
+    then title, case-insensitively — the dashboard kickoff's job picker, where a person scans for a
+    company by name. Anything else falls back to the default. `id` breaks ties so paging is stable.
 
     Owner-scoped by the WHERE on `profile_id` (the verified uid, never a request field). `q` is a
     case-insensitive substring match on company OR title — the two things a person remembers a
@@ -133,7 +142,10 @@ async def list_jobs_page(
                 .where(Interview.job_id == Job.id)
                 .exists()
             )
-        stmt = stmt.order_by(Job.created_at.desc())
+        if sort == "name":
+            stmt = stmt.order_by(func.lower(Job.company), func.lower(Job.title), Job.id)
+        else:
+            stmt = stmt.order_by(Job.created_at.desc(), Job.id)
         page = await apaginate(db, stmt, params)
         return {
             "items": [_job_dict(job) for job in page.items],

@@ -15,8 +15,6 @@ import {
     useGetJobQuery,
     useGetMyInterviewsQuery,
     useGetRoundTypesQuery,
-    type JobDetail,
-    type RoundTypeItem,
 } from "../api";
 import { useStartSequence } from "../hooks";
 import { formatShortDate } from "../helpers";
@@ -50,19 +48,6 @@ export default function JobDetailPage() {
     const resumableId = resumableData?.items[0]?.interview_id ?? null;
 
     const startSequence = useStartSequence();
-    function onStartRound(job: JobDetail, round: RoundTypeItem) {
-        startSequence.start(
-            { job: job.job_id, round: round.slug },
-            {
-                role: job.role_name,
-                level: job.level_name,
-                company: job.company,
-                round: round.name,
-                hasCodeEditor: round.has_code_editor,
-                allowsSmartVoice: round.allows_smart_voice,
-            },
-        );
-    }
 
     const [confirmDelete, setConfirmDelete] = useState(false);
     const [deleteJob, { isLoading: deleting }] = useDeleteJobMutation();
@@ -139,7 +124,7 @@ export default function JobDetailPage() {
                 <div className="grid grid-cols-1 gap-6 px-7 pb-8 pt-6 lg:grid-cols-[1fr_400px]">
                     <div className="flex min-w-0 flex-col gap-6">
                         <section>
-                            <h2 className="font-heading text-[23px] font-medium">Practise a round</h2>
+                            <h2 className="font-heading text-[23px] font-medium">Practice a round</h2>
                             <p className="mt-1 text-[13px] text-neutral-400">
                                 Each round is written for this job: the questions and how they're graded.
                             </p>
@@ -151,7 +136,7 @@ export default function JobDetailPage() {
                                               key={round.slug}
                                               round={round}
                                               disabled={startSequence.starting || startSequence.resumableLoading}
-                                              onStart={() => onStartRound(job, round)}
+                                              onStart={() => startSequence.startRound(job, round)}
                                           />
                                       ))}
                             </div>
@@ -164,7 +149,7 @@ export default function JobDetailPage() {
                                 resumableId={resumableId}
                                 loading={simsFetching}
                                 skeletonRows={3}
-                                emptyMessage="No rounds yet — start one above."
+                                emptyMessage="No rounds yet. Start one above."
                             />
                             {!simsFetching && (
                                 <Pagination
