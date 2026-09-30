@@ -1663,12 +1663,11 @@ Client only; the API's existing tri-state `simulation` param does the filtering.
   - `INTERVIEW_KINDS` / `InterviewKind` (`all | job | practice`) in `constants.ts`.
   - `interviewKindOf()` and `simulationParam()` in `helpers.ts`.
   - A new `InterviewKindTag`: a `.tag` pill reading "Job" (accent) or "Practice" (neutral).
-- `InterviewsTable` rows and the interview detail header show the tag.
-- Dashboard "Past interviews": All / Job / Practice tabs (a `SegmentedControl`, which gains
-  `size="sm"`).
-  - It defaults to All, and each tab shows its own empty message.
-  - "View all" carries the tab as `?kind=`.
-  - The tabs apply on click, because they're a view scope like "Show all".
+- `InterviewsTable` has a fixed-width (`w-28`) Type column holding the tag, so pills of different
+  lengths don't shift the Interview column. `SkeletonRow` gains `withTag`, and the table's min
+  width is now 720px. The interview detail header shows the tag too.
+- Dashboard "Past interviews" shows both kinds, and each row is tagged. Kind tabs were tried and
+  removed (user call). Filtering by kind lives on the Interviews page only.
 - Interviews page: a new "All kinds / Job / Practice" react-select in the filter form. It's applied
   on Search, lives in the URL as `kind`, counts toward Clear, and is sent as `simulation`.
 - Copy changes:
