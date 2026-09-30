@@ -3,7 +3,8 @@
  * standalone Interviews page. One component so the two stay identical: same columns, same
  * row affordances, same navigation.
  *
- * COLUMNS: Interview (role · level), Date, Score, and a trailing action. The action is
+ * COLUMNS: Type (the Job / Practice kind tag, fixed-width), Interview (company · round or role ·
+ * level), Date, Score, and a trailing action. The action is
  * "Resume" ONLY on the single resumable interview (the most-recent unfinished one, matched by
  * `resumableId`) — resuming a stale interview 409s server-side, so we don't offer it — and
  * "Open" (→ the detail view) on every other row.
@@ -21,6 +22,7 @@ import { PAGE_SIZE } from "../constants"
 import { SkeletonRow } from "./SkeletonRow"
 import SortableHeader from "./SortableHeader"
 import Button from "./Button"
+import InterviewKindTag from "./InterviewKindTag"
 
 // The two columns the Interviews page lets you sort by, and the direction. Exported so the page
 // (which owns the URL that holds the applied sort) speaks the same vocabulary as the header arrows.
@@ -80,8 +82,11 @@ export default function InterviewsTable({
                 without it the narrow loading skeletons size the columns smaller than real rows, and the
                 headers "jump" wider when data arrives. Interview (the wide column) takes the remainder;
                 the rest are fixed. */}
-            <table className="table table-fixed min-w-[640px]">
+            <table className="table table-fixed min-w-[720px]">
                 <colgroup>
+                    {/* Type is fixed-width so the Job/Practice pills (different lengths) never shift
+                        the Interview column's text. */}
+                    <col className="w-28" />
                     <col />
                     <col className="w-28" />
                     <col className="w-24" />
@@ -89,6 +94,7 @@ export default function InterviewsTable({
                 </colgroup>
                 <thead>
                     <tr>
+                        <th>Type</th>
                         <th>Interview</th>
                         {onSort ? (
                             <>
@@ -105,13 +111,16 @@ export default function InterviewsTable({
                     </tr>
                 </thead>
                 <tbody>
-                    {loading && Array.from({ length: skeletonRows }).map((_, i) => <SkeletonRow key={i} />)}
+                    {loading && Array.from({ length: skeletonRows }).map((_, i) => <SkeletonRow key={i} withTag />)}
                     {!loading && interviews.map((iv) => {
                         const isResumable = iv.interview_id === resumableId;
                         const [title, subtitle] = interviewTitle(iv);
                         return (
                             <tr key={iv.interview_id}>
-                                <td className="whitespace-nowrap">
+                                <td>
+                                    <InterviewKindTag jobId={iv.job_id} />
+                                </td>
+                                <td className="truncate whitespace-nowrap">
                                     {title} <span className="text-neutral-400">· {subtitle}</span>
                                 </td>
                                 <td className="whitespace-nowrap text-neutral-300">

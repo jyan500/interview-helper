@@ -159,6 +159,19 @@ export const JD_MIN_CHARS = 100;
 export const JD_MAX_CHARS = 20_000;
 
 /**
+ * The two KINDS of interview as the UI names them: a "Job" interview is a round written for a saved
+ * job (the code/API call it a simulation — `job_id` is set), a "Practice" interview asks role + level
+ * bank questions (`job_id` null). "all" is the list filters' no-filter value. The past-interview lists
+ * filter on it through the API's `simulation` param (see simulationParam in helpers.ts).
+ */
+export const INTERVIEW_KINDS = [
+    { value: "all", label: "All" },
+    { value: "job", label: "Job" },
+    { value: "practice", label: "Practice" },
+] as const;
+export type InterviewKind = (typeof INTERVIEW_KINDS)[number]["value"];
+
+/**
  * The coding round's editor languages — the slug is what POST /api/answer sends as `language` (and so
  * the fence's info string the model and the grader read); the label is the picker's. CodingPanel maps
  * each slug to its CodeMirror syntax extension. The chosen language persists across coding rounds under

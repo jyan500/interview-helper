@@ -1649,3 +1649,29 @@ taller signal panel.
   3-question fallback. With no default role/level, it prompts the user to set one.
 - `QuestionsTable`'s selection is now optional: with no `isChecked` or `onToggle` it drops the
   checkbox column, and the row isn't clickable.
+
+### 2026-09-30 — UI copy: Job vs Practice interviews
+
+UI vocabulary (user decision): the UI calls a simulation an **interview**, and tells the two kinds
+apart as **Job** (`job_id` set) and **Practice** (a role + level bank interview). "Simulation"
+stays in code, the API and comments. Also from 2026-09-29: UI copy uses American "practice" and no
+em-dashes.
+
+Client only; the API's existing tri-state `simulation` param does the filtering. `tsc` and
+`vite build` are clean. **Not yet checked in a browser.**
+- Shared pieces:
+  - `INTERVIEW_KINDS` / `InterviewKind` (`all | job | practice`) in `constants.ts`.
+  - `interviewKindOf()` and `simulationParam()` in `helpers.ts`.
+  - A new `InterviewKindTag`: a `.tag` pill reading "Job" (accent) or "Practice" (neutral).
+- `InterviewsTable` rows and the interview detail header show the tag.
+- Dashboard "Past interviews": All / Job / Practice tabs (a `SegmentedControl`, which gains
+  `size="sm"`).
+  - It defaults to All, and each tab shows its own empty message.
+  - "View all" carries the tab as `?kind=`.
+  - The tabs apply on click, because they're a view scope like "Show all".
+- Interviews page: a new "All kinds / Job / Practice" react-select in the filter form. It's applied
+  on Search, lives in the URL as `kind`, counts toward Clear, and is sent as `simulation`.
+- Copy changes:
+  - "Start a job interview" (dashboard) and "Start practice interview" (Questions page).
+  - The signal cards' empty states say "job interview".
+  - QuestionBankCard reads "Besides job interviews…".
