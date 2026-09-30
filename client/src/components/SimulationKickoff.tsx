@@ -47,7 +47,11 @@ export default function SimulationKickoff() {
     const { data: lastSim, isLoading: lastSimLoading } = useGetMyInterviewsQuery({ simulation: true, size: 1 });
     const { data: newestJobs, isLoading: newestLoading } = useGetJobsQuery({ size: 1 });
     const newestJob = newestJobs?.items[0];
-    const defaultJobId = lastSim?.items[0]?.job_id ?? newestJob?.job_id ?? null;
+    // Wait for the last-interview query to SETTLE before falling back to the newest job: while it's
+    // still loading `lastSim` is undefined, and falling through then would briefly select the newest job
+    // (instantly labelled when its row is cached, e.g. right after saving it) before the real default
+    // lands. Once settled, an account with no job interviews (or a failed lookup) gets the fallback.
+    const defaultJobId = lastSimLoading ? null : (lastSim?.items[0]?.job_id ?? newestJob?.job_id ?? null);
     const defaultLoading = lastSimLoading || newestLoading;
     const [picked, setPicked] = useState<SelectOption | null>(null);
     const selectedId = picked?.value ?? defaultJobId;
@@ -77,7 +81,7 @@ export default function SimulationKickoff() {
             {newOpen && <NewJobModal onClose={() => setNewOpen(false)} />}
 
             <div className="flex items-center justify-between gap-3">
-                <h2 className="font-heading text-[23px] font-medium">Start an interview</h2>
+                <h2 className="font-heading text-[23px] font-medium">Start a job interview</h2>
                 <Button variant="secondary" className="text-[13px]" onClick={() => setNewOpen(true)}>
                     New job
                 </Button>

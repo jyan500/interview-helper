@@ -4,8 +4,9 @@
  *
  * The list is InterviewsTable (shared with the Dashboard card); the rows come from GET /api/interviews,
  * now server-side PAGED (20/page) and FILTERED. The filter surface is one react-hook-form form — a
- * search box (matched against role/level name only, sent as `q`) and two async role/level pickers whose
- * value is the vocab slug (sent as role/level) — and ONE submit applies all three together.
+ * search box (matched against role/level name only, sent as `q`), two async role/level pickers whose
+ * value is the vocab slug (sent as role/level), and a KIND picker (All / Job / Practice, in the URL as
+ * `kind`, sent as the API's `simulation` param) — and ONE submit applies them all together.
  *
  * VIEW SCOPE: by default only GRADED interviews show (the query sends `scored=true`) — an in-progress
  * or abandoned interview has no score, so it's hidden here (the ResumeBanner still surfaces the
@@ -23,7 +24,8 @@
  */
 import { useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router";
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
+import Select from "react-select";
 import { skipToken } from "@reduxjs/toolkit/query/react";
 import {
     useGetLevelQuery,
@@ -42,16 +44,31 @@ import Tooltip from "../components/Tooltip";
 import InterviewsTable, { type SortField, type SortOrder } from "../components/InterviewsTable";
 import Pagination from "../components/Pagination";
 import Button from "../components/Button";
-import { optionFromSlug } from "../helpers";
-import { PAGE_SIZE } from "../constants"
+import { optionFromSlug, simulationParam } from "../helpers";
+import { INTERVIEW_KINDS, PAGE_SIZE, type InterviewKind } from "../constants"
+import { nocturneSelectStyles } from "../selectStyles";
 import { SkeletonText } from "../components/SkeletonText"
 
-// The filter form: the search text plus the two picker Options. Each Option is { value: slug, label:
-// name } so it feeds straight into the async select and back into the URL as role/level.
+// The kind picker's options — a plain (non-API) dropdown, so react-select's Select. "all" reads as
+// "All kinds" here, where it sits among other filters' "All roles" / "All levels".
+const KIND_OPTIONS: { value: InterviewKind; label: string }[] = INTERVIEW_KINDS.map((k) => ({
+    value: k.value,
+    label: k.value === "all" ? "All kinds" : k.label,
+}));
+
+// The URL's `kind` as a known kind; anything else (absent, stale, typo) means no kind filter.
+function parseKind(raw: string | null): InterviewKind {
+    return raw === "job" || raw === "practice" ? raw : "all";
+}
+
+// The filter form: the search text plus the picker Options. Each role/level Option is { value: slug,
+// label: name } so it feeds straight into the async select and back into the URL as role/level; the
+// kind Option comes from KIND_OPTIONS.
 type FiltersForm = {
     q: string;
     role: SelectOption | null;
     level: SelectOption | null;
+    kind: { value: InterviewKind; label: string };
 };
 
 export default function InterviewsPage() {
@@ -64,6 +81,7 @@ export default function InterviewsPage() {
     // Query args derived from the URL every render — the results always match the query string.
     const roleSlug = searchParams.get("role");
     const levelSlug = searchParams.get("level");
+    const kind = parseKind(searchParams.get("kind"));
     const page = Number(searchParams.get("page")) || 1;
     // Sort lives in the URL too, so a deep link reproduces the ordering and Back/Forward step
     // through re-sorts. Only "date"/"score" are real columns; anything else means "no explicit
@@ -80,6 +98,7 @@ export default function InterviewsPage() {
         q: searchParams.get("q") || undefined,
         role: roleSlug || undefined,
         level: levelSlug || undefined,
+        simulation: simulationParam(kind), // Job -> true, Practice -> false, All -> omitted
         sort: sortField || undefined,
         order: sortField ? sortOrder : undefined,
         // scored: true is the default; omit it (undefined) when showing all so the backend doesn't filter.
@@ -106,6 +125,7 @@ export default function InterviewsPage() {
             q: searchParams.get("q") ?? "",
             role: optionFromSlug(roleSlug),
             level: optionFromSlug(levelSlug),
+            kind: KIND_OPTIONS.find((o) => o.value === kind)!,
         },
     });
 
@@ -125,13 +145,14 @@ export default function InterviewsPage() {
         if (values.q.trim()) next.set("q", values.q.trim());
         if (values.role) next.set("role", values.role.value);
         if (values.level) next.set("level", values.level.value);
+        if (values.kind.value !== "all") next.set("kind", values.kind.value);
         // no `page` => page 1: a changed filter resets to the first page of the new result set.
         setSearchParams(next);
     }
 
     // Clear both the form draft and the applied filters in the URL, without a navigation.
     function clearFilters() {
-        reset({ q: "", role: null, level: null });
+        reset({ q: "", role: null, level: null, kind: KIND_OPTIONS[0] });
         setSearchParams(new URLSearchParams());
     }
 
@@ -170,7 +191,7 @@ export default function InterviewsPage() {
     // Reveal "Clear" whenever the view diverges from the default — an active filter, an applied
     // sort, OR the show-all scope — since Clear resets the whole URL (all of them alike), it's the
     // undo for each.
-    const hasFilters = Boolean(queryArgs.q || roleSlug || levelSlug);
+    const hasFilters = Boolean(queryArgs.q || roleSlug || levelSlug || kind !== "all");
     const canReset = hasFilters || sortField !== null || showAll;
 
     return (
@@ -186,10 +207,11 @@ export default function InterviewsPage() {
                                 Past interviews
                             </h1>
                         </div>
-                        {/* Starting an interview needs the role/level pickers, which live in the Dashboard's
-                            "Start an interview" card — so send the user there rather than duplicate the
-                            kickoff form (or POST with guessed defaults). The interview is created there,
-                            then /session is entered with it in route state. */}
+                        {/* Starting an interview needs a job + round (the Dashboard's "Start a job
+                            interview" card) or a role + level (the Questions page's practice kickoff) — so
+                            send the user to the Dashboard rather than duplicate a kickoff here (or POST
+                            with guessed defaults). The interview is created there, then /session is
+                            entered with it in route state. */}
                         <Button variant="primary" className="text-sm" onClick={() => navigate("/")}>
                             New interview
                         </Button>
@@ -223,6 +245,23 @@ export default function InterviewsPage() {
                                 name="level"
                                 fetchPage={triggerLevels}
                                 placeholder="All levels"
+                            />
+                        </div>
+                        <div className="w-[150px]">
+                            <Controller
+                                control={control}
+                                name="kind"
+                                render={({ field }) => (
+                                    <Select
+                                        options={KIND_OPTIONS}
+                                        value={field.value}
+                                        onChange={(opt) => opt && field.onChange(opt)}
+                                        onBlur={field.onBlur}
+                                        isSearchable={false}
+                                        aria-label="Interview kind"
+                                        styles={nocturneSelectStyles}
+                                    />
+                                )}
                             />
                         </div>
                         <Button type="submit" variant="primary" className="text-[13px]">

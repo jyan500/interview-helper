@@ -19,6 +19,7 @@ import {
     MIC_DEVICE_STORAGE_KEY,
     type CodeLanguage,
     type EditorSettings,
+    type InterviewKind,
 } from "./constants";
 
 /**
@@ -255,6 +256,19 @@ export function interviewTitle(iv: {
     round?: string | null;
 }): [string, string] {
     return iv.company && iv.round ? [iv.company, iv.round] : [iv.role, iv.level];
+}
+
+/** Which kind an interview is, from whether it belongs to a job. Never "all" — that's a filter value. */
+export function interviewKindOf(iv: { job_id: string | null }): Exclude<InterviewKind, "all"> {
+    return iv.job_id ? "job" : "practice";
+}
+
+/**
+ * A kind filter as GET /api/interviews' tri-state `simulation` param: job -> true (simulations only),
+ * practice -> false (bank only), all -> undefined (omitted, so both kinds come back).
+ */
+export function simulationParam(kind: InterviewKind): boolean | undefined {
+    return kind === "all" ? undefined : kind === "job";
 }
 
 /**

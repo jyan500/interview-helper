@@ -93,7 +93,7 @@ export default function BankKickoffCard() {
             >
                 <h2 className="font-heading text-[23px] font-medium">Practice from the bank</h2>
                 <p className="mt-1 text-[13px] text-neutral-400">
-                    A general interview for a role and level, asking your saved questions below.
+                    A practice interview for a role and level, asking your saved questions below.
                 </p>
 
                 <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -141,7 +141,7 @@ export default function BankKickoffCard() {
                         className="text-[15px] disabled:opacity-50"
                         style={{ padding: "11px 26px" }}
                     >
-                        {startSequence.starting ? "Starting…" : "Start interview"}
+                        {startSequence.starting ? "Starting…" : "Start practice interview"}
                     </Button>
                 </div>
             </form>

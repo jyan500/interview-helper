@@ -19,6 +19,7 @@ import FormattedText from "../components/FormattedText";
 import Donut from "../components/Donut";
 import ScoreBar from "../components/ScoreBar";
 import InterviewDetailSkeleton from "../components/InterviewDetailSkeleton";
+import InterviewKindTag from "../components/InterviewKindTag";
 import { useGetInterviewDetailQuery, type AnswerGrade, type Scorecard } from "../api";
 import { formatScore, formatShortDate, formatTime, interviewTitle } from "../helpers";
 
@@ -81,9 +82,12 @@ export default function InterviewDetailPage() {
                         )}{" "}
                         / <span className="text-neutral-300">{formatShortDate(created_at)} · {job_id ? subtitle : title}</span>
                     </div>
-                    <h1 className="mt-2 font-heading text-[29px] font-medium leading-[1.1] tracking-[-0.02em]">
-                        {title} · {subtitle}
-                    </h1>
+                    <div className="mt-2 flex items-center gap-3">
+                        <h1 className="font-heading text-[29px] font-medium leading-[1.1] tracking-[-0.02em]">
+                            {title} · {subtitle}
+                        </h1>
+                        <InterviewKindTag jobId={job_id} />
+                    </div>
                 </div>
 
                 {/* Body */}

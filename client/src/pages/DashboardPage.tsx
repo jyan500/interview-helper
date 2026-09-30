@@ -1,11 +1,15 @@
 /**
- * Dashboard — simulation-first (Nocturne mock 1a's two-column frame). Start a round for one of your
- * saved jobs, review your recent graded simulations, and see whether you're improving.
+ * Dashboard — job-interview-first (Nocturne mock 1a's two-column frame). Start a round for one of
+ * your saved jobs, review your recent graded interviews, and see whether you're improving.
  *
- *   Left:  the resume banner, "Start a simulation" (SimulationKickoff: job picker + round cards),
- *          "Past simulations" (the newest few graded ones), and "Your question bank"
- *          (QuestionBankCard: a read-only preview of the saved bank questions).
- *   Right: the signal panel (SignalPanel), scoped by round (+ optional job) and window.
+ * UI vocabulary: a "Job" interview is what the code/API call a simulation (`job_id` set); a
+ * "Practice" interview is a role + level bank one.
+ *
+ *   Left:  the resume banner, "Start a job interview" (SimulationKickoff: job picker + round cards),
+ *          "Past interviews" (the newest few graded ones, both kinds, each row tagged Job/Practice),
+ *          and "Your question bank" (QuestionBankCard: a read-only preview of the saved bank questions).
+ *   Right: the signal panel (SignalPanel, job interviews only), scoped by round (+ optional job) and
+ *          window.
  *
  * Bank practice itself (role + level, and curating the saved "My questions" it asks) lives on the
  * Questions page; the dashboard only calls back to it.
@@ -23,23 +27,21 @@ import QuestionBankCard from "../components/QuestionBankCard";
 import SignalPanel from "../components/SignalPanel";
 import SimulationKickoff from "../components/SimulationKickoff";
 
-// How many recent simulations the dashboard card shows before "View all" takes over. Sent as the page
+// How many recent interviews the dashboard card shows before "View all" takes over. Sent as the page
 // `size` so the server returns just this many (page 1, newest first) rather than the whole history.
 const DASHBOARD_ROWS = 5;
 
 export default function DashboardPage() {
     const { session } = useAuth();
 
-    // Past simulations — the newest few GRADED simulations (scored: true hides in-progress/abandoned
-    // ones, whose Score column would be blank; simulation: true drops bank interviews, matching the
-    // simulation-only signal panel) and, separately, the one resumable interview so the table can
-    // show its Resume button. Both come back in the same page envelope; the resumable query narrows
-    // server-side to a 0-or-1-element list. The unfinished interview isn't lost from this page — the
-    // ResumeBanner above surfaces it.
+    // Past interviews — the newest few GRADED interviews of BOTH kinds (scored: true hides
+    // in-progress/abandoned ones, whose Score column would be blank; each row's Type tag tells Job from
+    // Practice), and, separately, the one resumable interview so the table can show its Resume button.
+    // Filtering by kind lives on the full Interviews page ("View all"). The unfinished interview isn't
+    // lost from this page — the ResumeBanner above surfaces it.
     const { data: interviewsData, isFetching } = useGetMyInterviewsQuery({
         size: DASHBOARD_ROWS,
         scored: true,
-        simulation: true,
     });
     const { data: resumableData } = useGetMyInterviewsQuery({ resumable: true });
     const interviews = interviewsData?.items ?? [];
@@ -65,11 +67,11 @@ export default function DashboardPage() {
                             a resumable interview (the most-recent unfinished one), else nothing. */}
                         <ResumeBanner />
 
-                        {/* Start a simulation — pick a job, start one of its rounds. Self-contained. */}
+                        {/* Start a job interview — pick a job, start one of its rounds. Self-contained. */}
                         <SimulationKickoff />
 
-                        {/* Past simulations — the newest few graded ones, sharing InterviewsTable with
-                            the full Interviews page. "View all" routes to that page. */}
+                        {/* Past interviews — the newest few graded ones (both kinds), sharing
+                            InterviewsTable with the full Interviews page. "View all" routes to that page. */}
                         <div className="rounded-md border border-divider px-[22px] pb-2 pt-[18px]">
                             <div className="mb-2 flex items-baseline justify-between">
                                 <h2 className="font-heading text-[23px] font-medium">Past interviews</h2>
@@ -82,7 +84,7 @@ export default function DashboardPage() {
                                 resumableId={resumableId}
                                 loading={isFetching}
                                 skeletonRows={DASHBOARD_ROWS}
-                                emptyMessage="No graded interviews yet. Run a round from a job and it'll show up here."
+                                emptyMessage="No graded interviews yet. Start a job interview above, or a practice one from the Questions page."
                             />
                         </div>
 
@@ -91,7 +93,7 @@ export default function DashboardPage() {
                         <QuestionBankCard />
                     </div>
 
-                    {/* ── Right column (signal) — simulation readiness / skill breakdown / work on next,
+                    {/* ── Right column (signal) — job-interview readiness / skill breakdown / work on next,
                         scoped by round (+ optional job) and window; self-contained. ─────────────── */}
                     <SignalPanel />
                 </div>
