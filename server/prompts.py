@@ -123,7 +123,8 @@ def simulation_interview(
         f'{seniority}-level candidate applying for "{title}". Stay in character as someone who '
         f'works there.',
         f"About the company and the job:\n{summary}",
-        f"How this round runs:\n{round_guidance}",
+        f"How to run this round (the round's questions are already written, and the system presents "
+        f"each one itself; this is only about your style and what to probe):\n{round_guidance}",
         "The round guidance decides when a question is fully covered. While it isn't (for example, "
         "a coding problem still lacks working code or a complexity analysis), set ask_followup = "
         "true and ask for the next missing piece, even if the answer so far is good. Before you set "
@@ -142,6 +143,7 @@ def evaluate_answer(
     level: str | None = None,
     job_context: str = "",
     round_note: str = "",
+    followups: list[tuple[str, str]] | None = None,
 ) -> str:
     """The GRADING template: score, one strength, one gap, one fix.
 
@@ -172,6 +174,10 @@ def evaluate_answer(
       job_context — the company, title and JD summary the round was generated from.
       round_note  — the round's name and description ("Coding round — ...").
     And when the answer contains a fenced code block, a note that the code was TYPED, not spoken.
+
+    followups — the interviewer's probes on this question, as (probe, candidate answer) pairs in
+      order. Rendered as a transcript so each follow-up answer is read against the probe it
+      answered, not against the original question. None/empty for an unprobed question.
     """
     # WORKED — build the optional sections so an un-briefed / un-leveled call renders the
     # pre-Phase-E prompt with NOTHING dangling (no empty "reference brief:" or "level: None"
@@ -190,6 +196,16 @@ def evaluate_answer(
         if job_context else ""
     )
     round_section = f"\n\ninterview round: {round_note}" if round_note else ""
+    # Follow-up exchanges, WITH the probe text: an answer to a narrow probe ("what happens if Redis
+    # goes down?") only makes sense next to the probe. Grade the question as one exchange.
+    followups = followups or []
+    followup_section = (
+        "\n\nfollow-up exchanges (the interviewer probed the answer above; grade the question as ONE "
+        "exchange, crediting what the candidate added under probing, and read each follow-up answer "
+        "against the probe it was answering):"
+        + "".join(f"\ninterviewer: {probe}\ncandidate: {reply}" for probe, reply in followups)
+        if followups else ""
+    )
     # Code arrives as a fenced block appended to the turn (api.py /api/answer). It was TYPED, so the
     # spoken-answer framing above must not excuse — or penalize — it as speech.
     code_section = (
@@ -197,7 +213,7 @@ def evaluate_answer(
         "into a code editor rather than spoke. Grade that code as code (correctness, edge cases, "
         "complexity, readability); the speech allowances above apply only to the spoken prose "
         "around it."
-        if "```" in answer else ""
+        if "```" in answer or any("```" in reply for _, reply in followups) else ""
     )
 
     # TODO — rewrite this instruction paragraph to do (a), (b), (c) above, and to CONDITION on
@@ -237,7 +253,13 @@ def evaluate_answer(
 
         If a rubric does not include a reference brief and candidate seniority level, fall back to plain rubric grading.
 
+        For each dimension, write the evidence note first, then choose the score that note supports.
+        Score every rubric dimension exactly once, using its name verbatim.
+
+        If the candidate gave no substantive answer and only asked to skip or move on, mark the
+        answer as skipped. An attempted answer, however weak, is not a skip: grade it.
+
         question: {question}
-        answer: {answer}
+        answer: {answer}{followup_section}
         rubric: {rubric}{brief_section}{level_section}{context_section}{round_section}{code_section}
     """).strip()

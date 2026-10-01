@@ -308,14 +308,15 @@ async def seed() -> None:
 
         # --- round types (interview simulation) + their rubrics ---------------------------
         # bank["rounds"][slug] -> a round_types row + a round-owned rubric + its dimensions.
-        # UPDATED IN PLACE like briefs, not get-or-create-only: a round's `guidance` and budgets get
+        # UPDATED IN PLACE like briefs, not get-or-create-only: a round's guidance and budgets get
         # TUNED (they steer the generator and the interviewer), and re-seeding must pick that up.
         # Dimensions stay get-or-create — rewording one is a new slug by design (see RubricDimension).
         for round_slug, round_data in bank.get("rounds", {}).items():
             fields = {
                 "name": round_data["name"],
                 "description": round_data["description"],
-                "guidance": round_data["guidance"],
+                "question_guidance": round_data["question_guidance"],
+                "interviewer_guidance": round_data["interviewer_guidance"],
                 "plan_size": round_data["plan_size"],
                 "max_followups": round_data["max_followups"],
                 "has_code_editor": round_data["has_code_editor"],

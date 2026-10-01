@@ -31,9 +31,10 @@ Smoke test (from server/, 1 LLM call — needs .env GEMINI_API_KEY):
 from __future__ import annotations
 
 import os
+import re
 
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent
+from pydantic_ai import Agent, ModelRetry, RunContext
 from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.settings import ModelSettings
@@ -76,10 +77,17 @@ grader_model = GoogleModel(
 # return exactly this — no prose to parse. Field descriptions become schema hints the model
 # sees, so they double as instructions.
 class DimensionScore(BaseModel):
-    """One rubric dimension, scored."""
+    """One rubric dimension, scored.
+
+    FIELD ORDER IS DELIBERATE: `note` comes BEFORE `score`. The model fills fields in schema order,
+    so it writes the evidence first and the number second, instead of committing to a number and
+    then rationalizing it (the same trick as TurnReply.answer_request below).
+    """
     dimension: str = Field(description="the rubric dimension being scored, copied verbatim")
-    score: int = Field(ge=1, le=5, description="1 (poor) to 5 (excellent) for this dimension")
-    note: str = Field(description="one sentence justifying the score with specifics from the answer")
+    note: str = Field(description="one sentence of evidence from the answer for this dimension, "
+                                  "written BEFORE you decide the score")
+    score: int = Field(ge=1, le=5, description="1 (poor) to 5 (excellent) for this dimension, "
+                                               "following from the note above")
 
 
 class AnswerGrade(BaseModel):
@@ -89,7 +97,16 @@ class AnswerGrade(BaseModel):
     We attach the id in Python (in api.py) when we assemble the scorecard. Keep the model's
     job to what only the model can do — judge the answer.
     """
-    dimension_scores: list[DimensionScore] = Field(description="one entry per rubric dimension")
+    # First, so the model decides "was there anything to grade?" before scoring. A skipped question
+    # is recorded with the candidate's "let's move on" as its answer (api.py /api/answer); scoring
+    # that 1/5 on every dimension would read as a terrible answer rather than no answer. The output
+    # validator below empties dimension_scores for a skip, so it drops out of the averages.
+    skipped: bool = Field(default=False, description="true ONLY if the candidate gave no substantive "
+                                                     "answer at all and asked to skip or move on. "
+                                                     "False if they attempted an answer, even a weak "
+                                                     "one, before moving on")
+    dimension_scores: list[DimensionScore] = Field(description="one entry per rubric dimension "
+                                                               "(empty if skipped)")
     strength: str = Field(description="one concrete thing the answer did well")
     gap: str = Field(description="one concrete thing the answer was missing")
     improvement: str = Field(description="one specific, actionable suggestion")
@@ -102,8 +119,30 @@ class AnswerGrade(BaseModel):
 grader_agent = Agent(
     grader_model,                              # Phase E: its OWN model, not the interviewer's
     output_type=AnswerGrade,
+    # deps = the rubric's dimension names, so the validator below can check the grade covers them
+    deps_type=list[str],
     model_settings=ModelSettings(max_tokens=600),
 )
+
+
+@grader_agent.output_validator
+def _check_dimensions(ctx: RunContext[list[str]], grade: AnswerGrade) -> AnswerGrade:
+    """Every rubric dimension scored exactly once, under its exact name, or the model retries.
+
+    Without this, a dimension the model paraphrased ("Technical depth" for "Technical depth /
+    correctness") was silently DROPPED by aggregate_scores' whitelist, quietly skewing the averages.
+    A retry is cheap (request_limit=3 in grade_one budgets it) and fixes it at the source.
+    A skip has nothing to score, so its scores are cleared instead of checked.
+    """
+    if grade.skipped:
+        return grade.model_copy(update={"dimension_scores": []})
+    got = [ds.dimension for ds in grade.dimension_scores]
+    if sorted(got) != sorted(ctx.deps):
+        raise ModelRetry(
+            f"dimension_scores must contain exactly one entry for each of these dimensions, "
+            f"named verbatim: {ctx.deps}. You returned: {got}."
+        )
+    return grade
 
 
 # --- THE INTERVIEWER'S PER-TURN DECISION (client-driven loop) --------------------------
@@ -172,6 +211,46 @@ turn_agent = Agent(
 )
 
 
+# A reaction that asks something, or announces a next/final question, has slipped a question into a
+# field the client always shows. On an advance the client appends the REAL next question right after
+# it, so the candidate reads two questions in one turn.
+_QUESTION_ANNOUNCE = re.compile(r"\b(next|final|last|another) question\b", re.IGNORECASE)
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+
+
+def _reaction_slips_a_question(sentence: str) -> bool:
+    return "?" in sentence or bool(_QUESTION_ANNOUNCE.search(sentence))
+
+
+@turn_agent.output_validator
+def _check_reaction(ctx: RunContext[None], reply: TurnReply) -> TurnReply:
+    """Keep questions out of `reaction`; probes belong in `followup`, and the client asks the next one.
+
+    Only for an ANSWER: a clarification may need to restate the question, and an answer request's
+    reaction is never shown (api.py replies with a fixed line). The prompt already forbids this, but
+    the cheap interviewer model doesn't always comply, so it's enforced here: retry once with the
+    reason, and if the retry still slips, trim the reaction at the first offending sentence rather
+    than fail the candidate's turn.
+    """
+    if reply.is_clarification or reply.answer_request:
+        return reply
+    sentences = _SENTENCE_SPLIT.split(reply.reaction.strip())
+    if not any(_reaction_slips_a_question(s) for s in sentences):
+        return reply
+    if ctx.retry < ctx.max_retries:
+        raise ModelRetry(
+            "`reaction` must be a statement about the candidate's answer only: no question marks, and "
+            "never announce or ask a next or final question. Put a probe on the SAME question in "
+            "`followup`; the system presents the next question itself."
+        )
+    kept = []
+    for sentence in sentences:
+        if _reaction_slips_a_question(sentence):
+            break
+        kept.append(sentence)
+    return reply.model_copy(update={"reaction": " ".join(kept)})
+
+
 # --- WORKED EXAMPLE — grade ONE answer -------------------------------------------------
 # The server owns the GRADING TEMPLATE (`evaluate_answer`, Phase 2), so we CALL it rather than
 # hardcode grading instructions here — the same "server owns the persona" lesson as the
@@ -189,9 +268,11 @@ async def grade_one(
     question_text: str,
     answer: str,
     rubric_text: str,
+    dimensions: list[str],
     level: str | None = None,
     job_context: str = "",
     round_note: str = "",
+    followups: list[tuple[str, str]] | None = None,
 ) -> AnswerGrade:
     """Grade a single (question, answer) against the rubric -> a typed AnswerGrade.
 
@@ -207,6 +288,11 @@ async def grade_one(
     INTERVIEW SIMULATION: `job_context` / `round_note` are passed straight to the template (both ""
     for a bank interview). A generated question's brief is an ordinary reference_briefs row, so the
     fetch above grounds it with no special case.
+
+    `dimensions` are the rubric's dimension names; the output validator checks the grade scores
+    each one exactly once. `followups` are the interviewer's probes on this question, as
+    (probe text, candidate's answer) pairs in order, so the grader reads each follow-up answer
+    against the question it was actually answering.
     """
     brief_env = await get_reference(question_id)
     reference_brief = brief_env["brief"] if brief_env["status"] == "ok" else ""
@@ -218,9 +304,11 @@ async def grade_one(
         level=level,
         job_context=job_context,
         round_note=round_note,
+        followups=followups,
     )
     result = await grader_agent.run(
         filled,
+        deps=dimensions,
         usage_limits=UsageLimits(request_limit=3),
     )
     return result.output                       # typed AnswerGrade, not a string
@@ -284,8 +372,9 @@ if __name__ == "__main__":
     async def _smoke():
         grades = []
         for q in qa:
-            grade = await grade_one(q["question_id"], q["question"], q["answer"], _RUBRIC, level=q["level"])
-            print("AnswerGrade:")
+            grade = await grade_one(q["question_id"], q["question"], q["answer"], _RUBRIC, DIMENSIONS,
+                                    level=q["level"])
+            print("AnswerGrade (skipped):" if grade.skipped else "AnswerGrade:")
             for ds in grade.dimension_scores:
                 print(f"  {ds.dimension}: {ds.score} — {ds.note}")
             print("strength:   ", grade.strength)

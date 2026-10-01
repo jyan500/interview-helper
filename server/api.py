@@ -77,6 +77,7 @@ and POST another answer to the SAME interview_id. It keeps going.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
 
@@ -102,7 +103,7 @@ from pydantic_ai.usage import UsageLimits
 # interviewer conducts, the grader scores. See grading.py for the output_type idea.
 # Importing this also imports pydantic_agent, whose module-level load_dotenv is what puts
 # GEMINI_API_KEY / OPENAI_API_KEY in the environment for this process.
-from grading import aggregate, grade_one, turn_agent
+from grading import AnswerGrade, aggregate, grade_one, turn_agent
 # Interview simulation — the JD extractor and the round generator.
 from simulation import extract_job, generate_round
 
@@ -257,7 +258,7 @@ class QuestionTypeOut(BaseModel):
 
 
 # INTERVIEW SIMULATION — the round cards on a Job page. Coerced off the RoundType ORM row. Only what
-# the client needs to render and branch: `guidance` (the generator/interviewer prose) and the budgets
+# the client needs to render and branch: the generator/interviewer guidance prose and the budgets
 # stay server-side. `has_code_editor` is how the SPA knows to show the editor without a slug check;
 # `allows_smart_voice` likewise decides the voice turn-taking mode (smart default vs. manual-only).
 class RoundTypeOut(BaseModel):
@@ -382,7 +383,7 @@ async def start_interview(
             title=job["title"],
             summary=job["summary"],
             round_name=round_row.name,
-            round_guidance=round_row.guidance,
+            round_guidance=round_row.interviewer_guidance,
             seniority=seniority,
         )
         try:
@@ -829,34 +830,40 @@ async def scorecard(
     #    answer against the original question text AND double-count that question in the
     #    averages. Treating a question plus its probes as one exchange is also just how a real
     #    interviewer works: probe, then form a single assessment of the topic.
-    answers: list[dict] = []
-    grades = []
-    grouped: dict[str, list[str]] = {}
+    #    Each group keeps the PROMPT alongside the answer: a follow-up turn's `question_text` is the
+    #    probe the candidate was answering, and the grader needs it to judge that answer fairly.
+    grouped: dict[str, list[tuple[str, str]]] = {}
     for turn in turns:
         # skip the OPEN turn (answer is None): a question that was presented but not answered
         # yet. A finished interview has none, but grading a still-running one would otherwise try
         # to score a NULL answer. NULL only — an empty-string answer is still a (blank) answer.
         if turn["answer"] is None:
             continue
-        grouped.setdefault(turn["question_id"], []).append(turn["answer"])
+        grouped.setdefault(turn["question_id"], []).append((turn["question_text"], turn["answer"]))
 
-    for question_id, answer_list in grouped.items():
+    async def grade_question(question_id: str, exchanges: list[tuple[str, str]]) -> tuple[AnswerGrade, dict]:
         question = await get_question(question_id)
         question_text = (question["question"]["text"] if question.get("status") == "ok"
                          else "(unknown question)")
-        first, followups = answer_list[0], answer_list[1:]
-        combined = first
-        if followups:
-            combined += " (the following text is follow-up) " + "\n\n".join(followups)
+        # the first exchange answered the question itself; the rest answered probes on it
+        first_answer, followups = exchanges[0][1], exchanges[1:]
         # Phase E — pass the question SLUG (so grade_one fetches this question's brief) and the
         # interview level (so scoring is calibrated). grade_one tolerates an un-briefed question.
         grade = await grade_one(
-            question_id, question_text, combined, rubric_text, level=level,
+            question_id, question_text, first_answer, rubric_text, dimensions, level=level,
             job_context=context["job_context"], round_note=context["round_note"],
+            followups=followups,
         )
-        grades.append(grade)
-        answers.append({"question_id": question_id, "question_text": question_text,
-                        **grade.model_dump()})
+        return grade, {"question_id": question_id, "question_text": question_text, **grade.model_dump()}
+
+    # The questions are graded independently, so grade them CONCURRENTLY: the scorecard waits for
+    # the slowest grade instead of the sum of all of them. gather keeps input order, so `answers`
+    # still follows the interview's question order.
+    results = await asyncio.gather(
+        *(grade_question(qid, exchanges) for qid, exchanges in grouped.items())
+    )
+    grades = [grade for grade, _ in results]
+    answers = [answer for _, answer in results]
 
     # 4. aggregate the per-answer grades into headline numbers (deterministic Python — the LLM
     #    already judged; this just averages).
