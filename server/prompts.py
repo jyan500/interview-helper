@@ -66,8 +66,8 @@ _TURN_CONTRACT = textwrap.dedent("""
 
         Never ask a NEW main question, never write out, describe or invent another question or
         problem, and never announce "moving on" or "here's the next problem". You don't know what
-        comes next: the system chooses the next question and presents it right after your
-        reaction. You never pick the topic. Keep it short; stay in character.
+        comes next: the system decides (the next question, or the end of the interview) and says
+        so right after your reaction. You never pick the topic. Keep it short; stay in character.
 
         Tone — supportive and professional, but not a pushover:
         - Engage with the SUBSTANCE of what they said. If it's vague, thin, or off-topic, probe

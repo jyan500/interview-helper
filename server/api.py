@@ -528,7 +528,14 @@ async def submit_answer(
     #    We must know the INTENT before recording, so a clarifying question never lands in the
     #    store as an answer. We say "message" (not "answer") so we don't pre-bias the model.
     #    output_type=TurnReply is set on turn_agent.
-    prompt = (f"The current interview question is: {state['current_qtext']}\n\n"
+    #    On the LAST planned question, say so: otherwise a skip or a closing reaction says "let's move
+    #    on to another topic" right before the client's "That's the end of the interview".
+    last_question_note = (
+        "\n\nThis is the LAST question of the interview: nothing comes after it. If you aren't "
+        "probing further, close warmly and never mention moving on, another question, or another topic."
+        if state["next_planned_qid"] is None else ""
+    )
+    prompt = (f"The current interview question is: {state['current_qtext']}{last_question_note}\n\n"
               f"The candidate's message: {text}")
     result = await turn_agent.run(
         prompt,
