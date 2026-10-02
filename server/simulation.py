@@ -203,7 +203,7 @@ async def generate_round(job: dict, round_type) -> list[dict]:
     never imports this module's model stack).
 
     `job` is the tools/jobs detail dict (company, title, summary, level); `round_type` is the
-    RoundType ORM row, whose `guidance` says what to ask and `plan_size` how many. The allowed
+    RoundType ORM row, whose `question_guidance` says what to ask and `plan_size` how many. The allowed
     question types are passed with their names, like the JD extractor's roles."""
     types = (await list_question_types(Params(page=1, size=100))).items
     output_type = _round_output_type([t.slug for t in types], round_type.plan_size)
@@ -215,7 +215,7 @@ async def generate_round(job: dict, round_type) -> list[dict]:
         f"CANDIDATE LEVEL: {job['level']} ({job['level_name']})\n"
         f"JOB SUMMARY: {job['summary']}\n\n"
         f"ROUND: {round_type.name}\n"
-        f"ROUND GUIDANCE: {round_type.guidance}\n\n"
+        f"ROUND GUIDANCE: {round_type.question_guidance}\n\n"
         f"Write exactly {round_type.plan_size} question(s), each with its brief."
     )
     started = time.perf_counter()

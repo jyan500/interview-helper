@@ -72,7 +72,7 @@ export default function InterviewsTable({
     // Empty line only when we're settled with no rows — never mid-fetch, when the skeleton shows.
     if (!loading && interviews.length === 0) {
         return (
-            <p className="px-3 py-6 text-[13.5px] text-neutral-400">{emptyMessage}</p>
+            <p className="text-[13.5px] text-neutral-400">{emptyMessage}</p>
         );
     }
 

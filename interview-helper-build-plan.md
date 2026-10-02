@@ -411,14 +411,13 @@ get different questions and level-calibrated feedback).
 
 ## CURRENT STATUS (resume point)
 
-*Last updated 2026-09-23. Branch: `interview-simulation-backend-logic`. Phases A–F all ✅;
-Phase G (production hardening & deploy) is still ahead. **In progress: INTERVIEW SIMULATION from a
-pasted job description** — a 5-phase build (plan: `~/.claude/plans/i-would-like-to-floofy-sutton.md`);
-**Sim Phases 1–3 ✅, Sim Phase 4 (coding-round UI) implemented on branch
-`interview-simulation-code-editor` — `tsc` + `vite build` clean, browser pass pending; next action =
-that browser pass (typed, then voice), then Sim Phase 5 (polish + docs).** Recent post-F work
-(profile picture, settings page, the question-bank + roles expansion, bounded interviews, questions
-filters, and the simulation work) is logged in dated `###` sections at the END of this file.*
+*Last updated 2026-09-30. Phases A–F all ✅; Phase G (production hardening & deploy) is still
+ahead. Interview simulation (Sim Phases 1–4), the simulation dashboard, and the Job vs Practice UI
+copy are in. **Latest: grading improvements, batch 1 (follow-up probes reach the grader,
+evidence-before-score, a dimension-name retry, parallel grading, skips excluded from the averages).
+Offline checks and the grader smoke test pass. Next action = an end-to-end `/api/scorecard` run with
+a follow-up and a skip, then batch 2 (see the 2026-09-30 grading section at the end).** Recent
+post-F work is logged in dated `###` sections at the END of this file.*
 
 ### Phase A — ✅ COMPLETE (all verified against the live Supabase DB)
 
@@ -1674,3 +1673,47 @@ Client only; the API's existing tri-state `simulation` param does the filtering.
   - "Start a job interview" (dashboard) and "Start practice interview" (Questions page).
   - The signal cards' empty states say "job interview".
   - QuestionBankCard reads "Besides job interviews…".
+
+### 2026-09-30 — Grading improvements, batch 1
+
+Plan: `~/.claude/plans/what-are-some-ways-groovy-book.md` (12 ranked findings; this is items 1–5).
+No migration, and the scorecard wire shape is unchanged apart from a new `skipped` flag on live grades.
+
+- **Follow-up probes reach the grader.** `/api/scorecard` used to keep only each turn's answer and
+  join follow-ups with a "(the following text is follow-up)" marker, so the grader never saw the
+  probe. Groups now keep `(question_text, answer)` pairs (a follow-up turn's `question_text` is the
+  probe). `grade_one` / `evaluate_answer` take `followups` and render an `interviewer:` /
+  `candidate:` transcript, with an instruction to grade the question as one exchange. The
+  typed-code note now also fires on code inside a follow-up answer.
+- **Evidence before score.** `DimensionScore` field order is now `dimension, note, score`, so the
+  model writes its evidence before choosing the number (the `TurnReply.answer_request` trick).
+  The template says so too.
+- **Dimension drift retries instead of vanishing.** `grader_agent` now has `deps_type=list[str]`
+  (the rubric's dimension names) and an `output_validator` that raises `ModelRetry` unless each
+  dimension is scored exactly once, named verbatim. `grade_one` takes `dimensions`; the existing
+  `request_limit=3` covers the retry. Before, `aggregate_scores`' whitelist silently dropped a
+  paraphrased name.
+- **Parallel grading.** The per-question grades run under `asyncio.gather` (order kept). DB reads
+  per question are short and the engine pool queues past 15 connections.
+- **Skips.** `AnswerGrade.skipped` (first field) marks a question the candidate passed on with no
+  real attempt. The validator clears its `dimension_scores`, so it drops out of the averages and is
+  saved with no score rows. `InterviewDetailPage` shows "Skipped" when a grade has no dimension
+  scores (live and persisted, since `skipped` itself isn't stored).
+
+Verified: the server files compile. Offline checks with a pydantic-ai `FunctionModel`, no LLM calls:
+the template renders follow-ups, a misnamed dimension retries and then passes, and a skip clears its
+scores. `npx tsc` is clean. One `python grading.py` run (2 calls, `gemini-3.5-flash-lite`) returned
+all 4 dimensions verbatim.
+
+**Not yet checked:** a real `/api/scorecard` with a probed and a skipped question (print the filled
+template to confirm the probe text is there).
+
+**Next, batch 2** (changes the scorecard shape; its own phase):
+- N/A dimensions: a nullable score, skipped by the averages. The smoke test gave a behavioral answer
+  2/5 on "Tradeoff reasoning".
+- A round-level pass/borderline/fail verdict for job interviews.
+- A brief-grounded "what great looks like" field.
+- A larger grader `max_tokens` (600 is tight for coding answers).
+
+Later: a self-check on `round_agent`'s generated briefs, a small grader regression set, and a low
+grader temperature.

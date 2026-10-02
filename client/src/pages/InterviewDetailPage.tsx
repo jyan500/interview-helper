@@ -177,7 +177,11 @@ function ScorecardPanel({ card }: { card: Scorecard }) {
                     <div key={i} className="rounded-md border border-divider px-4 py-[15px]">
                         <div className="flex items-baseline justify-between gap-3">
                             <span className="kicker">Question {i + 1}</span>
-                            <span className="text-[13px] text-neutral-300">{formatScore(questionRating(grade))}</span>
+                            {/* a skipped question is graded with no dimension scores (and is left out of
+                                the averages), so it shows as skipped rather than a 0 */}
+                            <span className="text-[13px] text-neutral-300">
+                                {grade.dimension_scores.length === 0 ? "Skipped" : formatScore(questionRating(grade))}
+                            </span>
                         </div>
                         {/* a generated coding problem keeps its line breaks (and any example code block) */}
                         <div className="mt-2">

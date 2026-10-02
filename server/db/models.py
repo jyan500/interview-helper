@@ -293,9 +293,12 @@ class RoundType(Base, TimestampMixin):
     `type_id` and the round lives here.
 
     THE ROW DRIVES THE ROUND, so adding a round is a seed entry, not a code change:
-      guidance         prose describing the round's composition and the interviewer's style. Fed to
-                       BOTH the question generator (what to ask) and the per-turn persona (how to
-                       probe). Stays server-side — the client never needs it.
+      question_guidance     prose for the question GENERATOR: what the round contains and how to
+                       write it. Only round_agent reads it.
+      interviewer_guidance  prose for the per-turn PERSONA: the round's style and what to probe.
+                       Split from question_guidance because the persona read "ask these four
+                       questions, in this order" as an order to ask them itself, and pasted the next
+                       planned question into its reaction. Both stay server-side.
       plan_size        how many questions the generator writes (the frozen plan's length).
       max_followups    the probe budget copied onto each interview — a coding round needs many
                        more back-and-forths (approach → code → complexity → edge cases) than a
@@ -314,7 +317,8 @@ class RoundType(Base, TimestampMixin):
     slug: Mapped[str] = mapped_column(String(32), unique=True, index=True)  # "coding"
     name: Mapped[str] = mapped_column(String(64))                           # "Coding"
     description: Mapped[str] = mapped_column(Text)                          # the round card blurb
-    guidance: Mapped[str] = mapped_column(Text)
+    question_guidance: Mapped[str] = mapped_column(Text)
+    interviewer_guidance: Mapped[str] = mapped_column(Text)
     plan_size: Mapped[int] = mapped_column(Integer)
     max_followups: Mapped[int] = mapped_column(Integer)
     has_code_editor: Mapped[bool] = mapped_column(Boolean, default=False)
