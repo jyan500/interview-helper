@@ -43,16 +43,15 @@ from pydantic_ai.usage import UsageLimits
 from grading import grader_model
 from pydantic_agent import model
 from tools.questions import list_levels, list_question_types, list_roles
-
-# uvicorn's logger, so these lines land in the same console as the request log.
-log = logging.getLogger("uvicorn.error")
+# Gated behind PERF_LOG=1 (see perf.py).
+from perf import log_perf
 
 
 def log_run(label: str, result, started: float) -> None:
     """One line per LLM call: tokens in/out + wall-clock latency (the per-turn cost visibility the
-    guardrails ask for). `result.usage` is a property on pydantic-ai 2.13's run result."""
+    guardrails ask for), when PERF_LOG=1. `result.usage` is a property on pydantic-ai 2.13's run result."""
     usage = result.usage
-    log.info(
+    log_perf(
         "%s: input_tokens=%s output_tokens=%s latency=%.2fs",
         label, usage.input_tokens, usage.output_tokens, time.perf_counter() - started,
     )

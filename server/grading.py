@@ -204,10 +204,12 @@ class TurnReply(BaseModel):
 
 
 # No toolset — the model doesn't call tools anymore; the client does. Same max_tokens cap.
+# thinking=False: the turn is a classification + a short reaction, and reasoning tokens are pure
+# latency in a voice loop. pydantic-ai maps it to Gemini 3's thinking_level=MINIMAL.
 turn_agent = Agent(
     model,
     output_type=TurnReply,
-    model_settings=ModelSettings(max_tokens=600),
+    model_settings=ModelSettings(max_tokens=600, thinking=False),
 )
 
 
