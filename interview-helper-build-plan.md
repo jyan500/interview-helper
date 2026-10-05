@@ -411,13 +411,14 @@ get different questions and level-calibrated feedback).
 
 ## CURRENT STATUS (resume point)
 
-*Last updated 2026-09-30. Phases A–F all ✅; Phase G (production hardening & deploy) is still
+*Last updated 2026-10-01. Phases A–F all ✅; Phase G (production hardening & deploy) is still
 ahead. Interview simulation (Sim Phases 1–4), the simulation dashboard, and the Job vs Practice UI
-copy are in. **Latest: grading improvements, batch 1 (follow-up probes reach the grader,
-evidence-before-score, a dimension-name retry, parallel grading, skips excluded from the averages).
-Offline checks and the grader smoke test pass. Next action = an end-to-end `/api/scorecard` run with
-a follow-up and a skip, then batch 2 (see the 2026-09-30 grading section at the end).** Recent
-post-F work is logged in dated `###` sections at the END of this file.*
+copy are in. **Latest (branch `addressing-interview-latency`): voice-turn latency Phase 1. Added
+PERF_LOG-gated per-stage timing, turned interviewer thinking down to minimal, and moved STT to
+`gpt-transcribe`. The timings showed the DB was the bottleneck (selectin cascade), now fixed with
+column-query loads + a one-transaction `commit_turn`. Next action = re-run live voice turns with
+PERF_LOG=1 to confirm, then the rest of latency Phase 2 (see the 2026-10-01 section at the end).** Grading batch 2 is still pending (2026-09-30
+section). Recent post-F work is logged in dated `###` sections at the END of this file.*
 
 ### Phase A — ✅ COMPLETE (all verified against the live Supabase DB)
 
@@ -1717,3 +1718,32 @@ template to confirm the probe text is there).
 
 Later: a self-check on `round_agent`'s generated briefs, a small grader regression set, and a low
 grader temperature.
+
+### 2026-10-01 — Voice-turn latency, Phase 1 (backend)
+
+Problem: there's a long wait between the candidate finishing speaking and the interviewer's audio starting. The backend half of the pipeline makes 3 serial requests (`/api/transcribe` → `/api/answer` → `/api/tts`) and streams nothing. Smart-mode VAD/countdown timing is out of scope (the user is fine with it).
+
+Done:
+- **`server/perf.py`** (new): `log_perf(...)` only logs when `PERF_LOG=1` is set in `server/.env`. It's off by default. `simulation.py`'s `log_run` now goes through it too.
+- **Per-stage timing.** `/api/answer` logs `load / llm / db / total` plus `requests` and tokens (`requests > 1` = the reaction validator retried). The route body after the LLM call moved into `_finish_turn` so one try/finally can time every exit path. `/api/transcribe` logs `stt + bytes` and `/api/tts` logs `tts + chars + bytes`.
+- **`turn_agent` gets `thinking=False`.** pydantic-ai maps that to Gemini 3 `thinking_level=MINIMAL` (checked: flash-lite's profile has `supports_thinking` and `google_supports_thinking_level`). The grader is untouched.
+- **STT is now `gpt-transcribe`** (`STT_MODEL` in `api.py`). `whisper-1` and every `gpt-4o-*-transcribe` model shut down on **2027-02-26** (OpenAI deprecations page, announced 2026-08-26). `gpt-transcribe` is the listed drop-in: same endpoint, $0.0045/min. `tts-1` isn't deprecated.
+
+**PERF_LOG results (2026-10-02): the DB was the bottleneck, not STT or the LLM.** STT took 1-5s and the LLM ~1s, but `load` took ~4s and `db` 4-16s. The cause was every relationship in `models.py` being `lazy="selectin"`: one `select(Interview)` cascaded into **61 sequential statements** (turns, plan, profile, job, scorecard, then each question's role links → the role's other questions → types/levels/rubrics…), ~4-7s against Supabase. `record_answer`, `save_interview_state` and `open_turn` each re-ran that load in their own session, so `db` time was roughly (number of full loads per branch) × 4s.
+
+Fix (done):
+- `load_interview_state` now uses 3 column queries (interview + current question/role/level in one join, asked slugs, the ordered plan). The returned dict has the same shape.
+- New **`commit_turn(...)`** in `tools/interview.py` runs one turn's writes in ONE transaction: close the open turn → update the spine → open the next turn. It's built on private helpers (`_interview_pk`, `_question_pk`, `_write_state`, `_close_open_turn`, `_add_open_turn`) that use id-only selects plus plain UPDATE/INSERT. `save_interview_state`, `open_turn` and `record_answer` keep their signatures (`record_answer` is still the MCP tool) and now use the same helpers. `/api/answer`'s follow-up/advance/end branches and `/api/interview`'s start each call `commit_turn` once.
+- Checked against the live DB on a throwaway interview, no LLM: load = 3 statements / 0.7s (was 61 / 4.5-6.8s). Each branch's writes = 5-8 statements / ~0.7-1s. The guards still hold (a wrong question errors and nothing is committed), there's exactly one open turn after each step and zero after the end, and the transcript reads correctly.
+
+Still pays the cascade (out of scope for now): every other `select(Interview)` / `select(Question)` reader (scorecard, history, dashboard). The model-wide fix is `lazy="raise"` + per-query `selectinload` (see the `models.py` docstring).
+
+Not yet checked: live voice turns after the DB fix.
+
+**Next, latency Phase 2** (the full roadmap is in the plan file, `right-now-i-m-struggling-quirky-swing.md`):
+- One transaction for a turn's writes (`record_answer` + `save_interview_state` + `open_turn`).
+- Optionally merge transcribe + answer into one voice request.
+- `/api/answer` returns `reaction` / `next` as separate segments, so TTS can start on the short reaction first. Cache static question audio.
+- Act on the validator-retry rate if the logs show it's frequent.
+
+Phase 3 (optional): streaming TTS bytes, a streaming LLM reaction, and `gpt-live-transcribe` (streaming STT at $0.017/min).

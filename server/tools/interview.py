@@ -48,7 +48,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi_pagination import Params
 from fastapi_pagination.ext.sqlalchemy import apaginate
-from sqlalchemy import or_, select, update
+from sqlalchemy import func, or_, select, update
 
 from db.engine import get_session
 from db.models import (
@@ -322,28 +322,52 @@ async def load_interview_state(interview_id: str) -> dict:
     own history through a resource would be both wasteful and confusing, so the two shapes
     stay apart.
 
+    COLUMN QUERIES, NOT `select(Interview)`. This is the hot path (every turn), and loading the ORM
+    row fires every lazy="selectin" relationship in a cascade: the interview's turns, plan, profile,
+    job and scorecard, then each question's role links, which load the role's OTHER questions, and
+    so on. Measured 2026-10-02: 61 sequential statements, ~4-7s against Supabase. Selecting just the
+    columns this dict needs is 3 statements, and the shape returned is unchanged.
     """
     async with get_session() as db:
-        stmt = await db.execute(select(Interview).where(Interview.slug == interview_id)) 
-        interview = stmt.scalar_one_or_none()
-        if interview is None:
+        # OUTER join on the current question: current_question_id is NULL before the first is picked.
+        row = (await db.execute(
+            select(
+                Interview.id, Interview.profile_id, Interview.persona, Interview.followups_used,
+                Interview.max_followups, Interview.done, Interview.message_history,
+                Question.slug, Question.text, Role.slug, Level.slug,
+            )
+            .outerjoin(Question, Interview.current_question_id == Question.id)
+            .join(Role, Interview.role_id == Role.id)
+            .join(Level, Interview.level_id == Level.id)
+            .where(Interview.slug == interview_id)
+        )).one_or_none()
+        if row is None:
             return {"ok": False, "error": "Interview not found"}
-        asked_ids = set()
-        if interview.current_question is not None:
-            asked_ids.add(interview.current_question.slug)
-        for turn in interview.turns:
-            asked_ids.add(turn.question.slug)
+        (pk, profile_id, persona, followups_used, max_followups, done, message_history,
+         current_qid, current_qtext, role_slug, level_slug) = row
+
+        # asked = every question with a turn, plus the one on the table (as Interview.asked_question_ids)
+        asked_ids = set((await db.execute(
+            select(Question.slug).join(Turn, Turn.question_id == Question.id).where(Turn.interview_id == pk)
+        )).scalars())
+        if current_qid is not None:
+            asked_ids.add(current_qid)
 
         # THE FROZEN PLAN drives advancing now (not next_question walking the whole bank): the next
         # question is the first one in the plan, by position, that hasn't been asked yet. None means
-        # the plan is exhausted, which is the ADVANCE branch's cue to END the interview. plan_questions
-        # is selectin-loaded and ordered by position, so this is a plain in-memory walk — no query.
+        # the plan is exhausted, which is the ADVANCE branch's cue to END the interview.
+        plan = (await db.execute(
+            select(Question.slug, Question.text)
+            .join(InterviewQuestion, InterviewQuestion.question_id == Question.id)
+            .where(InterviewQuestion.interview_id == pk)
+            .order_by(InterviewQuestion.position)
+        )).all()
         next_planned_qid = None
         next_planned_qtext = None
-        for planned in interview.plan_questions:
-            if planned.question.slug not in asked_ids:
-                next_planned_qid = planned.question.slug
-                next_planned_qtext = planned.question.text
+        for slug, text in plan:
+            if slug not in asked_ids:
+                next_planned_qid = slug
+                next_planned_qtext = text
                 break
 
         return {
@@ -352,24 +376,22 @@ async def load_interview_state(interview_id: str) -> dict:
             # None), not stringified: this dict is the backend's private working state and is
             # never serialized to anyone, so there's no JSON boundary to be safe for. The
             # comparison in auth.py stringifies both sides anyway.
-            "profile_id": interview.profile_id,
-            "persona": interview.persona,
-            "current_qid": interview.current_question.slug if interview.current_question is not None else None,
-            "current_qtext": interview.current_question.text if interview.current_question is not None else None,
-            "followups_used": interview.followups_used,
-            "max_followups": interview.max_followups,
-            "done": interview.done,
-            "role": interview.role.slug,
-            # Phase D — the interview's seniority, so the ADVANCE branch of /api/answer can ask
-            # next_question for a level-appropriate question. It's the `levels.slug` ("mid"),
-            # stored on the interview at kickoff; the relationship is selectin-loaded, so this
-            # is free. (`role` above is the same idea for the role dimension.)
-            "level": interview.level.slug,
+            "profile_id": profile_id,
+            "persona": persona,
+            "current_qid": current_qid,
+            "current_qtext": current_qtext,
+            "followups_used": followups_used,
+            "max_followups": max_followups,
+            "done": done,
+            "role": role_slug,
+            # Phase D — the interview's seniority (the `levels.slug`, e.g. "mid"), stored at kickoff.
+            # (`role` above is the same idea for the role dimension.)
+            "level": level_slug,
             "asked_ids": list(asked_ids),
             # the next plan question to advance to (slug + text), or None when the plan is spent.
             "next_planned_qid": next_planned_qid,
             "next_planned_qtext": next_planned_qtext,
-            "message_history": interview.message_history
+            "message_history": message_history
         }
 
 # the * means that everything after it must be passed as a keyword,
@@ -406,22 +428,149 @@ async def save_interview_state(
     four round-trips that could half-fail and leave the spine inconsistent with the history.
     """
     async with get_session() as db:
-        stmt = await db.execute(select(Interview).where(Interview.slug == interview_id))
-        interview = stmt.scalar_one_or_none()
-        if interview is None:
+        interview_pk = await _interview_pk(db, interview_id)
+        if interview_pk is None:
             return {"ok": False, "error": "interview is not found"}
-        if current_qid is not None:
-            question_stmt = await db.execute(select(Question).where(Question.slug == current_qid))
-            question = question_stmt.scalar_one_or_none()
-            if question is None:
-                return {"ok": False, "error": "question not found"}
-            interview.current_question_id = question.id
-        if message_history is not None:
-            interview.message_history = message_history
-        if done is not None:
-            interview.done = done
-        if followups_used is not None:
-            interview.followups_used = followups_used
+        error = await _write_state(db, interview_pk, current_qid=current_qid, followups_used=followups_used,
+                                   message_history=message_history, done=done)
+        if error is not None:
+            return {"ok": False, "error": error}
+        await db.commit()
+        return {"ok": True, "interview_id": interview_id}
+
+
+# ===========================================================================
+# THE PER-TURN WRITE HELPERS. Each takes an open `db` and does its part of a turn with ID-ONLY
+# selects and plain UPDATE/INSERT statements, never `select(Interview)` / `select(Question)`:
+# loading either ORM row fires the lazy="selectin" cascade (dozens of statements, seconds against
+# Supabase). They don't commit, so commit_turn can run several in ONE transaction, and the public
+# functions (save_interview_state, open_turn, record_answer) wrap each in its own.
+# Each returns None on success, or an error string (the caller returns it without committing).
+# ===========================================================================
+async def _interview_pk(db, interview_id: str) -> int | None:
+    """The interview's integer id from its slug, or None."""
+    return (await db.execute(select(Interview.id).where(Interview.slug == interview_id))).scalar_one_or_none()
+
+
+async def _question_pk(db, question_id: str) -> int | None:
+    """The question's integer id from its slug, or None."""
+    return (await db.execute(select(Question.id).where(Question.slug == question_id))).scalar_one_or_none()
+
+
+async def _write_state(
+    db,
+    interview_pk: int,
+    *,
+    current_qid: str | None,
+    followups_used: int | None,
+    message_history: list | None,
+    done: bool | None,
+) -> str | None:
+    """One UPDATE of the spine columns. None means "don't touch" (see save_interview_state)."""
+    values = {}
+    if current_qid is not None:
+        question_pk = await _question_pk(db, current_qid)
+        if question_pk is None:
+            return "question not found"
+        values["current_question_id"] = question_pk
+    if followups_used is not None:
+        values["followups_used"] = followups_used
+    if message_history is not None:
+        values["message_history"] = message_history
+    if done is not None:
+        values["done"] = done
+    if values:
+        # updated_at is bumped by the column's onupdate, which a Core UPDATE applies too
+        await db.execute(update(Interview).where(Interview.id == interview_pk).values(**values))
+    return None
+
+
+async def _close_open_turn(db, interview_pk: int, question_id: str, answer: str) -> str | None:
+    """Complete the one open turn with `answer`, guarded by `question_id` (see record_answer)."""
+    question_pk = await _question_pk(db, question_id)
+    if question_pk is None:
+        return "interview or question does not exist"
+    open_row = (await db.execute(
+        select(Turn.id, Turn.question_id).where(Turn.interview_id == interview_pk, Turn.answer.is_(None))
+    )).one_or_none()
+    if open_row is None:
+        # nothing was presented, or it was already answered — a real state error, not a
+        # place to invent a turn (the client-driven flow always opens before it asks).
+        return "no open turn to answer"
+    if open_row.question_id != question_pk:
+        # the open turn is for a different question than the caller thinks — refuse rather
+        # than close the wrong one. This is the guard the question_id argument buys.
+        return "open turn does not match the given question"
+    await db.execute(update(Turn).where(Turn.id == open_row.id).values(answer=answer))
+    return None
+
+
+async def _add_open_turn(db, interview_pk: int, question_id: str, prompt_text: str) -> str | None:
+    """Stage a new OPEN turn (answer NULL) for `question_id` (see open_turn)."""
+    question_pk = await _question_pk(db, question_id)
+    if question_pk is None:
+        return "interview or question does not exist"
+    db.add(Turn(
+        interview_id=interview_pk,
+        question_id=question_pk,
+        prompt_text=prompt_text,
+        answer=None,          # the defining mark of an OPEN turn
+    ))
+    # flush now, so the INSERT runs in order behind the UPDATEs above it (the one-open-turn index
+    # needs the previous turn closed first)
+    await db.flush()
+    return None
+
+
+async def commit_turn(
+    interview_id: str,
+    *,
+    answered_qid: str | None = None,
+    answer: str | None = None,
+    current_qid: str | None = None,
+    followups_used: int | None = None,
+    message_history: list | None = None,
+    done: bool | None = None,
+    open_qid: str | None = None,
+    open_prompt: str | None = None,
+) -> dict:
+    """Every write of one /api/answer turn, in ONE session and ONE transaction.
+
+    In order, each step only when its arguments are given:
+      1. CLOSE the open turn with `answer` (`answered_qid` is the guard, as in record_answer)
+      2. WRITE the spine (current_qid / followups_used / message_history / done, as in
+         save_interview_state, where None means "don't touch")
+      3. OPEN the next turn (`open_qid` + `open_prompt`, as in open_turn)
+
+    Close-before-open is what keeps the one-open-turn index satisfied. Doing all three in one
+    transaction also means a failure leaves NOTHING half-written: either the turn is closed, the
+    spine moved and the next turn opened, or none of it happened.
+
+    Why it exists: record_answer + save_interview_state + open_turn each used to open a session and
+    load the full ORM graph. This is ~5-6 small statements instead.
+
+    Returns {"ok": True, "interview_id": ...} or {"ok": False, "error": ...} (nothing committed).
+    """
+    async with get_session() as db:
+        interview_pk = await _interview_pk(db, interview_id)
+        if interview_pk is None:
+            return {"ok": False, "error": "interview is not found"}
+
+        if answered_qid is not None:
+            error = await _close_open_turn(db, interview_pk, answered_qid, answer or "")
+            if error is not None:
+                return {"ok": False, "error": error}
+
+        error = await _write_state(db, interview_pk, current_qid=current_qid, followups_used=followups_used,
+                                   message_history=message_history, done=done)
+        if error is not None:
+            return {"ok": False, "error": error}
+
+        if open_qid is not None:
+            error = await _add_open_turn(db, interview_pk, open_qid, open_prompt or "")
+            if error is not None:
+                return {"ok": False, "error": error}
+
         await db.commit()
         return {"ok": True, "interview_id": interview_id}
 
@@ -444,20 +593,12 @@ async def open_turn(interview_id: str, question_id: str, prompt_text: str) -> di
     (record_answer) before opening the next.
     """
     async with get_session() as db:
-        interview = (
-            await db.execute(select(Interview).where(Interview.slug == interview_id))
-        ).scalar_one_or_none()
-        question = (
-            await db.execute(select(Question).where(Question.slug == question_id))
-        ).scalar_one_or_none()
-        if interview is None or question is None:
+        interview_pk = await _interview_pk(db, interview_id)
+        if interview_pk is None:
             return {"ok": False, "error": "interview or question does not exist"}
-        db.add(Turn(
-            interview_id=interview.id,
-            question_id=question.id,
-            prompt_text=prompt_text,
-            answer=None,          # the defining mark of an OPEN turn
-        ))
+        error = await _add_open_turn(db, interview_pk, question_id, prompt_text)
+        if error is not None:
+            return {"ok": False, "error": error}
         await db.commit()
         return {"ok": True, "interview_id": interview_id}
 
@@ -483,31 +624,18 @@ async def record_answer(interview_id: str, question_id: str, answer: str) -> dic
     NULL is reserved for "not yet answered". /api/answer guards truly empty input before here.
     """
     async with get_session() as db:
-        interview = (
-            await db.execute(select(Interview).where(Interview.slug == interview_id))
-        ).scalar_one_or_none()
-        question = (
-            await db.execute(select(Question).where(Question.slug == question_id))
-        ).scalar_one_or_none()
-        if interview is None or question is None:
+        interview_pk = await _interview_pk(db, interview_id)
+        if interview_pk is None:
             return {"ok": False, "error": "interview or question does not exist"}
-        open_turn_row = (
-            await db.execute(
-                select(Turn).where(Turn.interview_id == interview.id, Turn.answer.is_(None))
-            )
-        ).scalar_one_or_none()
-        if open_turn_row is None:
-            # nothing was presented, or it was already answered — a real state error, not a
-            # place to invent a turn (the client-driven flow always opens before it asks).
-            return {"ok": False, "error": "no open turn to answer"}
-        if open_turn_row.question_id != question.id:
-            # the open turn is for a different question than the caller thinks — refuse rather
-            # than close the wrong one. This is the guard the question_id argument buys.
-            return {"ok": False, "error": "open turn does not match the given question"}
-        open_turn_row.answer = answer
+        error = await _close_open_turn(db, interview_pk, question_id, answer)
+        if error is not None:
+            return {"ok": False, "error": error}
+        # completed turns, counted in the same transaction so it includes the one just closed
+        completed = (await db.execute(
+            select(func.count()).select_from(Turn)
+            .where(Turn.interview_id == interview_pk, Turn.answer.is_not(None))
+        )).scalar_one()
         await db.commit()
-        # completed turns = every turn now that this one is closed and no other is open.
-        completed = sum(1 for t in interview.turns if t.answer is not None)
         return {"ok": True, "interview_id": interview_id, "turn_count": completed}
 
 

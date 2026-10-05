@@ -79,6 +79,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Response, UploadFile
@@ -128,8 +129,7 @@ from tools.interview import (
     load_grading_context,
     load_interview_state,
     load_resume_payload,
-    open_turn,
-    record_answer,
+    commit_turn,
     save_interview_state,
     save_scorecard,
     set_profile_avatar,
@@ -148,6 +148,8 @@ from tools.questions import (
     list_roles,
     save_saved_questions,
 )
+# Per-stage latency lines for the voice pipeline (transcribe, answer, tts), gated behind PERF_LOG=1.
+from perf import log_perf
 
 
 # --- LIFESPAN: the terminal loop opened `async with agent:` ONCE and ran the whole
@@ -421,12 +423,11 @@ async def start_interview(
 
     # writes the first question onto the row. From here on, "which question is on the table" is a
     # column, not a dict key — which is why a restart can't lose the candidate's place.
-    await save_interview_state(interview_id, current_qid=first_qid, followups_used=0)
-
-    # OPEN the first turn: the question has been PRESENTED, no answer yet. This is the turn the
-    # candidate's first /api/answer will complete. Opening it here (rather than at answer time)
-    # is what lets the transcript record the exact prompt shown — see the Turn docstring.
-    await open_turn(interview_id, first_qid, first_qtext)
+    # AND OPEN the first turn (same transaction): the question has been PRESENTED, no answer yet.
+    # This is the turn the candidate's first /api/answer will complete. Opening it here (rather than
+    # at answer time) is what lets the transcript record the exact prompt shown — see the Turn docstring.
+    await commit_turn(interview_id, current_qid=first_qid, followups_used=0,
+                      open_qid=first_qid, open_prompt=first_qtext)
 
     # present the first question verbatim (short canned lead-in; the bank text is authoritative).
     # `default_selection` lets the SPA note that a default set was chosen (they'd saved nothing);
@@ -487,9 +488,11 @@ async def submit_answer(
     req: AnswerRequest,
     user_id: str = Depends(require_user)
 ) -> dict:
+    started = time.perf_counter()
     # 1. LOAD — replaces `SESSIONS.get(req.session_id)`. Same guard, realer 404: a row either
     #    exists or it doesn't (the JSON store used to invent an empty one for a bad id).
     state = await load_interview_state(req.interview_id)
+    loaded = time.perf_counter()
     if not state["ok"]:
         raise HTTPException(status_code=404, detail="unknown interview")
 
@@ -537,12 +540,33 @@ async def submit_answer(
     )
     prompt = (f"The current interview question is: {state['current_qtext']}{last_question_note}\n\n"
               f"The candidate's message: {text}")
+    llm_started = time.perf_counter()
     result = await turn_agent.run(
         prompt,
         instructions=state["persona"],
         message_history=history,
         usage_limits=UsageLimits(request_limit=3),
     )
+    llm_done = time.perf_counter()
+    try:
+        return await _finish_turn(req, state, text, result)
+    finally:
+        # One line per turn (PERF_LOG=1): where the wait went. requests > 1 means the reaction
+        # validator retried, a full extra LLM round trip. db = every write after the LLM call.
+        usage = result.usage
+        log_perf(
+            "answer: load=%.2fs llm=%.2fs db=%.2fs total=%.2fs requests=%s input_tokens=%s output_tokens=%s",
+            loaded - started, llm_done - llm_started, time.perf_counter() - llm_done,
+            time.perf_counter() - started, usage.requests, usage.input_tokens, usage.output_tokens,
+        )
+
+
+async def _finish_turn(req: AnswerRequest, state: dict, text: str, result) -> dict:
+    """Steps 3-5 of /api/answer: act on the model's decision and write the turn back.
+
+    Split out of submit_answer only so the route can time everything after the LLM call as one
+    `db` stage, across every exit path, with a single try/finally.
+    """
     decision = result.output      # TurnReply(is_clarification, reaction, followup, ask_followup)
     #    Dump ONCE, here; every branch below writes this same value. mode="json" is what makes
     #    it asyncpg/JSONB-safe (plain dicts, ISO strings) — without it you'd hand the driver
@@ -582,7 +606,10 @@ async def submit_answer(
     #    the open turn is for the question the client thinks it's answering. Correct BY
     #    CONSTRUCTION: the model never picked or labelled the question, so it can't be
     #    mislabelled, and the FK means an id that isn't a question can't reach the table.
-    await record_answer(req.interview_id, state["current_qid"], text)
+    #
+    #    The record itself rides in each branch's ONE commit_turn call below (answered_qid + answer),
+    #    together with that branch's state write and next-turn open: one transaction per turn
+    #    instead of three separate sessions. Close-then-open order is commit_turn's job.
 
     # 5. BRANCH. The reaction is ALWAYS shown; what follows it is the client's call — the probe
     #    (if following up), the next bank question (if advancing), or a closing (if exhausted).
@@ -605,12 +632,14 @@ async def submit_answer(
     if (decision.ask_followup and not decision.skip_requested
             and state["followups_used"] < state["max_followups"]):
         followups_used = state["followups_used"] + 1
-        await save_interview_state(req.interview_id, followups_used=followups_used, message_history=new_history)
         # OPEN the next turn — the probe, filed under the SAME parent question (current_qid), so
         # the transcript stores the probe's text while the scorecard still groups it with the
-        # original. Opened AFTER the answer above closed the prior turn (complete-then-open),
-        # so the one-open-turn index is never violated.
-        await open_turn(req.interview_id, state["current_qid"], decision.followup)
+        # original. commit_turn closes the answered turn first (complete-then-open), so the
+        # one-open-turn index is never violated.
+        await commit_turn(req.interview_id,
+                          answered_qid=state["current_qid"], answer=text,
+                          followups_used=followups_used, message_history=new_history,
+                          open_qid=state["current_qid"], open_prompt=decision.followup)
         return {"message": f"{decision.reaction}\n\n{decision.followup}", "done": False}
 
     #    (b) ADVANCE — the CLIENT moves to the next question in the FROZEN PLAN (never the model).
@@ -629,12 +658,14 @@ async def submit_answer(
         # explicit transition so a NEW bank question can't be misread as a follow-up. The
         # CLIENT owns this marker (the model never announces "moving on" — it can't, it doesn't
         # know a new question is coming), so it's consistent regardless of the reaction's wording.
-        await save_interview_state(req.interview_id, current_qid=next_qid, followups_used=0, message_history=new_history)
         # OPEN the next turn for the new plan question. This is INSIDE the `next_qid is not None`
         # block on purpose: if the plan were exhausted we'd never get here, we'd fall to the END
         # branch below — so the interview ends with its last turn COMPLETED and no dangling open
         # turn. (That's what keeps a finished interview at zero open turns.)
-        await open_turn(req.interview_id, next_qid, state["next_planned_qtext"])
+        await commit_turn(req.interview_id,
+                          answered_qid=state["current_qid"], answer=text,
+                          current_qid=next_qid, followups_used=0, message_history=new_history,
+                          open_qid=next_qid, open_prompt=state["next_planned_qtext"])
         return {"message": f"{decision.reaction}\n\nLet's move on to the next question. {state['next_planned_qtext']}",
                 "done": False,
                 # the new plan question (the coding panel swaps its problem statement to this)
@@ -645,7 +676,9 @@ async def submit_answer(
     #      alone: it keeps pointing at the last question asked, which is fine precisely because
     #      every reader checks `done` first (the contract save_interview_state documents). This
     #      is also the flag that makes the 409 guard at the top of this function work.
-    await save_interview_state(req.interview_id, message_history=new_history, done=True)
+    await commit_turn(req.interview_id,
+                      answered_qid=state["current_qid"], answer=text,
+                      message_history=new_history, done=True)
     return {"message": f"{decision.reaction}\n\nThat's the end of the interview. "
                        f"Thank you for your time!", "done": True}
 
@@ -688,6 +721,12 @@ def get_openai_client() -> AsyncOpenAI:
 # origin. Any route that spends money on someone's behalf needs to know whose behalf.
 # (`user_id` will be unused in the body — that's fine and normal for a gate. Once Phase F
 # adds /api/tts, it gets the same treatment for the same reason.)
+# The STT model. whisper-1 and the gpt-4o-*-transcribe family shut down 2027-02-26 (OpenAI
+# deprecations page); gpt-transcribe is the listed drop-in: same /v1/audio/transcriptions call
+# shape, $0.0045/min vs whisper's $0.006.
+STT_MODEL = "gpt-transcribe"
+
+
 @app.post("/api/transcribe")
 async def transcribe(
     audio: UploadFile = File(...),
@@ -704,13 +743,15 @@ async def transcribe(
     if megabytes > 10:
         raise HTTPException(status_code=413, detail="Audio file is too large to transcribe")
 
-    # Whisper's file arg takes a (filename, bytes, content_type) tuple. The filename's extension
+    # The file arg takes a (filename, bytes, content_type) tuple. The filename's extension
     # is how the API infers the container, so keep the browser's (e.g. "answer.webm").
+    started = time.perf_counter()
     result = await get_openai_client().audio.transcriptions.create(
-        model="whisper-1",   # cheap + solid ($0.006/min). gpt-4o-transcribe is the pricier upgrade.
+        model=STT_MODEL,
         file=(audio.filename or "answer.webm", data, audio.content_type or "audio/webm"),
         language="en"
     )
+    log_perf("transcribe: model=%s stt=%.2fs bytes=%s", STT_MODEL, time.perf_counter() - started, len(data))
 
     # Same shape the client's onResult(text) expects — mirrors the Web Speech path's output.
     return {"text": result.text}
@@ -763,6 +804,7 @@ async def tts(
     if len(text) > 4096:
         raise HTTPException(status_code=413, detail="Text is too long to process")
 
+    started = time.perf_counter()
     resp = await get_openai_client().audio.speech.create(
         model="tts-1",
         voice="alloy", # alloy, echo, fable, nova, etc
@@ -771,6 +813,7 @@ async def tts(
     )
 
     audio_bytes = await resp.aread()
+    log_perf("tts: tts=%.2fs chars=%s bytes=%s", time.perf_counter() - started, len(text), len(audio_bytes))
     return Response(content=audio_bytes, media_type="audio/mpeg")
 
 # ===========================================================================
