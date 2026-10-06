@@ -35,6 +35,7 @@ from fastapi_pagination import Params
 # Page(items, total, page, size, pages) — just the coroutine the async engine needs.
 from fastapi_pagination.ext.sqlalchemy import apaginate
 from sqlalchemy import delete, select
+from sqlalchemy.orm import selectinload
 
 from db.engine import get_session
 # ReferenceBrief added for Phase E's get_reference (pre-imported so the TODO body has it ready).
@@ -56,9 +57,18 @@ from db.models import (
 # build_interview_plan). Not a stored column — the plan's LENGTH is the count.
 DEFAULT_PLAN_SIZE = 3
 
+# The relationships a question's dict shapes read (_question_dict, _question_out, the plan builder's
+# level rank). Relationships are lazy="raise" (see db/models.py), so every query that returns
+# Question rows for those shapes loads exactly these.
+QUESTION_LOADS = (
+    selectinload(Question.type),
+    selectinload(Question.level),
+    selectinload(Question.tags),
+)
+
 
 def _question_dict(question: Question) -> dict:
-    """ORM row -> the JSON-safe shape the rest of the app already expects.
+    """ORM row -> the JSON-safe shape the rest of the app already expects. Needs QUESTION_LOADS.
 
     WORKED: this is the contract with everything above this file. `id` is the question's
     SLUG, not its integer primary key — the API, the MCP resource URI, and the interviewer
@@ -100,9 +110,8 @@ async def get_rubric(role: str) -> dict:
     """Return the scoring rubric for a role (backs the rubric:// resource).
 
     WORKED EXAMPLE — the slug-resolution + relationship-traversal pattern, which the TODOs
-    below all reuse. Note what it does NOT do: no join is written by hand. `Role.rubric` and
-    `Rubric.dimensions` are selectin-loaded relationships, so touching them is free here —
-    SQLAlchemy already fetched them.
+    below all reuse. Note what it does NOT do: no join is written by hand. The query loads
+    `Role.rubric` and its `Rubric.dimensions` (selectinload), so walking them below is free.
 
     Returns {"status": "ok", "role": role, "rubric": {...}}, or
     {"status": "not_found", "role": role} for an unknown role.
@@ -110,7 +119,10 @@ async def get_rubric(role: str) -> dict:
     async with get_session() as db:
         # slug -> row. scalar_one_or_none(): exactly one row or None, never an exception on
         # "no match" — which is what lets us return the not_found envelope instead of raising.
-        result = await db.execute(select(Role).where(Role.slug == role))
+        result = await db.execute(
+            select(Role).where(Role.slug == role)
+            .options(selectinload(Role.rubric).selectinload(Rubric.dimensions))
+        )
         role_row = result.scalar_one_or_none()
         if role_row is None or role_row.rubric is None:
             return {"status": "not_found", "role": role}
@@ -186,12 +198,15 @@ def _filtered_questions_stmt(role_id: int, level_rank: int | None):
     interview draws entry+mid+senior, an entry one only entry). A NULL-level question has no rank to
     compare and is excluded once a level is given — same as before. Pass `level_rank=None` for no
     level filter.
+
+    Loads QUESTION_LOADS, since every caller builds dicts or the plan from the rows.
     """
     stmt = (
         select(Question)
         .join(QuestionRole, QuestionRole.question_id == Question.id)
         .where(QuestionRole.role_id == role_id)
         .order_by(QuestionRole.sort_order)
+        .options(*QUESTION_LOADS)
     )
     if level_rank is not None:
         allowed_level_ids = select(Level.id).where(Level.rank <= level_rank)
@@ -518,7 +533,9 @@ async def get_question(question_id: str) -> dict:
     {"status": "not_found", "question_id": question_id}.
     """
     async with get_session() as db:
-        stmt = await db.execute(select(Question).where(Question.slug == question_id))
+        stmt = await db.execute(
+            select(Question).where(Question.slug == question_id).options(*QUESTION_LOADS)
+        )
         result = stmt.scalar_one_or_none()
         if result is None:
             return {"status": "not_found", "question_id": question_id}
@@ -532,7 +549,12 @@ async def list_questions(role: str) -> dict:
     {"status": "not_found", "role": role}.
     """
     async with get_session() as db:
-        stmt = await db.execute(select(Role).where(Role.slug == role))
+        # `role.questions` is an association proxy through question_links -> question
+        stmt = await db.execute(
+            select(Role).where(Role.slug == role)
+            .options(selectinload(Role.question_links).selectinload(QuestionRole.question)
+                     .options(*QUESTION_LOADS))
+        )
         result = stmt.scalar_one_or_none()
         if result is None:
             return {"status": "not_found", "role": role}

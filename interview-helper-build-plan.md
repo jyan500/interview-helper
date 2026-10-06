@@ -416,8 +416,10 @@ ahead. Interview simulation (Sim Phases 1–4), the simulation dashboard, and th
 copy are in. **Latest (branch `addressing-interview-latency`): voice-turn latency Phase 1. Added
 PERF_LOG-gated per-stage timing, turned interviewer thinking down to minimal, and moved STT to
 `gpt-transcribe`. The timings showed the DB was the bottleneck (selectin cascade), now fixed with
-column-query loads + a one-transaction `commit_turn`. Next action = re-run live voice turns with
-PERF_LOG=1 to confirm, then the rest of latency Phase 2 (see the 2026-10-01 section at the end).** Grading batch 2 is still pending (2026-09-30
+column-query loads + a one-transaction `commit_turn`. The same cascade was then removed site-wide
+(models are `lazy="raise"` + per-query `selectinload`; pages went from 5-10s to ~1s). Next action =
+click through every page to confirm, then the latency TODOs (streaming TTS, merged
+transcribe+answer); see the 2026-10-01 section at the end.** Grading batch 2 is still pending (2026-09-30
 section). Recent post-F work is logged in dated `###` sections at the END of this file.*
 
 ### Phase A — ✅ COMPLETE (all verified against the live Supabase DB)
@@ -1736,9 +1738,21 @@ Fix (done):
 - New **`commit_turn(...)`** in `tools/interview.py` runs one turn's writes in ONE transaction: close the open turn → update the spine → open the next turn. It's built on private helpers (`_interview_pk`, `_question_pk`, `_write_state`, `_close_open_turn`, `_add_open_turn`) that use id-only selects plus plain UPDATE/INSERT. `save_interview_state`, `open_turn` and `record_answer` keep their signatures (`record_answer` is still the MCP tool) and now use the same helpers. `/api/answer`'s follow-up/advance/end branches and `/api/interview`'s start each call `commit_turn` once.
 - Checked against the live DB on a throwaway interview, no LLM: load = 3 statements / 0.7s (was 61 / 4.5-6.8s). Each branch's writes = 5-8 statements / ~0.7-1s. The guards still hold (a wrong question errors and nothing is committed), there's exactly one open turn after each step and zero after the end, and the transcript reads correctly.
 
-Still pays the cascade (out of scope for now): every other `select(Interview)` / `select(Question)` reader (scorecard, history, dashboard). The model-wide fix is `lazy="raise"` + per-query `selectinload` (see the `models.py` docstring).
+**Site-wide cascade fix (done 2026-10-05).** Every relationship in `models.py` is now `lazy="raise"`: nothing loads unless the query asks for it, and touching an unloaded relationship raises instead of silently costing seconds. Each reader loads exactly what it reads with `selectinload(...)`. The shared loader sets are:
+- `CARD_LOADS` / `SIMULATION_LOADS` / `RUBRIC_LOADS` / `SCORE_LOADS` / `TURN_LOADS` in `tools/interview.py`
+- `QUESTION_LOADS` in `tools/questions.py`
+- `JOB_LOADS` in `tools/jobs.py`
 
-Not yet checked: live voice turns after the DB fix.
+`save_scorecard`'s re-grade delete is now a SQL `DELETE` (DB cascade), and `seed.py` loads `Question.tags`. **Rule for new code: a query that reads a relationship loads it.**
+- Read parity: 79 read calls, each run with the real profile against before/after snapshots, returned identical JSON with 0 exceptions. The one "diff" was `asked_ids` set order, which is per-process hash order. Totals went from **2604 statements / 244s to 415 / 66s**. For example: dashboard 122 → 9 statements (9.5s → 1.3s), interview list 80 → 7 (8s → 1.6s), `get_profile` 79 → 3 (7.9s → 0.6s; it used to load every interview the user had), interview detail/scorecard 61 → 6-8 (~5s → ~1s), questions page 19 → 8 (2.2s → 1.2s).
+- Write check on throwaway rows passed: bank + simulation `create_interview`, `commit_turn`, `save_scorecard` twice (re-grade), `save_interview_summary`, job create/update/delete (cascades its simulation), and profile writes restored to their current values. The `tools.rounds` / `tools.questions` smoke tests pass.
+- Not yet checked: clicking through the pages in the running app, and a `python -m db.seed` re-run (only its existing-question lookup changed).
+
+Live check after the DB fix (2026-10-05, PERF_LOG): `/api/answer` total is 2.7-4.3s (load ~0.9s, llm 1-2s, db ~1s). TTS (`tts-1`, fully buffered) takes 2.4-4.2s for 360-660 chars, and transcription 1.7-3.3s.
+
+**Latency optimization TODOs (deferred, in priority order):**
+1. **Stream TTS.** Same endpoint (`POST /v1/audio/speech`), but read it with `client.audio.speech.with_streaming_response.create(...)` + `resp.iter_bytes()` and return a FastAPI `StreamingResponse`. The `async with` goes INSIDE the generator so the upstream stays open while chunks are forwarded. Keep `stream_format` at its default `"audio"` (`"sse"` isn't supported for tts-1). Start with `mp3` into a client `MediaSource`; `pcm` + Web Audio is the lower-latency alternative. Errors after the first byte can't become a status code. The client needs a streaming `fetch` (an exception to the RTK-hook rule, since RTK only returns a finished blob), and `useSpeak`'s `onReady`, barge-in and `speaking` have to be rewired around the new playback. Expected gain: first sound in ~0.5s instead of 2.4-4.2s. Makes "speak the reaction first" and question-audio caching mostly unnecessary.
+2. **Merge transcribe + answer** into one voice request (multipart audio + interview_id). It transcribes, then runs the shared turn body. This saves one full client↔server round trip and a re-upload per turn.
 
 **Next, latency Phase 2** (the full roadmap is in the plan file, `right-now-i-m-struggling-quirky-swing.md`):
 - One transaction for a turn's writes (`record_answer` + `save_interview_state` + `open_turn`).

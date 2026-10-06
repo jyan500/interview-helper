@@ -212,7 +212,8 @@ def evaluate_answer(
         "\n\nnote on code: the answer contains fenced code blocks (```), which the candidate TYPED "
         "into a code editor rather than spoke. Grade that code as code (correctness, edge cases, "
         "complexity, readability); the speech allowances above apply only to the spoken prose "
-        "around it."
+        "around it. The candidate may use any programming language: never penalize the choice "
+        "of language, even if the job's tech stack or the question's wording uses another one."
         if "```" in answer or any("```" in reply for _, reply in followups) else ""
     )
 

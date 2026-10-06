@@ -43,6 +43,7 @@ from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from db.engine import get_session
 from db.models import (
@@ -189,10 +190,9 @@ async def seed() -> None:
 
                 # --- tags, resolved BEFORE the question ---------------------------------
                 # Order matters here, and it's the one real async-ORM trap in this file.
-                # lazy="selectin" eagerly loads a relationship when the row is QUERIED — it
-                # does nothing for a row we just constructed and flushed. Touching
-                # `question.tags` on such a row would fall back to a lazy load, i.e. I/O
-                # inside an attribute access, i.e. MissingGreenlet. So the tags are gathered
+                # A relationship is only loaded when a QUERY loads it (selectinload) — nothing
+                # loads it for a row we just constructed and flushed, and touching an unloaded
+                # one raises (models are lazy="raise"). So the tags are gathered
                 # first and handed to the constructor, where no load is needed.
                 tags = []
                 for tag_name in q.get("tags", []):
@@ -215,8 +215,12 @@ async def seed() -> None:
                     )
                 level_row = levels_by_slug.get(level_slug) if level_slug else None
 
+                # tags loaded (relationships are lazy="raise") for the membership check below
                 question = (
-                    await db.execute(select(Question).where(Question.slug == q["id"]))
+                    await db.execute(
+                        select(Question).where(Question.slug == q["id"])
+                        .options(selectinload(Question.tags))
+                    )
                 ).scalar_one_or_none()
                 if question is None:
                     question = Question(
@@ -230,7 +234,7 @@ async def seed() -> None:
                     await db.flush()
                     created["questions"] += 1
                 else:
-                    # this one CAME from a query, so its tags are selectin-loaded and the
+                    # this one CAME from the query above, which loaded its tags, so the
                     # membership test is free — new tags on an existing question get added.
                     for tag in tags:
                         if tag not in question.tags:

@@ -44,16 +44,29 @@ READING THE `xxx_id` / `xxx` PAIRS: `role_id` is the real COLUMN (an int FK); `r
 relationship — not stored, just SQLAlchemy resolving that id into the row when you touch
 it. Set and compare with the id, read the row through the relationship.
 
-WHY EVERY RELATIONSHIP SAYS lazy="selectin". A relationship isn't fetched by the query that
+WHY EVERY RELATIONSHIP SAYS lazy="raise". A relationship isn't fetched by the query that
 loads its parent. By DEFAULT (lazy="select") SQLAlchemy waits and fires a SELECT the moment
 you touch the attribute — which in async code CANNOT work: `role.questions` is a plain
 attribute read, there's nowhere to await I/O, and it raises MissingGreenlet at runtime on
-whichever path happens to touch it. So relationships must be loaded eagerly here, and
-"selectin" is the strategy that does it with a second batched query
-(`... WHERE role_id IN (1,2,3)`) rather than a JOIN that would multiply parent rows once a
-collection has more than one child. Cost: it ALWAYS loads, even when unused — so if the
-Phase C History list (50 interviews, each dragging all its turns) ever feels heavy, switch
-that one relationship to lazy="raise" and opt in per query with selectinload().
+whichever path happens to touch it. So a relationship has to be loaded eagerly, by the query.
+
+These used to say lazy="selectin" (always load eagerly, with a batched `... WHERE id IN (...)`
+query). That's correct but it CASCADES: loading an Interview loaded its turns, plan, profile,
+job and scorecard, each question's role links, which loaded the role's OTHER questions, their
+types/levels/tags, and so on, one sequential query per hop. Measured 2026-10-05 against
+Supabase (~75-110 ms a round trip): 61 statements to load one interview, 79 for a profile (it
+pulled in every interview the user had), 122 for the dashboard. 5-10 s a page.
+
+So now NOTHING loads unless the query asks, and touching an unloaded relationship raises
+(InvalidRequestError) instead of silently costing seconds. THE RULE: a query that reads a
+relationship loads it, with exactly the path it reads:
+
+    select(Interview).options(selectinload(Interview.turns).selectinload(Turn.question))
+
+`selectinload` is still the strategy (a batched IN query per hop, no row-multiplying JOIN),
+it's just opt-in per query now. Hot paths that only need a few columns skip the ORM row
+entirely (see load_interview_state). Writing is unaffected: setting a many-to-one, or
+appending to a NEW object's collection, never loads anything.
 
 NAMES THAT AVOID SQL RESERVED WORDS: `reference_briefs` (not `references`) and `sort_order`
 (not `order`). SQLAlchemy would quote either, but anything you type by hand in psql then
@@ -211,12 +224,12 @@ class Profile(Base, TimestampMixin):
     )
 
     interviews: Mapped[list[Interview]] = relationship(
-        back_populates="profile", lazy="selectin"
+        back_populates="profile", lazy="raise"
     )
-    # the default role/level, read as slug + name for the picker; selectin so they load with the
-    # profile row rather than firing a query when touched (see the lazy="selectin" note up top).
-    role: Mapped[Role | None] = relationship(lazy="selectin")
-    level: Mapped[Level | None] = relationship(lazy="selectin")
+    # the default role/level, read as slug + name for the picker; get_profile loads them with
+    # selectinload (see the lazy="raise" note up top).
+    role: Mapped[Role | None] = relationship(lazy="raise")
+    level: Mapped[Level | None] = relationship(lazy="raise")
 
 
 # ===========================================================================
@@ -241,11 +254,11 @@ class Role(Base, TimestampMixin):
     # `role_id`/`sort_order` lived on the question itself; nothing above this model has to change.
     # (The proxy is read-only here in practice: the seeder writes `question_roles` rows directly.)
     question_links: Mapped[list[QuestionRole]] = relationship(
-        back_populates="role", lazy="selectin",
+        back_populates="role", lazy="raise",
         order_by="QuestionRole.sort_order", cascade="all, delete-orphan",
     )
     questions: AssociationProxy[list[Question]] = association_proxy("question_links", "question")
-    rubric: Mapped[Rubric | None] = relationship(back_populates="role", lazy="selectin")
+    rubric: Mapped[Rubric | None] = relationship(back_populates="role", lazy="raise")
 
 
 class Level(Base, TimestampMixin):
@@ -324,7 +337,7 @@ class RoundType(Base, TimestampMixin):
     has_code_editor: Mapped[bool] = mapped_column(Boolean, default=False)
     allows_smart_voice: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    rubric: Mapped[Rubric | None] = relationship(back_populates="round_type", lazy="selectin")
+    rubric: Mapped[Rubric | None] = relationship(back_populates="round_type", lazy="raise")
 
 
 class Tag(Base, TimestampMixin):
@@ -401,8 +414,8 @@ class QuestionRole(Base, TimestampMixin):
     # comes back in bank order.
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
-    question: Mapped[Question] = relationship(back_populates="role_links", lazy="selectin")
-    role: Mapped[Role] = relationship(back_populates="question_links", lazy="selectin")
+    question: Mapped[Question] = relationship(back_populates="role_links", lazy="raise")
+    role: Mapped[Role] = relationship(back_populates="question_links", lazy="raise")
 
 
 # ===========================================================================
@@ -438,10 +451,10 @@ class Rubric(Base, TimestampMixin):
     )
     scale: Mapped[str] = mapped_column(Text)   # "1 (poor) to 5 (excellent) per dimension"
 
-    role: Mapped[Role | None] = relationship(back_populates="rubric", lazy="selectin")
-    round_type: Mapped[RoundType | None] = relationship(back_populates="rubric", lazy="selectin")
+    role: Mapped[Role | None] = relationship(back_populates="rubric", lazy="raise")
+    round_type: Mapped[RoundType | None] = relationship(back_populates="rubric", lazy="raise")
     dimensions: Mapped[list[RubricDimension]] = relationship(
-        back_populates="rubric", lazy="selectin", order_by="RubricDimension.sort_order",
+        back_populates="rubric", lazy="raise", order_by="RubricDimension.sort_order",
         cascade="all, delete-orphan",
     )
 
@@ -470,7 +483,7 @@ class RubricDimension(Base, TimestampMixin):
     name: Mapped[str] = mapped_column(String(128))    # "Tradeoff reasoning" — rewordable
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
-    rubric: Mapped[Rubric] = relationship(back_populates="dimensions", lazy="selectin")
+    rubric: Mapped[Rubric] = relationship(back_populates="dimensions", lazy="raise")
 
 
 class Question(Base, TimestampMixin):
@@ -511,12 +524,12 @@ class Question(Base, TimestampMixin):
     # `next_question` returns "the first unasked question in BANK ORDER" — that order now lives on
     # the pairing (`QuestionRole.sort_order`), because a shared question orders differently per role.
     role_links: Mapped[list[QuestionRole]] = relationship(
-        back_populates="question", lazy="selectin", cascade="all, delete-orphan",
+        back_populates="question", lazy="raise", cascade="all, delete-orphan",
     )
     roles: AssociationProxy[list[Role]] = association_proxy("role_links", "role")
-    type: Mapped[QuestionType] = relationship(lazy="selectin")
-    level: Mapped[Level | None] = relationship(lazy="selectin")
-    tags: Mapped[list[Tag]] = relationship(secondary=question_tags, lazy="selectin")
+    type: Mapped[QuestionType] = relationship(lazy="raise")
+    level: Mapped[Level | None] = relationship(lazy="raise")
+    tags: Mapped[list[Tag]] = relationship(secondary=question_tags, lazy="raise")
 
 
 class ReferenceBrief(Base, TimestampMixin):
@@ -604,26 +617,26 @@ class Interview(Base, TimestampMixin):
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)   # save_interview_summary
     done: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    profile: Mapped[Profile | None] = relationship(back_populates="interviews", lazy="selectin")
-    role: Mapped[Role] = relationship(lazy="selectin")
-    level: Mapped[Level] = relationship(lazy="selectin")
-    current_question: Mapped[Question | None] = relationship(lazy="selectin")
-    job: Mapped[Job | None] = relationship(lazy="selectin")
-    round_type: Mapped[RoundType | None] = relationship(lazy="selectin")
+    profile: Mapped[Profile | None] = relationship(back_populates="interviews", lazy="raise")
+    role: Mapped[Role] = relationship(lazy="raise")
+    level: Mapped[Level] = relationship(lazy="raise")
+    current_question: Mapped[Question | None] = relationship(lazy="raise")
+    job: Mapped[Job | None] = relationship(lazy="raise")
+    round_type: Mapped[RoundType | None] = relationship(lazy="raise")
     # Phase C — an interview has AT MOST ONE scorecard (graded once at the end), so this is a
     # 1:1: `uselist=False` makes `interview.scorecard` a single row or None, not a list. It's
-    # what lets the History list read each interview's `overall` in the same selectin load
+    # what lets the History list read each interview's `overall` from one batched selectinload
     # instead of a second query per row. `viewonly=True` because the scorecard's lifecycle is
     # owned by grading (save_scorecard writes it) — this side only ever reads it, and marking
     # it view-only keeps SQLAlchemy from trying to null out `scorecard.interview_id` if this
     # attribute is ever reassigned. No new column and no migration: a relationship is pure ORM.
     scorecard: Mapped[Scorecard | None] = relationship(
-        lazy="selectin", uselist=False, viewonly=True
+        lazy="raise", uselist=False, viewonly=True
     )
-    # the relationship to watch: a History list of many interviews drags every turn of each.
-    # See the lazy="selectin" note at the top for the lazy="raise" + selectinload() fix.
+    # load with selectinload(Interview.turns) only where the transcript is actually read — a
+    # History list of many interviews must never drag every turn of each (see the note up top).
     turns: Mapped[list[Turn]] = relationship(
-        back_populates="interview", lazy="selectin", order_by="Turn.created_at",
+        back_populates="interview", lazy="raise", order_by="Turn.created_at",
         cascade="all, delete-orphan",
     )
     # THE FROZEN PLAN — the ordered set of bank questions this interview will ask, materialized
@@ -631,10 +644,10 @@ class Interview(Base, TimestampMixin):
     # they've saved none). It's what gives the interview a finite end: `/api/answer` advances to the
     # next plan question not yet asked and, when there is none, concludes — instead of walking the
     # whole role+level bank to exhaustion. Frozen so editing "My questions" mid-interview can't move
-    # the goalposts and a restart resumes the same questions. Ordered by position; selectin so it
-    # loads with the interview like `turns` does. See InterviewQuestion.
+    # the goalposts and a restart resumes the same questions. Ordered by position (that order applies
+    # under selectinload too). See InterviewQuestion.
     plan_questions: Mapped[list[InterviewQuestion]] = relationship(
-        back_populates="interview", lazy="selectin", order_by="InterviewQuestion.position",
+        back_populates="interview", lazy="raise", order_by="InterviewQuestion.position",
         cascade="all, delete-orphan",
     )
 
@@ -645,8 +658,8 @@ class Interview(Base, TimestampMixin):
         DERIVED, not stored — this replaces the old `asked_ids` JSONB array. Every asked
         question either has at least one recorded turn or is the one currently on the
         table, so the fact already exists twice in the schema and a third copy could only
-        ever disagree with them. `turns` is selectin-loaded with the interview, so this
-        costs no extra query.
+        ever disagree with them. Needs `turns` loaded (selectinload(Interview.turns)) —
+        it raises otherwise, like any unloaded relationship here.
 
         THE INVARIANT IT RESTS ON: a question is never presented and then skipped without
         an answer — true today, because `/api/answer` only advances after recording one.
@@ -694,8 +707,8 @@ class InterviewQuestion(Base, TimestampMixin):
     )
     position: Mapped[int] = mapped_column(Integer)   # 0-based ask order
 
-    interview: Mapped[Interview] = relationship(back_populates="plan_questions", lazy="selectin")
-    question: Mapped[Question] = relationship(lazy="selectin")
+    interview: Mapped[Interview] = relationship(back_populates="plan_questions", lazy="raise")
+    question: Mapped[Question] = relationship(lazy="raise")
 
 
 class Turn(Base, TimestampMixin):
@@ -756,8 +769,8 @@ class Turn(Base, TimestampMixin):
     # NULL = open (presented, unanswered). Set to the candidate's text (possibly "") to close.
     answer: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    interview: Mapped[Interview] = relationship(back_populates="turns", lazy="selectin")
-    question: Mapped[Question] = relationship(lazy="selectin")
+    interview: Mapped[Interview] = relationship(back_populates="turns", lazy="raise")
+    question: Mapped[Question] = relationship(lazy="raise")
 
 
 # ===========================================================================
@@ -785,9 +798,9 @@ class Scorecard(Base, TimestampMixin):
     )
     overall: Mapped[float] = mapped_column(Float)
 
-    interview: Mapped[Interview] = relationship(lazy="selectin")
+    interview: Mapped[Interview] = relationship(lazy="raise")
     entries: Mapped[list[ScorecardEntry]] = relationship(
-        back_populates="scorecard", lazy="selectin", cascade="all, delete-orphan"
+        back_populates="scorecard", lazy="raise", cascade="all, delete-orphan"
     )
 
 
@@ -815,10 +828,10 @@ class ScorecardEntry(Base, TimestampMixin):
     gap: Mapped[str] = mapped_column(Text)
     improvement: Mapped[str] = mapped_column(Text)
 
-    scorecard: Mapped[Scorecard] = relationship(back_populates="entries", lazy="selectin")
-    question: Mapped[Question] = relationship(lazy="selectin")
+    scorecard: Mapped[Scorecard] = relationship(back_populates="entries", lazy="raise")
+    question: Mapped[Question] = relationship(lazy="raise")
     scores: Mapped[list[ScorecardEntryScore]] = relationship(
-        back_populates="entry", lazy="selectin", cascade="all, delete-orphan"
+        back_populates="entry", lazy="raise", cascade="all, delete-orphan"
     )
 
 
@@ -847,8 +860,8 @@ class ScorecardEntryScore(Base, TimestampMixin):
     dimension_id: Mapped[int] = mapped_column(ForeignKey("rubric_dimensions.id"), index=True)
     score: Mapped[int] = mapped_column(Integer)   # 1-5, per rubrics.scale
 
-    entry: Mapped[ScorecardEntry] = relationship(back_populates="scores", lazy="selectin")
-    dimension: Mapped[RubricDimension] = relationship(lazy="selectin")
+    entry: Mapped[ScorecardEntry] = relationship(back_populates="scores", lazy="raise")
+    dimension: Mapped[RubricDimension] = relationship(lazy="raise")
 
 
 # ===========================================================================
@@ -884,7 +897,7 @@ class ProfileQuestion(Base, TimestampMixin):
         ForeignKey("questions.id", ondelete="CASCADE"), index=True
     )
 
-    question: Mapped[Question] = relationship(lazy="selectin")
+    question: Mapped[Question] = relationship(lazy="raise")
 
 
 # ===========================================================================
@@ -925,5 +938,5 @@ class Job(Base, TimestampMixin):
     role_id: Mapped[int] = mapped_column(ForeignKey("roles.id"), index=True)
     level_id: Mapped[int] = mapped_column(ForeignKey("levels.id"))
 
-    role: Mapped[Role] = relationship(lazy="selectin")
-    level: Mapped[Level] = relationship(lazy="selectin")
+    role: Mapped[Role] = relationship(lazy="raise")
+    level: Mapped[Level] = relationship(lazy="raise")
