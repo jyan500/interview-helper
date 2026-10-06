@@ -48,7 +48,8 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi_pagination import Params
 from fastapi_pagination.ext.sqlalchemy import apaginate
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy.orm import selectinload
 
 from db.engine import get_session
 from db.models import (
@@ -250,7 +251,7 @@ async def get_interview(interview_id: str) -> dict:
     """Read back a whole recorded interview (backs the interview:// resource).
 
     WORKED EXAMPLE — the read pattern the writers below start with too: resolve the slug to
-    a row, then walk selectin-loaded relationships and convert to JSON-safe values.
+    a row (loading the relationships it reads), then walk them and convert to JSON-safe values.
 
     Returns {"status": "ok", "interview_id": ..., "turns": [...], "summary": ...} or
     {"status": "not_found", "interview_id": ...}.
@@ -261,7 +262,11 @@ async def get_interview(interview_id: str) -> dict:
     apart from "interview with nothing recorded yet", which it couldn't before.
     """
     async with get_session() as db:
-        result = await db.execute(select(Interview).where(Interview.slug == interview_id))
+        result = await db.execute(
+            select(Interview).where(Interview.slug == interview_id)
+            .options(selectinload(Interview.role), selectinload(Interview.level),
+                     *SIMULATION_LOADS, *TURN_LOADS)
+        )
         interview = result.scalar_one_or_none()
         if interview is None:
             return {"status": "not_found", "interview_id": interview_id}
@@ -275,13 +280,12 @@ async def get_interview(interview_id: str) -> dict:
             # on the way out; a uuid.UUID isn't JSON-serializable.
             "profile_id": str(interview.profile_id) if interview.profile_id else None,
             # add the interview's level so /api/scorecard can grade at the right
-            # bar. It's the levels.slug ("mid"), JSON-safe, and `interview.level` is selectin-
-            # loaded (free), exactly like `load_interview_state` already returns it:
+            # bar. It's the levels.slug ("mid"), JSON-safe, exactly like `load_interview_state` already returns it:
             "level": interview.level.slug,
             # DISPLAY fields, for the History detail view's header (role · level, and the date).
             # `level` above stays the SLUG because grading calibration reads it; these carry the
             # human-readable NAMES + the created timestamp instead. All three come off the same
-            # selectin-loaded row, so no extra query — the detail endpoint just forwards them.
+            # loaded relationships, so no extra query — the detail endpoint just forwards them.
             "role": interview.role.name,
             "level_name": interview.level.name,
             "created_at": interview.created_at.isoformat(),
@@ -322,11 +326,9 @@ async def load_interview_state(interview_id: str) -> dict:
     own history through a resource would be both wasteful and confusing, so the two shapes
     stay apart.
 
-    COLUMN QUERIES, NOT `select(Interview)`. This is the hot path (every turn), and loading the ORM
-    row fires every lazy="selectin" relationship in a cascade: the interview's turns, plan, profile,
-    job and scorecard, then each question's role links, which load the role's OTHER questions, and
-    so on. Measured 2026-10-02: 61 sequential statements, ~4-7s against Supabase. Selecting just the
-    columns this dict needs is 3 statements, and the shape returned is unchanged.
+    COLUMN QUERIES, NOT `select(Interview)`. This is the hot path (every turn), so it reads just the
+    columns this dict needs: 3 statements. (Under the old always-eager lazy="selectin" models, loading
+    the ORM row cascaded into 61 sequential statements, ~4-7s against Supabase, measured 2026-10-02.)
     """
     async with get_session() as db:
         # OUTER join on the current question: current_question_id is NULL before the first is picked.
@@ -441,9 +443,8 @@ async def save_interview_state(
 
 # ===========================================================================
 # THE PER-TURN WRITE HELPERS. Each takes an open `db` and does its part of a turn with ID-ONLY
-# selects and plain UPDATE/INSERT statements, never `select(Interview)` / `select(Question)`:
-# loading either ORM row fires the lazy="selectin" cascade (dozens of statements, seconds against
-# Supabase). They don't commit, so commit_turn can run several in ONE transaction, and the public
+# selects and plain UPDATE/INSERT statements: a write needs ids, not ORM rows, so it never pays
+# for loading one. They don't commit, so commit_turn can run several in ONE transaction, and the public
 # functions (save_interview_state, open_turn, record_answer) wrap each in its own.
 # Each returns None on success, or an error string (the caller returns it without committing).
 # ===========================================================================
@@ -673,15 +674,44 @@ async def save_interview_summary(interview_id: str, feedback: str) -> dict:
 # ===========================================================================
 
 
+# What _simulation_fields reads (job slug/company, round name).
+SIMULATION_LOADS = (
+    selectinload(Interview.job),
+    selectinload(Interview.round_type),
+)
+# What _interview_card reads. Relationships are lazy="raise" (see db/models.py), so a query feeding
+# cards loads exactly these: one batched query per relationship for the whole page, nothing deeper.
+CARD_LOADS = (
+    selectinload(Interview.role),
+    selectinload(Interview.level),
+    selectinload(Interview.scorecard),
+    *SIMULATION_LOADS,
+)
+# What _interview_rubric reads: the round's rubric for a simulation, the role's for a bank interview,
+# each with its dimensions. Both paths load (which one applies is only known per row).
+RUBRIC_LOADS = (
+    selectinload(Interview.role).selectinload(Role.rubric).selectinload(Rubric.dimensions),
+    selectinload(Interview.round_type).selectinload(RoundType.rubric).selectinload(Rubric.dimensions),
+)
+# A graded interview's scores, down to each score's dimension name (get_scorecard, the dashboard).
+SCORE_LOADS = (
+    selectinload(Interview.scorecard).selectinload(Scorecard.entries)
+    .selectinload(ScorecardEntry.scores).selectinload(ScorecardEntryScore.dimension),
+)
+# The transcript: each turn with its parent question (get_interview, load_resume_payload).
+TURN_LOADS = (
+    selectinload(Interview.turns).selectinload(Turn.question),
+)
+
+
 def _interview_card(iv: Interview) -> dict:
     """One interview as the History list / dashboard table renders it — the SUMMARY, not the
-    transcript. role/level are the human-readable NAMES (both relationships are selectin-loaded,
-    so reading them is free), and `overall` is the grade if scored else None (the 1:1
-    `interview.scorecard` is selectin-loaded too). The ONE card shape, shared by the list, the
-    `?resumable=true` narrowing, and get_resumable_interview so they can't drift apart.
+    transcript. Needs CARD_LOADS. role/level are the human-readable NAMES, and `overall` is the
+    grade if scored else None (the 1:1 `interview.scorecard`). The ONE card shape, shared by the
+    list, the `?resumable=true` narrowing, and get_resumable_interview so they can't drift apart.
 
     `job_id` / `company` / `round` are set only on a SIMULATION (None on a bank interview) — the
-    badge the list shows and the link back to the job. job + round_type are selectin-loaded."""
+    badge the list shows and the link back to the job."""
     return {
         "interview_id": iv.slug,
         "role": iv.role.name,
@@ -695,7 +725,7 @@ def _interview_card(iv: Interview) -> dict:
 
 def _simulation_fields(iv: Interview) -> dict:
     """The simulation display fields shared by the list card, the detail view and resume: the job's
-    slug + company and the round's name, all None for a bank interview."""
+    slug + company and the round's name, all None for a bank interview. Needs SIMULATION_LOADS."""
     return {
         "job_id": iv.job.slug if iv.job is not None else None,
         "company": iv.job.company if iv.job is not None else None,
@@ -743,7 +773,7 @@ async def list_interviews(
         False = bank interviews only, None = both. A plain column predicate, no join.
     Each relationship is joined AT MOST ONCE (guarded on whether any filter references it), which is
     why q + role can coexist without joining Role twice. The joins are 1:1 so they can't multiply
-    rows; selectin still loads role/level for display via its own query — these joins are WHERE-only.
+    rows; CARD_LOADS still loads role/level for display via its own query — these joins are WHERE-only.
 
     NOTE this is deliberately SEPARATE from get_resumable_interview: the resume banner never routes
     through here (the endpoint short-circuits `?resumable=true` before calling this), so hiding
@@ -761,7 +791,7 @@ async def list_interviews(
     """
     descending = order != "asc"  # default desc; only an explicit "asc" flips it
     async with get_session() as db:
-        stmt = select(Interview).where(Interview.profile_id == profile_id)
+        stmt = select(Interview).where(Interview.profile_id == profile_id).options(*CARD_LOADS)
         if q or role:
             stmt = stmt.join(Interview.role)
         if q or level:
@@ -805,7 +835,7 @@ def _interview_rubric(iv: Interview) -> Rubric | None:
     """The rubric an interview is graded on: its ROUND's for a simulation (a behavioral answer must
     not be scored on "Technical depth"), its ROLE's for a bank interview. Read off the ROW, never
     from the request — one rule shared by grading and save_scorecard, so the dimension names the
-    grader scores are exactly the ones the scorecard resolves."""
+    grader scores are exactly the ones the scorecard resolves. Needs RUBRIC_LOADS."""
     if iv.round_type is not None:
         return iv.round_type.rubric
     return iv.role.rubric
@@ -818,7 +848,10 @@ async def load_grading_context(interview_id: str) -> dict:
     or {"status": "not_found"} (unknown interview, or its role/round has no rubric)."""
     async with get_session() as db:
         interview = (
-            await db.execute(select(Interview).where(Interview.slug == interview_id))
+            await db.execute(
+                select(Interview).where(Interview.slug == interview_id)
+                .options(*RUBRIC_LOADS, selectinload(Interview.job))
+            )
         ).scalar_one_or_none()
         if interview is None:
             return {"status": "not_found"}
@@ -862,8 +895,8 @@ async def save_scorecard(interview_id: str, overall: float, answers: list[dict])
          that's the whole reason a reworded dimension can't orphan old scores. So we resolve
          each name to its id via the role's rubric, and DROP any score whose name doesn't
          resolve rather than writing it under a guess (the same "don't invent an id" rule the
-         turn loop follows). The map is built from `interview.role.rubric.dimensions`, all
-         selectin-loaded.
+         turn loop follows). The map is built from the interview's rubric dimensions
+         (RUBRIC_LOADS).
 
       2. THE per-dimension `note` IS NOT STORED. ScorecardEntryScore has `dimension_id` +
          `score` and nothing else — the schema chose to keep only the number, since the notes
@@ -874,12 +907,14 @@ async def save_scorecard(interview_id: str, overall: float, answers: list[dict])
 
     IDEMPOTENCY: /api/scorecard can be hit more than once (the user clicks "End interview"
     again, or re-opens and re-grades). One interview should have ONE scorecard, so we delete
-    any existing one first — the `all, delete-orphan` cascades on Scorecard.entries and
-    ScorecardEntry.scores tear down its children with it — then insert the fresh grade.
+    any existing one first — a SQL DELETE, so the database's ON DELETE CASCADE on entries and
+    their scores tears down the children in the same statement — then insert the fresh grade.
     """
     async with get_session() as db:
         interview = (
-            await db.execute(select(Interview).where(Interview.slug == interview_id))
+            await db.execute(
+                select(Interview).where(Interview.slug == interview_id).options(*RUBRIC_LOADS)
+            )
         ).scalar_one_or_none()
         if interview is None:
             return {"ok": False, "error": "unknown interview"}
@@ -891,26 +926,22 @@ async def save_scorecard(interview_id: str, overall: float, answers: list[dict])
         #     a simulation, the role's otherwise — see _interview_rubric).
         name_to_id = {dim.name: dim.id for dim in rubric.dimensions}
 
-        # idempotency: drop a prior scorecard for this interview (cascades to its rows).
-        existing = (
-            await db.execute(select(Scorecard).where(Scorecard.interview_id == interview.id))
-        ).scalar_one_or_none()
-        if existing is not None:
-            await db.delete(existing)
-            await db.flush()   # make the delete happen before the re-insert in this txn
+        # idempotency: drop a prior scorecard for this interview. A SQL DELETE, not db.delete(row):
+        # the ORM delete would LOAD entries + scores to cascade them in Python (relationships are
+        # lazy="raise", so it can't), while the DB's ON DELETE CASCADE does it in one statement.
+        # It runs now, in order, before the re-insert in this transaction.
+        await db.execute(delete(Scorecard).where(Scorecard.interview_id == interview.id))
 
         # (2) build the object graph top-down. Appending to a cascaded relationship is all it
         #     takes — SQLAlchemy assigns the foreign keys (scorecard_id, entry_id) itself when
         #     it flushes, so we never touch them by hand.
         scorecard = Scorecard(interview_id=interview.id, overall=overall)
         for ans in answers:
-            question = (
-                await db.execute(select(Question).where(Question.slug == ans["question_id"]))
-            ).scalar_one_or_none()
-            if question is None:
+            question_pk = await _question_pk(db, ans["question_id"])
+            if question_pk is None:
                 continue   # a slug that isn't a real question can't be graded onto a row
             entry = ScorecardEntry(
-                question_id=question.id,
+                question_id=question_pk,
                 strength=ans["strength"],
                 gap=ans["gap"],
                 improvement=ans["improvement"],
@@ -959,10 +990,9 @@ async def get_scorecard(interview_id: str) -> dict:
 
     POINTERS:
       - resolve the slug: select(Interview).where(Interview.slug == interview_id); if it or
-        `interview.scorecard` is None, return {"status": "not_found"}. (The 1:1 relationship is
-        selectin-loaded, so `interview.scorecard` is right there.)
-      - the nested rows are all selectin-loaded too: `scorecard.entries`, each `entry.scores`,
-        and `score.dimension` — no extra queries, just walk them.
+        `interview.scorecard` is None, return {"status": "not_found"}.
+      - the query loads the nested rows (SCORE_LOADS + each entry's question): `scorecard.entries`,
+        each `entry.scores`, and `score.dimension` — no extra queries, just walk them.
       - `dimension_averages` is NOT a stored column (only `overall` is cached). Recompute it
         here the same way grading.aggregate does: bucket every ScorecardEntryScore by its
         dimension NAME, average each bucket, round(…, 2). This is a read, so a plain Python
@@ -976,6 +1006,9 @@ async def get_scorecard(interview_id: str) -> dict:
     async with get_session() as db:
         interview = (await db.execute(
             select(Interview).where(Interview.slug == interview_id)
+            .options(*SCORE_LOADS,
+                     selectinload(Interview.scorecard).selectinload(Scorecard.entries)
+                     .selectinload(ScorecardEntry.question))
         )).scalar_one_or_none()
         if interview is None or interview.scorecard is None:
             return {"status": "not_found"}
@@ -1054,11 +1087,14 @@ DASHBOARD_DEFAULT_PERIOD = "month"
 async def get_profile(profile_id: str) -> dict:
     """This user's profile row — display name + their default role/level (each as slug + name,
     or None if unset). Backs GET /api/profile, which seeds the kickoff form's pre-fill and the
-    signal panel's initial role. The `role`/`level` relationships are selectin-loaded, so this
-    is one row read."""
+    signal panel's initial role. Loads only `role`/`level` (it used to drag in every interview
+    the user had, via the old always-eager Profile.interviews)."""
     async with get_session() as db:
         profile = (
-            await db.execute(select(Profile).where(Profile.id == profile_id))
+            await db.execute(
+                select(Profile).where(Profile.id == profile_id)
+                .options(selectinload(Profile.role), selectinload(Profile.level))
+            )
         ).scalar_one_or_none()
         if profile is None:
             return {"status": "not_found"}
@@ -1168,20 +1204,25 @@ async def get_dashboard(
                         any stray name). One {dimension, average} per bar.
       work_on_next    — the `improvement` line off recent entries (newest interview first), capped.
 
-    All the nested rows (scorecard -> entries -> scores -> dimension, and round.rubric.dimensions)
-    are selectin-loaded, so this walks them in Python — no GROUP BY SQL — exactly like get_scorecard.
+    The queries load the nested rows (scorecard -> entries -> scores -> dimension via SCORE_LOADS,
+    and the round's rubric -> dimensions), so this walks them in Python — no GROUP BY SQL — exactly
+    like get_scorecard.
 
     BANK INTERVIEWS ARE EXCLUDED (`job_id IS NOT NULL` on every query here). A bank interview is
     graded on its ROLE's rubric, so its dimensions wouldn't line up with the round's skill bars.
     """
     period = period if period in DASHBOARD_PERIODS else DASHBOARD_DEFAULT_PERIOD
     cutoff = datetime.now(timezone.utc) - DASHBOARD_PERIODS[period]
+    # the skill breakdown reads the round's rubric dimensions, whichever way the round resolves
+    rubric_loads = selectinload(RoundType.rubric).selectinload(Rubric.dimensions)
     async with get_session() as db:
         # (1)-(3) resolve the effective round.
         round_row = None
         if round_slug:
             round_row = (
-                await db.execute(select(RoundType).where(RoundType.slug == round_slug))
+                await db.execute(
+                    select(RoundType).where(RoundType.slug == round_slug).options(rubric_loads)
+                )
             ).scalar_one_or_none()
         if round_row is None and not round_slug:
             recent = (
@@ -1191,6 +1232,7 @@ async def get_dashboard(
                     .where(Interview.profile_id == profile_id, Interview.job_id.is_not(None))
                     .order_by(Interview.created_at.desc())
                     .limit(1)
+                    .options(selectinload(Interview.round_type).options(rubric_loads))
                 )
             ).scalar_one_or_none()
             if recent is not None:
@@ -1233,7 +1275,7 @@ async def get_dashboard(
         if job_slug:
             stmt = stmt.where(Interview.job.has(Job.slug == job_slug))
         interviews = (
-            await db.execute(stmt.order_by(Interview.created_at.asc()))
+            await db.execute(stmt.order_by(Interview.created_at.asc()).options(*SCORE_LOADS))
         ).scalars().all()
 
         series = [iv.scorecard.overall for iv in interviews]
@@ -1327,8 +1369,7 @@ async def get_resumable_interview(profile_id: str) -> dict | None:
     Returns the SAME card shape list_interviews yields (so `?resumable=true` and the full list share
     one response type), or None when the most-recent interview is finished (or the user has none).
     On the returned card `done` is always False and `overall` is None (an unfinished interview isn't
-    graded), but they're included so the shape matches exactly. role/level (names) and the 1:1
-    scorecard are all selectin-loaded — free.
+    graded), but they're included so the shape matches exactly. Loads CARD_LOADS for the card.
     """
     async with get_session() as db:
         interview = (
@@ -1337,6 +1378,7 @@ async def get_resumable_interview(profile_id: str) -> dict | None:
                 .where(Interview.profile_id == profile_id)
                 .order_by(Interview.updated_at.desc())
                 .limit(1)
+                .options(*CARD_LOADS)
             )
         ).scalar_one_or_none()
         # Resumable ONLY if the user's single most-recent interview is itself unfinished. The
@@ -1367,7 +1409,11 @@ async def load_resume_payload(interview_id: str) -> dict:
     """
     async with get_session() as db:
         interview = (
-            await db.execute(select(Interview).where(Interview.slug == interview_id))
+            await db.execute(
+                select(Interview).where(Interview.slug == interview_id)
+                .options(selectinload(Interview.role), selectinload(Interview.level),
+                         selectinload(Interview.current_question), *SIMULATION_LOADS, *TURN_LOADS)
+            )
         ).scalar_one_or_none()
         if interview is None:
             return {"status": "not_found"}

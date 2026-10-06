@@ -33,9 +33,9 @@ async def list_round_types(params: Params, search: str | None = None):
 
 
 async def get_round_type_by_slug(slug: str) -> RoundType | None:
-    """Resolve ONE round type by slug, or None. Its `rubric` (and the rubric's dimensions) are
-    selectin-loaded with it, so the simulation path can read the round's rubric after the session
-    closes."""
+    """Resolve ONE round type by slug, or None. Scalar columns only: every caller (the simulation
+    start path, the round generator, GET /api/round-types/{slug}) reads the row's own fields, so the
+    rubric isn't loaded (relationships are lazy="raise"; grading reads the rubric off the interview)."""
     async with get_session() as db:
         return (
             await db.execute(select(RoundType).where(RoundType.slug == slug))
@@ -46,8 +46,7 @@ if __name__ == "__main__":
     async def _smoke() -> None:
         page = await list_round_types(Params(page=1, size=50))
         for row in page.items:
-            dims = [d.name for d in row.rubric.dimensions] if row.rubric else None
-            print(row.slug, row.plan_size, row.max_followups, row.has_code_editor, dims)
+            print(row.slug, row.plan_size, row.max_followups, row.has_code_editor)
         print("unknown ->", await get_round_type_by_slug("nope"))
 
     asyncio.run(_smoke())

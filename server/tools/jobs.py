@@ -23,15 +23,20 @@ import uuid
 from fastapi_pagination import Params
 from fastapi_pagination.ext.sqlalchemy import apaginate
 from sqlalchemy import delete, func, or_, select
+from sqlalchemy.orm import selectinload
 
 from db.engine import get_session
 from db.models import Interview, Job, Level, Role, Scorecard
 
+# What _job_dict reads. Relationships are lazy="raise" (see db/models.py), so every query feeding
+# _job_dict loads these two.
+JOB_LOADS = (selectinload(Job.role), selectinload(Job.level))
+
 
 def _job_dict(job: Job, *, detail: bool = False) -> dict:
-    """One job as the API returns it. role/level carry BOTH slug (what the edit form's pickers and
-    the start path use) and name (what the page shows). The raw `description` is detail-only — it
-    can be thousands of characters, and the list never shows it."""
+    """One job as the API returns it. Needs JOB_LOADS. role/level carry BOTH slug (what the edit
+    form's pickers and the start path use) and name (what the page shows). The raw `description` is
+    detail-only — it can be thousands of characters, and the list never shows it."""
     out = {
         "job_id": job.slug,
         "company": job.company,
@@ -93,9 +98,13 @@ async def create_job(
         )
         db.add(job)
         await db.commit()
-        # Re-read so the selectin relationships (role/level) and the DB-filled timestamps load —
-        # a freshly constructed row has neither (see the tags note in db/seed.py).
-        job = (await db.execute(select(Job).where(Job.id == job.id))).scalar_one()
+        # Re-read so role/level (JOB_LOADS) and the DB-filled timestamps load — a freshly
+        # constructed row has neither (see the tags note in db/seed.py). populate_existing: the
+        # identity map already holds this row, so refresh it rather than hand back the stale one.
+        job = (await db.execute(
+            select(Job).where(Job.id == job.id).options(*JOB_LOADS)
+            .execution_options(populate_existing=True)
+        )).scalar_one()
         return {"ok": True, "job": _job_dict(job, detail=True)}
 
 
@@ -105,7 +114,9 @@ async def get_job(job_id: str) -> dict:
     (it compares as strings), and is deliberately not part of the `job` payload that leaves the
     server."""
     async with get_session() as db:
-        job = (await db.execute(select(Job).where(Job.slug == job_id))).scalar_one_or_none()
+        job = (await db.execute(
+            select(Job).where(Job.slug == job_id).options(*JOB_LOADS)
+        )).scalar_one_or_none()
         if job is None:
             return {"status": "not_found", "job_id": job_id}
         return {"status": "ok", "profile_id": job.profile_id, "job": _job_dict(job, detail=True)}
@@ -132,7 +143,7 @@ async def list_jobs_page(
     nothing graded would be a dead option. Returns the {items, total, page, size, pages} envelope
     with list-shaped items."""
     async with get_session() as db:
-        stmt = select(Job).where(Job.profile_id == profile_id)
+        stmt = select(Job).where(Job.profile_id == profile_id).options(*JOB_LOADS)
         if q:
             stmt = stmt.where(or_(Job.company.ilike(f"%{q}%"), Job.title.ilike(f"%{q}%")))
         if graded:
@@ -171,7 +182,9 @@ async def update_job(
     Callers check ownership first (the route loads the job via get_job). Returns
     {"ok": True, "job": <detail dict>} or {"ok": False, "error": ...}."""
     async with get_session() as db:
-        job = (await db.execute(select(Job).where(Job.slug == job_id))).scalar_one_or_none()
+        job = (await db.execute(
+            select(Job).where(Job.slug == job_id).options(*JOB_LOADS)
+        )).scalar_one_or_none()
         if job is None:
             return {"ok": False, "error": f"unknown job: {job_id}"}
         role_row, level_row, error = await _resolve_role_level(db, role, level)
@@ -182,7 +195,7 @@ async def update_job(
         if title is not None:
             job.title = title
         # Assign the RELATIONSHIP, not the `_id` column: `job.role`/`job.level` were already
-        # selectin-loaded with the row, and setting only `level_id` leaves that loaded object stale
+        # loaded with the row (JOB_LOADS), and setting only `level_id` leaves that loaded object stale
         # (the identity map hands back the same instance on re-select), so the response would echo
         # the OLD level. Setting the relationship keeps both sides in step and sets the FK on flush.
         if role_row is not None:
