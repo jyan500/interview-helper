@@ -25,7 +25,7 @@ export default function SelectionBar({
     return (
         <div
             hidden={!dirty}
-            className="sticky bottom-0 mt-3 flex items-center justify-between gap-3 rounded-md border border-divider bg-bg px-4 py-3"
+            className="sticky bottom-4 mt-3 flex items-center justify-between gap-3 rounded-md bg-surface px-4 py-3 shadow-lg"
         >
             <span className="text-[13.5px] text-neutral-300">
                 <strong className="text-ink">{count}</strong>{" "}
