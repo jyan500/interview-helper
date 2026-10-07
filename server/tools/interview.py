@@ -235,6 +235,11 @@ async def create_interview(
         # exactly as api.py used to take it from next_question. Safe to read after commit: the
         # session is expire_on_commit=False (see db/engine.py).
         first = plan[0] if plan else None
+        first_has_diagram_canvas = False
+        if first is not None:
+            first_has_diagram_canvas = (await db.execute(
+                select(QuestionType.has_diagram_canvas).where(QuestionType.id == first.type_id)
+            )).scalar_one()
         return {
             "ok": True,
             "interview_id": slug,
@@ -244,6 +249,8 @@ async def create_interview(
             "from_saved": from_saved,
             "first_qid": first.slug if first is not None else None,
             "first_qtext": first.text if first is not None else None,
+            # whether the SPA shows the diagram canvas for it (its question type's flag)
+            "first_has_diagram_canvas": first_has_diagram_canvas,
         }
 
 
@@ -306,6 +313,9 @@ async def get_interview(interview_id: str) -> dict:
                     # question). The scorecard skips those; the History transcript shows blank.
                     "answer": turn.answer,
                     "at": turn.created_at.isoformat(),
+                    # the diagram sent while this turn was open (a DiagramDoc dump), or None. The
+                    # grader takes each question's latest; the detail page draws it.
+                    "diagram": turn.diagram,
                 }
                 for turn in interview.turns          # already ordered by created_at
             ],
@@ -336,9 +346,11 @@ async def load_interview_state(interview_id: str) -> dict:
             select(
                 Interview.id, Interview.profile_id, Interview.persona, Interview.followups_used,
                 Interview.max_followups, Interview.done, Interview.message_history,
-                Question.slug, Question.text, Role.slug, Level.slug,
+                Question.id, Question.slug, Question.text, QuestionType.has_diagram_canvas,
+                Role.slug, Level.slug,
             )
             .outerjoin(Question, Interview.current_question_id == Question.id)
+            .outerjoin(QuestionType, Question.type_id == QuestionType.id)
             .join(Role, Interview.role_id == Role.id)
             .join(Level, Interview.level_id == Level.id)
             .where(Interview.slug == interview_id)
@@ -346,7 +358,8 @@ async def load_interview_state(interview_id: str) -> dict:
         if row is None:
             return {"ok": False, "error": "Interview not found"}
         (pk, profile_id, persona, followups_used, max_followups, done, message_history,
-         current_qid, current_qtext, role_slug, level_slug) = row
+         current_question_pk, current_qid, current_qtext, current_has_diagram_canvas,
+         role_slug, level_slug) = row
 
         # asked = every question with a turn, plus the one on the table (as Interview.asked_question_ids)
         asked_ids = set((await db.execute(
@@ -359,18 +372,34 @@ async def load_interview_state(interview_id: str) -> dict:
         # question is the first one in the plan, by position, that hasn't been asked yet. None means
         # the plan is exhausted, which is the ADVANCE branch's cue to END the interview.
         plan = (await db.execute(
-            select(Question.slug, Question.text)
+            select(Question.slug, Question.text, QuestionType.has_diagram_canvas)
             .join(InterviewQuestion, InterviewQuestion.question_id == Question.id)
+            .join(QuestionType, Question.type_id == QuestionType.id)
             .where(InterviewQuestion.interview_id == pk)
             .order_by(InterviewQuestion.position)
         )).all()
         next_planned_qid = None
         next_planned_qtext = None
-        for slug, text in plan:
+        next_planned_has_diagram_canvas = False
+        for slug, text, has_diagram_canvas in plan:
             if slug not in asked_ids:
                 next_planned_qid = slug
                 next_planned_qtext = text
+                next_planned_has_diagram_canvas = has_diagram_canvas
                 break
+
+        # THE CURRENT DIAGRAM — the question's newest non-NULL turns.diagram, the baseline /api/answer
+        # compares an incoming diagram against. Only queried when the question has a canvas, so other
+        # turns keep the 3-statement load.
+        current_diagram = None
+        if current_has_diagram_canvas:
+            current_diagram = (await db.execute(
+                select(Turn.diagram)
+                .where(Turn.interview_id == pk, Turn.question_id == current_question_pk,
+                       Turn.diagram.is_not(None))
+                .order_by(Turn.id.desc())
+                .limit(1)
+            )).scalar_one_or_none()
 
         return {
             "ok": True,
@@ -382,6 +411,10 @@ async def load_interview_state(interview_id: str) -> dict:
             "persona": persona,
             "current_qid": current_qid,
             "current_qtext": current_qtext,
+            # the diagram canvas: whether the current question has one, and its latest diagram (a
+            # DiagramDoc dump, or None if nothing has been sent for it yet)
+            "current_has_diagram_canvas": bool(current_has_diagram_canvas),
+            "current_diagram": current_diagram,
             "followups_used": followups_used,
             "max_followups": max_followups,
             "done": done,
@@ -393,6 +426,7 @@ async def load_interview_state(interview_id: str) -> dict:
             # the next plan question to advance to (slug + text), or None when the plan is spent.
             "next_planned_qid": next_planned_qid,
             "next_planned_qtext": next_planned_qtext,
+            "next_planned_has_diagram_canvas": next_planned_has_diagram_canvas,
             "message_history": message_history
         }
 
@@ -600,6 +634,34 @@ async def open_turn(interview_id: str, question_id: str, prompt_text: str) -> di
         error = await _add_open_turn(db, interview_pk, question_id, prompt_text)
         if error is not None:
             return {"ok": False, "error": error}
+        await db.commit()
+        return {"ok": True, "interview_id": interview_id}
+
+
+async def save_open_turn_diagram(interview_id: str, question_id: str, diagram: dict) -> dict:
+    """Store the candidate's diagram (a DiagramDoc dump) on the OPEN turn, replacing any earlier one
+    sent during that turn.
+
+    /api/answer calls this BEFORE the model decides what the message was, so the diagram lands on
+    every path: a clarification or an answer request leaves the turn open, and the diagram stays on
+    it until the turn closes. Writing it in commit_turn instead would lose it on those paths.
+    `question_id` is the same guard as record_answer's.
+
+    Returns {"ok": True, "interview_id": ...} or {"ok": False, "error": ...} (nothing written).
+    """
+    async with get_session() as db:
+        interview_pk = await _interview_pk(db, interview_id)
+        if interview_pk is None:
+            return {"ok": False, "error": "interview is not found"}
+        question_pk = await _question_pk(db, question_id)
+        open_row = (await db.execute(
+            select(Turn.id, Turn.question_id).where(Turn.interview_id == interview_pk, Turn.answer.is_(None))
+        )).one_or_none()
+        if open_row is None:
+            return {"ok": False, "error": "no open turn to attach the diagram to"}
+        if open_row.question_id != question_pk:
+            return {"ok": False, "error": "open turn does not match the given question"}
+        await db.execute(update(Turn).where(Turn.id == open_row.id).values(diagram=diagram))
         await db.commit()
         return {"ok": True, "interview_id": interview_id}
 
@@ -1412,7 +1474,8 @@ async def load_resume_payload(interview_id: str) -> dict:
             await db.execute(
                 select(Interview).where(Interview.slug == interview_id)
                 .options(selectinload(Interview.role), selectinload(Interview.level),
-                         selectinload(Interview.current_question), *SIMULATION_LOADS, *TURN_LOADS)
+                         selectinload(Interview.current_question).selectinload(Question.type),
+                         *SIMULATION_LOADS, *TURN_LOADS)
             )
         ).scalar_one_or_none()
         if interview is None:
@@ -1420,8 +1483,13 @@ async def load_resume_payload(interview_id: str) -> dict:
 
         turns: list[dict] = []
         current_question: str | None = None
+        # the current question's latest diagram (its newest non-NULL turns.diagram, the open turn's
+        # included), which reseeds the canvas
+        diagram: dict | None = None
         for turn in interview.turns:          # already ordered by created_at
             prompt = turn.prompt_text or turn.question.text
+            if turn.question_id == interview.current_question_id and turn.diagram is not None:
+                diagram = turn.diagram
             if turn.answer is None:
                 # the OPEN turn — the question awaiting an answer (the resume point)
                 current_question = prompt
@@ -1452,8 +1520,10 @@ async def load_resume_payload(interview_id: str) -> dict:
             "allows_smart_voice": (interview.round_type.allows_smart_voice
                                    if interview.round_type is not None else None),
             "question": ({"slug": interview.current_question.slug,
-                          "text": interview.current_question.text}
+                          "text": interview.current_question.text,
+                          "has_diagram_canvas": interview.current_question.type.has_diagram_canvas}
                          if interview.current_question is not None else None),
+            "diagram": diagram,
         }
 
 

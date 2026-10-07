@@ -131,6 +131,7 @@ from tools.interview import (
     load_resume_payload,
     commit_turn,
     save_interview_state,
+    save_open_turn_diagram,
     save_scorecard,
     set_profile_avatar,
     set_profile_defaults,
@@ -150,6 +151,8 @@ from tools.questions import (
 )
 # Per-stage latency lines for the voice pipeline (transcribe, answer, tts), gated behind PERF_LOG=1.
 from perf import log_perf
+# The system-design diagram canvas: the validated wire shape and its text form for the LLMs.
+from diagram import DiagramDoc, serialize_diagram, serialize_stored
 
 
 # --- LIFESPAN: the terminal loop opened `async with agent:` ONCE and ran the whole
@@ -196,6 +199,10 @@ class AnswerRequest(BaseModel):
     # a fenced block, so the model and the transcript both see the code. Nothing is executed.
     code: str | None = None
     language: str | None = None
+    # A system-design question's canvas, sent with the turn when it changed (layout moves included,
+    # so the stored positions stay current). Validated here (size caps, real edge endpoints), stored
+    # on the open turn, and shown to the model as diagram.serialize_diagram text, never as JSON.
+    diagram: DiagramDoc | None = None
 
 
 class ScorecardRequest(BaseModel):
@@ -440,7 +447,8 @@ async def start_interview(
         # a simulation's plan is generated, never a "default because nothing was saved"
         "default_selection": not created["from_saved"] and req.job is None,
         "plan_size": created["plan_size"],
-        "question": {"slug": first_qid, "text": first_qtext},
+        "question": {"slug": first_qid, "text": first_qtext,
+                     "has_diagram_canvas": created["first_has_diagram_canvas"]},
     }
 
 
@@ -515,12 +523,40 @@ async def submit_answer(
         fence = f"```{req.language or ''}\n{req.code.rstrip()}\n```"
         text = f"{text.rstrip()}\n\n{fence}" if text.strip() else fence
 
-    if not text.strip():
+    # SYSTEM-DESIGN CANVAS — unlike code, the diagram is NOT folded into `text`: it's stored on the
+    # open turn (turns.diagram), and the model reads its serialize_diagram text. That text is added to
+    # the prompt only when it differs from the question's last diagram, so a turn that only moved
+    # nodes around neither costs tokens nor replays the same block into message_history.
+    # A diagram for a question without a canvas (a stale client) is ignored.
+    diagram = req.diagram if state["current_has_diagram_canvas"] else None
+    diagram_text = None
+    if diagram is not None:
+        serialized = serialize_diagram(diagram)
+        if serialized != serialize_stored(state["current_diagram"]):
+            diagram_text = serialized
+
+    if not text.strip() and diagram_text is None:
         # Reject a blank BEFORE the LLM call: it would otherwise close the open turn with "" and
         # spend tokens on nothing. The open turn stays open, so the candidate just answers again.
         # (PRODUCT choice, not a null-safety one — "" is a valid non-NULL answer as far as the
         # schema cares; drop this guard if a blank should count as an "I don't know".)
         raise HTTPException(status_code=400, detail="answer must not be empty")
+
+    if diagram is not None:
+        # Store it BEFORE the model decides, so it lands on every path (a clarification leaves the
+        # turn open, and the diagram rides on it until it closes). See save_open_turn_diagram.
+        saved = await save_open_turn_diagram(req.interview_id, state["current_qid"],
+                                             diagram.model_dump(mode="json"))
+        if not saved["ok"]:
+            raise HTTPException(status_code=409, detail=saved["error"])
+
+    # A diagram-only turn ("here's my updated design") is valid. It's recorded as a short marker, so
+    # the transcript and the grader read a turn rather than a blank answer.
+    if not text.strip():
+        text = "(updated the diagram)"
+    message = text
+    if diagram_text is not None:
+        message = f"{text}\n\nThe candidate updated their diagram on the canvas. Current version:\n{diagram_text}"
 
     #    message_history comes back RAW (plain JSON out of JSONB) — tools/interview.py has no
     #    business importing pydantic-ai. Rehydrating it into real message objects is THIS
@@ -539,7 +575,7 @@ async def submit_answer(
         if state["next_planned_qid"] is None else ""
     )
     prompt = (f"The current interview question is: {state['current_qtext']}{last_question_note}\n\n"
-              f"The candidate's message: {text}")
+              f"The candidate's message: {message}")
     llm_started = time.perf_counter()
     result = await turn_agent.run(
         prompt,
@@ -669,7 +705,8 @@ async def _finish_turn(req: AnswerRequest, state: dict, text: str, result) -> di
         return {"message": f"{decision.reaction}\n\nLet's move on to the next question. {state['next_planned_qtext']}",
                 "done": False,
                 # the new plan question (the coding panel swaps its problem statement to this)
-                "question": {"slug": next_qid, "text": state["next_planned_qtext"]}}
+                "question": {"slug": next_qid, "text": state["next_planned_qtext"],
+                             "has_diagram_canvas": state["next_planned_has_diagram_canvas"]}}
 
     #    (c) END — the plan is exhausted, so conclude.
     #    write back `done=True` and `message_history=new_history`. Leave `current_qid`
@@ -883,7 +920,17 @@ async def scorecard(
     #    Each group keeps the PROMPT alongside the answer: a follow-up turn's `question_text` is the
     #    probe the candidate was answering, and the grader needs it to judge that answer fairly.
     grouped: dict[str, list[tuple[str, str]]] = {}
+    # SYSTEM-DESIGN CANVAS — each question's diagram versions as serialize_diagram text, in order,
+    # counting only real changes (a layout-only resend serializes the same). The grader gets the last
+    # one plus the count. The open turn's diagram counts too: it's work the candidate did, even when
+    # "End session" grades before that turn closed.
+    diagram_versions: dict[str, list[str]] = {}
     for turn in turns:
+        diagram_text = serialize_stored(turn["diagram"])
+        if diagram_text is not None:
+            versions = diagram_versions.setdefault(turn["question_id"], [])
+            if not versions or versions[-1] != diagram_text:
+                versions.append(diagram_text)
         # skip the OPEN turn (answer is None): a question that was presented but not answered
         # yet. A finished interview has none, but grading a still-running one would otherwise try
         # to score a NULL answer. NULL only — an empty-string answer is still a (blank) answer.
@@ -897,12 +944,14 @@ async def scorecard(
                          else "(unknown question)")
         # the first exchange answered the question itself; the rest answered probes on it
         first_answer, followups = exchanges[0][1], exchanges[1:]
+        versions = diagram_versions.get(question_id, [])
         # Phase E — pass the question SLUG (so grade_one fetches this question's brief) and the
         # interview level (so scoring is calibrated). grade_one tolerates an un-briefed question.
         grade = await grade_one(
             question_id, question_text, first_answer, rubric_text, dimensions, level=level,
             job_context=context["job_context"], round_note=context["round_note"],
             followups=followups,
+            diagram=versions[-1] if versions else "", diagram_revisions=len(versions),
         )
         return grade, {"question_id": question_id, "question_text": question_text, **grade.model_dump()}
 
@@ -1101,6 +1150,8 @@ async def resume_interview(
         "has_code_editor": payload["has_code_editor"],
         "allows_smart_voice": payload["allows_smart_voice"],
         "question": payload["question"],
+        # the current question's latest diagram (reseeds the canvas), or None
+        "diagram": payload["diagram"],
     }
 
 

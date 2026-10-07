@@ -292,6 +292,11 @@ class QuestionType(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     slug: Mapped[str] = mapped_column(String(32), unique=True, index=True)  # "system-design"
     name: Mapped[str] = mapped_column(String(64))                           # "System design"
+    # whether the SPA shows the diagram canvas while a question of this kind is on the table. On the
+    # QUESTION's type (not RoundType, unlike has_code_editor) because Practice interviews mix kinds
+    # question by question, and a simulation round's generated questions carry a type too, so one
+    # flag covers both. A flag, so the client never branches on a slug.
+    has_diagram_canvas: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class RoundType(Base, TimestampMixin):
@@ -768,6 +773,13 @@ class Turn(Base, TimestampMixin):
     prompt_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     # NULL = open (presented, unanswered). Set to the candidate's text (possibly "") to close.
     answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The diagram canvas (system-design questions): the LATEST diagram the candidate sent while this
+    # turn was open, as a diagram.DiagramDoc dump. Written on every send, clarifications included, so
+    # a diagram sent with a clarification survives (that turn closes later). NULL = no diagram sent
+    # during this turn; a question's current diagram is its newest non-NULL one.
+    # JSONB BY DECISION (2026-10-06), an exception to the blob-vs-table rule: the shape is ours, but
+    # it's always taken and left whole and never queried by node. Pydantic validates it on the way in.
+    diagram: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     interview: Mapped[Interview] = relationship(back_populates="turns", lazy="raise")
     question: Mapped[Question] = relationship(lazy="raise")
