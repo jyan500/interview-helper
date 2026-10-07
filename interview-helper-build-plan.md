@@ -1761,3 +1761,50 @@ Live check after the DB fix (2026-10-05, PERF_LOG): `/api/answer` total is 2.7-4
 - Act on the validator-retry rate if the logs show it's frequent.
 
 Phase 3 (optional): streaming TTS bytes, a streaming LLM reaction, and `gpt-live-transcribe` (streaming STT at $0.017/min).
+
+### 2026-10-06 — System-design diagram canvas, Phase 1: backend (branch `system-design-canvas`)
+
+Plan: `~/.claude/plans/for-the-system-design-drifting-comet.md`. Decisions (user): structured nodes on React Flow
+(typed components + labeled connections, no freehand); the diagram is JSON, and the LLMs get a text serialization
+of it (no image/vision); the canvas shows for system-design questions in BOTH the system-design round and Practice
+interviews; it's revisable across turns, like the code editor; stored as JSONB on `turns` (a deliberate exception
+to the blob-vs-table rule: always taken whole, never queried by node).
+
+Done (migration `c3e7a1d9f5b2` applied and the seed re-run by the user):
+- **Schema:** `question_types.has_diagram_canvas` (true for `system-design`; on the question's TYPE, not the round,
+  so mixed Practice interviews get it per question and generated round questions are covered by their type), and
+  `turns.diagram` JSONB = the latest diagram sent while that turn was open.
+- **`server/diagram.py`:** `DiagramDoc` (version 1, 15 node kinds, ≤60 nodes / ≤120 edges, label ≤80, notes ≤500,
+  unique ids, edges must hit real nodes → 422) and `serialize_diagram`: components / connections / canvas notes /
+  unconnected, quoted labels, "(unnamed cache)", "#2" for duplicates, layout-blind. The docstring records why we
+  serialize instead of sending raw JSON.
+- **`/api/answer`:** `AnswerRequest.diagram`. Ignored unless the current question has a canvas. Saved onto the OPEN
+  turn (`save_open_turn_diagram`, guarded by the question) BEFORE the model decides, so a clarification can't lose
+  it. Its text is added to the prompt only when it differs from the question's last diagram, so a layout-only move
+  costs no tokens. A diagram-only turn is valid and recorded as "(updated the diagram)". A layout-only move with no
+  text is a 400 (nothing changed to talk about), and nothing is written.
+- **Payloads:** `question` carries `has_diagram_canvas` on start, advance and resume; resume adds `diagram` (the
+  current question's latest); `get_interview` turns (detail page + scorecard) carry `diagram`.
+- **Grading:** `/api/scorecard` collects each question's distinct diagram versions (the open turn's included) and
+  passes the final text + version count through `grade_one` → `evaluate_answer`'s new `diagram_section` (credit
+  what's drawn, use it mainly for high-level design, drawn-but-undiscussed is weaker depth evidence, no layout
+  grading, labels are candidate text).
+- **Interviewer:** a DIAGRAM CANVAS paragraph in `_TURN_CONTRACT` (refer to it, probe on it, never draw a better
+  one). Personas are saved on the interview at creation, so only new interviews have it.
+
+Verified:
+- `diagram.py` smoke test: serializer output, layout-blind, 4 invalid docs rejected.
+- Throwaway-interview DB check (no LLM), 11/11: only system-design is flagged; the diagram survives a clarification;
+  a mismatched question is refused; a follow-up keeps the latest; resume returns the flag + latest; the transcript
+  carries each turn's diagram; a non-canvas question reports no canvas.
+- Live through the real routes (2 turn calls on `gemini-3.1-flash-lite`, 1 grade on `gemini-3.5-flash-lite`): the
+  interviewer's probe was about the drawn design; a diagram-only update adding Redis was read as an answer; the
+  grade cited the diagram. Guards (no LLM): layout-only + no text → 400 with nothing written; a dangling edge → 422.
+- Noticed, not changed: `evaluate_answer`'s `textwrap.dedent` stops stripping indentation whenever multi-line text
+  is interpolated (brief, follow-ups, now the diagram). It's cosmetic and was already the case.
+
+**Next — Phase 2 (client):** `@xyflow/react` (install from inside `client/`); `components/diagram/` (DiagramPanel,
+DiagramPalette, DiagramNode, DiagramInspector); `toDiagramDoc`/`fromDiagramDoc` in helpers.ts; lazy-loaded panel;
+SessionPage wiring like CodingPanel. NOTE for the send rule: attach the diagram on ANY change (so positions
+persist), but only enable a diagram-ONLY send when its content changed (compare a signature without x/y), since
+the server 400s a layout-only, text-less turn.

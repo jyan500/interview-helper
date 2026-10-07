@@ -275,6 +275,8 @@ async def grade_one(
     job_context: str = "",
     round_note: str = "",
     followups: list[tuple[str, str]] | None = None,
+    diagram: str = "",
+    diagram_revisions: int = 0,
 ) -> AnswerGrade:
     """Grade a single (question, answer) against the rubric -> a typed AnswerGrade.
 
@@ -294,7 +296,9 @@ async def grade_one(
     `dimensions` are the rubric's dimension names; the output validator checks the grade scores
     each one exactly once. `followups` are the interviewer's probes on this question, as
     (probe text, candidate's answer) pairs in order, so the grader reads each follow-up answer
-    against the question it was actually answering.
+    against the question it was actually answering. `diagram` is a system-design question's final
+    canvas diagram as serialize_diagram text ("" if none), and `diagram_revisions` how many distinct
+    versions were sent.
     """
     brief_env = await get_reference(question_id)
     reference_brief = brief_env["brief"] if brief_env["status"] == "ok" else ""
@@ -307,6 +311,8 @@ async def grade_one(
         job_context=job_context,
         round_note=round_note,
         followups=followups,
+        diagram=diagram,
+        diagram_revisions=diagram_revisions,
     )
     result = await grader_agent.run(
         filled,
