@@ -22,9 +22,9 @@
  * with follow-ups (or not) depending on the answer, so "question N of M" isn't knowable ahead of
  * time. The header shows elapsed time only; the right rail lists the turns actually asked so far.
  */
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router";
-import { Gear, Microphone, PencilSimple, SpeakerHigh, Sparkle } from "@phosphor-icons/react";
+import { Gear, Microphone, PencilSimple, SpeakerHigh, Sparkle, TreeStructure } from "@phosphor-icons/react";
 import type { Icon } from "@phosphor-icons/react";
 import MessageRow from "../components/MessageRow";
 import UserAvatar from "../components/UserAvatar";
@@ -33,11 +33,20 @@ import SettingsModal from "../components/SettingsModal";
 import CodingPanel from "../components/CodingPanel";
 import Button from "../components/Button";
 import Tooltip from "../components/Tooltip";
-import { useGetScorecardMutation, useLazyGetResumeQuery, useSubmitAnswerMutation, type PlanQuestion } from "../api";
+import {
+    useGetScorecardMutation,
+    useLazyGetResumeQuery,
+    useSubmitAnswerMutation,
+    type DiagramDoc,
+    type PlanQuestion,
+} from "../api";
 import { useSessionNav } from "./SessionLayout";
 import {
     cueProblem,
     defaultVoiceMode,
+    diagramsEqual,
+    diagramSignature,
+    emptyDiagram,
     interviewTitle,
     loadStoredCodeLanguage,
     loadStoredMicDeviceId,
@@ -46,7 +55,7 @@ import {
     sentCodeByLanguage,
     withCodeFence,
 } from "../helpers";
-import { CODING_PROBLEM_CUE, type CodeLanguage } from "../constants";
+import { CODING_PROBLEM_CUE, DIAGRAM_ONLY_ANSWER, type CodeLanguage } from "../constants";
 import { useAudioInputDevices, useElapsedClock, useNoInputPrompt, useSpeaking } from "../hooks";
 import {
     pickPreferredVoice,
@@ -64,7 +73,12 @@ type Mode = "voice" | "text";
 // later by id (race-safe even if other lines were appended meanwhile); `pending` = an interviewer
 // turn whose audio is still synthesizing — we withhold the real text until useSpeak's onReady fires
 // so text + voice land together. Same shape App.tsx used.
-type Line = { id: number; who: "interviewer" | "you"; text: string; pending?: boolean };
+// `diagramUpdated` = a "you" turn that changed the design on the canvas (shows a tag under it).
+type Line = { id: number; who: "interviewer" | "you"; text: string; pending?: boolean; diagramUpdated?: boolean };
+
+// The system-design canvas, lazy so React Flow (and its CSS) only download when a system-design
+// question comes up. Every other interview never pays for it.
+const DiagramPanel = lazy(() => import("../components/diagram/DiagramPanel"));
 
 // The microphone picker options (react-select shape). value "" is the system-default sentinel; a
 // real value is a MediaDeviceInfo.deviceId. Labels are blank until mic permission is granted, so we
@@ -122,6 +136,21 @@ export default function SessionPage() {
         saveStoredCodeLanguage(next); // the next coding round opens in it too
     }
     const codeChanged = hasCodeEditor && code.trim() !== "" && code !== lastSentCode;
+
+    // SYSTEM-DESIGN CANVAS: the diagram panel beside the conversation, while the question on the
+    // table has one (its TYPE decides, so a mixed Practice interview shows it per question). A fresh
+    // start knows from the first question; a resume and each advance learn it from their payloads.
+    // `diagram` is the canvas as DiagramDoc; `lastSentDiagram` is the last one sent for this question.
+    // Two different "changed" tests, because the server 400s a text-less turn that only moved nodes:
+    //   diagramChanged        - anything, layout included: the diagram rides along (positions persist).
+    //   diagramContentChanged - the design itself: only this makes a diagram-only send possible.
+    const [hasDiagramCanvas, setHasDiagramCanvas] = useState(nav.question?.has_diagram_canvas ?? false);
+    const [diagram, setDiagram] = useState<DiagramDoc>(emptyDiagram);
+    const [lastSentDiagram, setLastSentDiagram] = useState<DiagramDoc>(emptyDiagram);
+    const diagramChanged = hasDiagramCanvas && !diagramsEqual(diagram, lastSentDiagram);
+    const diagramContentChanged = hasDiagramCanvas && diagramSignature(diagram) !== diagramSignature(lastSentDiagram);
+    // Either workspace replaces the right rail with a panel beside a narrower conversation.
+    const hasSidePanel = hasCodeEditor || hasDiagramCanvas;
 
     // The RTK Query mutations — the only two the in-session loop needs. startInterview already ran
     // on the producer; the scorecard is fetched once, on end.
@@ -266,9 +295,18 @@ export default function SessionPage() {
                 const coding = payload.has_code_editor;
                 const problemText = payload.question?.text;
                 const shown = (text: string) => (coding ? cueProblem(text, problemText, CODING_PROBLEM_CUE) : text);
+                setProblem(payload.question);
+                // A system-design question resumes into the canvas, seeded with its latest diagram
+                // (marked as sent, so it isn't re-sent unchanged).
+                if (payload.question?.has_diagram_canvas) {
+                    setHasDiagramCanvas(true);
+                    if (payload.diagram) {
+                        setDiagram(payload.diagram);
+                        setLastSentDiagram(payload.diagram);
+                    }
+                }
                 if (coding) {
                     setHasCodeEditor(true);
-                    setProblem(payload.question);
                     const sent = sentCodeByLanguage(
                         payload.turns.filter((t) => t.question_id === payload.question?.slug).map((t) => t.answer),
                     );
@@ -282,7 +320,7 @@ export default function SessionPage() {
                 const lines: Line[] = [];
                 for (const turn of payload.turns) {
                     lines.push({ id: nextId(), who: "interviewer", text: shown(turn.question_text) });
-                    lines.push({ id: nextId(), who: "you", text: turn.answer });
+                    lines.push({ id: nextId(), who: "you", text: turn.answer, diagramUpdated: turn.diagram_updated });
                 }
                 // The open turn — the question awaiting an answer — is the current interviewer line.
                 // A not-done interview always has one; guard anyway. Speak it (text is already on
@@ -320,12 +358,16 @@ export default function SessionPage() {
     // have updated); typed answers call handleSend() with no arg and fall back to `draft`.
     // In a coding round the editor's contents ride along (both paths) when they've changed since the
     // last send — and code alone is a valid turn ("here's my solution").
+    // A system-design canvas works the same way: the diagram rides along on any change (layout
+    // included), and a diagram alone is a valid turn, but only if the DESIGN changed (see
+    // diagramContentChanged): a text-less turn that only moved nodes has nothing to say.
     async function handleSend(textOverride?: string) {
         const text = (textOverride ?? draft).trim();
         const sentCode = codeChanged ? code : undefined;
+        const sentDiagram = diagramChanged ? diagram : undefined;
         // Nothing to send: a pure-silence voice misfire (onCaptureStopped already raised `preparing`),
         // or a terminal state. Release the flag so the "…" doesn't hang, and bail without POSTing.
-        if (!interviewId || (!text && !sentCode) || done || ended) {
+        if (!interviewId || (!text && !sentCode && !diagramContentChanged) || done || ended) {
             setPreparing(false);
             return;
         }
@@ -336,42 +378,59 @@ export default function SessionPage() {
         // — that gap briefly unhid the PREVIOUS question ("flash → back to thinking → real question").
         const youId = nextId();
         const pendingId = nextId();
-        // The "you" line shows the same text + fence the server stores for the turn.
+        // The "you" line shows the same text + fence the server stores for the turn (and the same
+        // marker for a diagram-only turn), tagged when it changed the design.
         setTranscript((t) => [
             ...t,
-            { id: youId, who: "you", text: withCodeFence(text, sentCode, language) },
+            {
+                id: youId,
+                who: "you",
+                text: withCodeFence(text, sentCode, language) || DIAGRAM_ONLY_ANSWER,
+                diagramUpdated: diagramContentChanged,
+            },
             { id: pendingId, who: "interviewer", text: "", pending: true },
         ]);
         setDraft("");
         const previousSentCode = lastSentCode;
         if (sentCode) setLastSentCode(sentCode);
+        const previousSentDiagram = lastSentDiagram;
+        if (sentDiagram) setLastSentDiagram(sentDiagram);
         let res;
         try {
             res = await submitAnswer({
                 interview_id: interviewId,
                 text,
                 ...(sentCode ? { code: sentCode, language } : {}),
+                ...(sentDiagram ? { diagram: sentDiagram } : {}),
             }).unwrap();
         } catch (e) {
             // Surface the failure IN the pending bubble — don't leave it "thinking" forever, and don't
             // add a second interviewer line. (A 409 here would mean the interview finished under us —
-            // rare, since we gate on `done`, but honest to show.) The code wasn't recorded, so it
-            // counts as unsent again and goes with the retry.
+            // rare, since we gate on `done`, but honest to show.) The code and diagram weren't
+            // recorded, so they count as unsent again and go with the retry.
             console.error(e);
             setLastSentCode(previousSentCode);
+            setLastSentDiagram(previousSentDiagram);
             revealLine(pendingId, "Sorry, I couldn't record that. Try again.");
             return;
         }
-        // Advanced to the next plan question: a coding round swaps the panel to the new problem, with a
-        // fresh editor, and points at it instead of reading it aloud.
+        // Advanced to the next plan question. The workspace follows it: a coding round swaps to the new
+        // problem with a fresh editor, and the canvas starts blank (or hides, if the next question in a
+        // mixed Practice interview isn't system design). The DiagramPanel is keyed by the question, so
+        // the new problem remounts it from the blank `diagram`.
         let message = res.message;
-        if (hasCodeEditor && res.question) {
-            message = cueProblem(message, res.question.text, CODING_PROBLEM_CUE);
+        if (res.question) {
+            if (hasCodeEditor) message = cueProblem(message, res.question.text, CODING_PROBLEM_CUE);
             if (res.question.slug !== problem?.slug) {
                 setProblem(res.question);
-                setCode("");
-                setCodeDrafts({}); // every language starts blank on the new problem
-                setLastSentCode("");
+                setHasDiagramCanvas(res.question.has_diagram_canvas);
+                setDiagram(emptyDiagram());
+                setLastSentDiagram(emptyDiagram());
+                if (hasCodeEditor) {
+                    setCode("");
+                    setCodeDrafts({}); // every language starts blank on the new problem
+                    setLastSentCode("");
+                }
             }
         }
         // Reveal the pending bubble's text in sync with the voice via onReady.
@@ -489,21 +548,22 @@ export default function SessionPage() {
                 </div>
             </div>
 
-            {/* ── Body: centre column + right rail — or, in a coding round, the conversation beside the
-                coding panel (stacked on narrow screens, where the panel still has to be reachable) ── */}
+            {/* ── Body: centre column + right rail — or, in a coding round or on a system-design question,
+                the conversation beside the coding panel / diagram canvas (stacked on narrow screens, where
+                the panel still has to be reachable) ── */}
             {/* minmax(0,1fr) rows pin the body to the viewport: a column that outgrows it (a long question,
                 a long rail list) scrolls INSIDE itself instead of stretching the row and scrolling the page. */}
             <div
                 className={
                     "grid min-h-0 flex-1 grid-cols-1 " +
-                    (hasCodeEditor
+                    (hasSidePanel
                         ? "grid-rows-[minmax(0,1fr)_minmax(0,1fr)] lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] lg:grid-rows-[minmax(0,1fr)]"
                         : "grid-rows-[minmax(0,1fr)] lg:grid-cols-[1fr_300px]")
                 }
             >
                 {mode === "voice" ? (
                     <VoiceColumn
-                        compact={hasCodeEditor}
+                        compact={hasSidePanel}
                         question={currentQuestion}
                         listening={listening}
                         userSpeaking={userSpeaking}
@@ -536,8 +596,9 @@ export default function SessionPage() {
                         answering={answering}
                         transcribing={transcribing}
                         coding={hasCodeEditor}
-                        // a coding turn can be code alone, so changed code enables Send with an empty draft
-                        canSend={draft.trim() !== "" || codeChanged}
+                        // a turn can be code alone, or a changed design alone, so either enables Send
+                        // with an empty draft (a layout-only move doesn't: the server would 400 it)
+                        canSend={draft.trim() !== "" || codeChanged || diagramContentChanged}
                         done={done}
                         ended={ended}
                         onSend={() => handleSend()}
@@ -555,6 +616,25 @@ export default function SessionPage() {
                         onChangeLanguage={handleChangeLanguage}
                         readOnly={done || ended}
                     />
+                ) : hasDiagramCanvas ? (
+                    // Keyed by the question: a new one remounts the canvas from `diagram` (blank on an
+                    // advance, the saved one on a resume). After mount the panel reports every change
+                    // back through setDiagram.
+                    <Suspense
+                        fallback={
+                            <div className="flex items-center justify-center border-t border-divider lg:border-l lg:border-t-0">
+                                <LoadingDots />
+                            </div>
+                        }
+                    >
+                        <DiagramPanel
+                            key={problem?.slug}
+                            question={problem}
+                            initialDiagram={diagram}
+                            onChange={setDiagram}
+                            readOnly={done || ended}
+                        />
+                    </Suspense>
                 ) : (
                     <RightRail isResume={nav?.resume ?? false} mode={mode} interviewerLines={interviewerLines} scoring={scoring} />
                 )}
@@ -883,7 +963,14 @@ function TextColumn({
                                 who={line.who}
                                 kicker={line.who === "interviewer" ? "Interviewer" : "You"}
                                 text={line.text}
-                            />
+                            >
+                                {line.diagramUpdated && (
+                                    <span className="tag tag-accent gap-1.5 self-start">
+                                        <TreeStructure size={12} weight="regular" />
+                                        Updated the diagram
+                                    </span>
+                                )}
+                            </MessageRow>
                         ))}
 
                     {/* Typing indicator — while the answer is in flight or the interviewer's audio loads */}
@@ -917,7 +1004,7 @@ function TextColumn({
                                     }
                                 }}
                                 rows={2}
-                                placeholder={coding ? "Talk through your approach, or just send your code…" : "Type your answer…"}
+                                placeholder="Type your answer…"
                                 className="m-0 w-full resize-none border-0 bg-transparent p-0 text-[15px] leading-[1.5] text-neutral-100 outline-none placeholder:text-neutral-500"
                             />
                             <div className="flex items-center justify-between text-[12.5px] text-neutral-400">

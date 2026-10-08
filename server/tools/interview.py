@@ -52,6 +52,9 @@ from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import selectinload
 
 from db.engine import get_session
+# A pure Pydantic leaf module (no LLM): the resume transcript uses its layout-blind text to tell a
+# turn that changed the design from one that only moved nodes around.
+from diagram import DiagramDoc, serialize_diagram, serialize_stored
 from db.models import (
     Interview,
     InterviewQuestion,
@@ -1486,10 +1489,20 @@ async def load_resume_payload(interview_id: str) -> dict:
         # the current question's latest diagram (its newest non-NULL turns.diagram, the open turn's
         # included), which reseeds the canvas
         diagram: dict | None = None
+        # question id -> the serialized text of its latest diagram so far, so each completed turn can
+        # say whether it CHANGED the design (the transcript's "Updated the diagram" tag). Same test
+        # /api/answer uses: a layout-only move isn't a change.
+        empty_text = serialize_diagram(DiagramDoc())
+        last_diagram_text: dict[int, str] = {}
         for turn in interview.turns:          # already ordered by created_at
             prompt = turn.prompt_text or turn.question.text
             if turn.question_id == interview.current_question_id and turn.diagram is not None:
                 diagram = turn.diagram
+            diagram_updated = False
+            if turn.diagram is not None:
+                text = serialize_stored(turn.diagram)
+                diagram_updated = text != last_diagram_text.get(turn.question_id, empty_text)
+                last_diagram_text[turn.question_id] = text
             if turn.answer is None:
                 # the OPEN turn — the question awaiting an answer (the resume point)
                 current_question = prompt
@@ -1499,6 +1512,7 @@ async def load_resume_payload(interview_id: str) -> dict:
                     "question_text": prompt,
                     "answer": turn.answer,
                     "at": turn.created_at.isoformat(),
+                    "diagram_updated": diagram_updated,
                 })
 
         return {

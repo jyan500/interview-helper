@@ -32,10 +32,39 @@ export interface InterviewResponse {
     // The plan question on the table (never a probe) — the coding panel's problem statement.
     question?: PlanQuestion;
 }
-// A plan question as the start/answer responses carry it: its slug and full text.
+// A plan question as the start/answer/resume responses carry it: its slug and full text, and whether
+// its question TYPE shows the diagram canvas (system design), so the SPA never checks type slugs.
 export interface PlanQuestion {
     slug: string;
     text: string;
+    has_diagram_canvas: boolean;
+}
+
+// The system-design canvas's wire/storage shape, mirroring DiagramDoc in server/diagram.py (our slim
+// shape, not React Flow's toObject()). `kind` is one of DIAGRAM_NODE_KINDS in constants.ts. The server
+// validates the caps (nodes/edges/label/notes) and that every edge hits a real node.
+export type DiagramNodeKind =
+    | "client" | "load_balancer" | "api_gateway" | "service" | "worker" | "database" | "cache" | "queue"
+    | "blob_storage" | "cdn" | "search" | "external" | "box" | "circle" | "text";
+export interface DiagramNode {
+    id: string;
+    kind: DiagramNodeKind;
+    label: string;
+    notes: string;
+    x: number;
+    y: number;
+}
+export interface DiagramEdge {
+    id: string;
+    source: string;
+    target: string;
+    label: string;
+    bidirectional: boolean;
+}
+export interface DiagramDoc {
+    version: 1;
+    nodes: DiagramNode[];
+    edges: DiagramEdge[];
 }
 // Phase D — the kickoff now carries the candidate's choices. Both are SLUGS (the DB's
 // vocabulary), mirroring StartRequest in server/api.py: `role` = a roles.slug, `seniority` =
@@ -115,6 +144,9 @@ export interface AnswerRequest {
     // A coding round's editor contents + language, appended server-side as a fenced block.
     code?: string;
     language?: string;
+    // A system-design question's canvas, stored on the open turn. Sent on ANY change (layout included,
+    // so positions persist); the server re-reads it to the interviewer only when the design changed.
+    diagram?: DiagramDoc;
 }
 
 // INTERVIEW SIMULATION — a round FORMAT a job can be simulated in (GET /api/round-types), mirroring
@@ -224,6 +256,7 @@ export interface InterviewDetail extends SimulationFields {
 // payload lists only COMPLETED exchanges and splits the open turn out into `current_question`.
 export interface ResumeTurn extends TurnBase {
     answer: string;
+    diagram_updated: boolean; // this turn changed the design on the canvas (not just its layout)
 }
 // What SessionPage needs to redraw an in-progress interview and keep answering: the transcript so
 // far (`turns`), the question currently on the table (`current_question` = the open turn's prompt),
@@ -239,6 +272,7 @@ export interface ResumePayload extends SimulationFields {
     has_code_editor: boolean; // a coding round — resume into the editor layout
     allows_smart_voice: boolean | null; // the round's voice-mode rule; null for a bank interview (no round)
     question: PlanQuestion | null; // the PARENT plan question on the table, even mid-probe
+    diagram: DiagramDoc | null; // that question's latest diagram (reseeds the canvas), or null
 }
 
 // The dashboard signal panel (GET /api/dashboard) — aggregates over the user's SIMULATIONS, scoped

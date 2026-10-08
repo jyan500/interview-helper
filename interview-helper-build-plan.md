@@ -1808,3 +1808,31 @@ DiagramPalette, DiagramNode, DiagramInspector); `toDiagramDoc`/`fromDiagramDoc` 
 SessionPage wiring like CodingPanel. NOTE for the send rule: attach the diagram on ANY change (so positions
 persist), but only enable a diagram-ONLY send when its content changed (compare a signature without x/y), since
 the server 400s a layout-only, text-less turn.
+
+### 2026-10-07 — System-design diagram canvas, Phase 2: client (branch `system-design-canvas-phase-two-frontend`)
+
+Done (code; `npx tsc` clean, `vite build` puts React Flow in its own lazy `DiagramPanel` chunk, ~61 kB gz):
+- `@xyflow/react` 12.12 installed. `client/src/components/diagram/`: `DiagramPanel` (lazy shell: question +
+  board + hint, owns the `ReactFlowProvider` and React Flow's CSS), `DiagramBoard` (React Flow state, palette
+  drag-drop AND click-to-add, connect rules, derived edges, inspector), `DiagramNode` (shape by kind, 4 handles,
+  inline rename), `DiagramPalette`, `DiagramInspector` (shell) + `NodeInspector` / `EdgeInspector` (plain
+  controlled inputs: no validation, so RHF was dropped here), `DiagramEditingContext` (inline-rename state).
+- Decisions made while building: edges store no handles. `facingHandles` (helpers.ts) picks the facing sides
+  each render, so arrows re-route as nodes move. One connection per node pair (Two-way covers both
+  directions), no self-loops. Clicked-in nodes fan out from the view center (`% 6` grid-step nudge).
+- helpers.ts: `toDiagramDoc` / `fromDiagramDoc`, `diagramSignature` (content, layout/id-blind; mirrors the
+  server's serialize-and-compare), `diagramsEqual` (field-wise, since JSONB reorders keys), `diagramKindInfo`,
+  `emptyDiagram`. constants.ts: `DIAGRAM_NODE_KINDS` (mirrors `NodeKind`), caps, grid, `DIAGRAM_ONLY_ANSWER`.
+- SessionPage: `hasDiagramCanvas` from the question payload (start / advance / resume); `diagram` +
+  `lastSentDiagram`. Attached on any change incl. layout (`diagramChanged`); a diagram-only send only when the
+  design changed (`diagramContentChanged`). Rolled back on a failed send; reset (or hidden) on advance; seeded
+  on resume. The panel is keyed by question slug. "You" rows get an "Updated the diagram" tag.
+- Server: the resume payload's turns carry `diagram_updated` (the serialized text changed vs the question's
+  previous diagram, so a layout-only move isn't tagged).
+
+NOT yet verified: the browser pass (draw, send, revise; the interviewer references it; resume reseeds; advancing
+to a non-system-design question hides it), and the `diagram_updated` resume flag against a real interview.
+Known gap (server, pre-existing): `/api/answer` saves the diagram BEFORE the LLM call. If that call then fails,
+the client's retry re-attaches it, but the server sees "unchanged" and the interviewer never gets the text.
+
+**Next:** that browser pass, then commit; then Phase 3 (read-only `DiagramView` on the detail page, undo/redo).

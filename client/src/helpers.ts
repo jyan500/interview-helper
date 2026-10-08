@@ -3,7 +3,8 @@
  * network, no module state — so they're trivial to reuse and to reason about.
  */
 import type { SelectOption } from "./components/AsyncPaginateSelect";
-import type { BasePageItem } from "./api";
+import type { Edge, Node } from "@xyflow/react";
+import type { BasePageItem, DiagramDoc, DiagramNodeKind } from "./api";
 import type { TurnMode } from "./voice/speech";
 import {
     AVATAR_ACCEPTED_TYPES,
@@ -12,6 +13,7 @@ import {
     CODE_LANGUAGES,
     DEFAULT_CODE_LANGUAGE,
     DEFAULT_EDITOR_SETTINGS,
+    DIAGRAM_NODE_KINDS,
     EDITOR_FONT_SIZES,
     EDITOR_KEYMAPS,
     EDITOR_SETTINGS_STORAGE_KEY,
@@ -171,6 +173,144 @@ export function sentCodeByLanguage(answers: string[]): SentCode {
         }
     }
     return result;
+}
+
+/**
+ * The system-design canvas in React Flow's terms. A node's data is the DiagramDoc node minus its id and
+ * position (React Flow keeps those on the node); an edge keeps its label and direction in `data`, and
+ * DiagramPanel derives the drawn label, arrowheads and attachment sides from it.
+ */
+export type DiagramNodeData = { kind: DiagramNodeKind; label: string; notes: string };
+export type DiagramFlowNode = Node<DiagramNodeData, "diagram">;
+export type DiagramEdgeData = { label: string; bidirectional: boolean };
+export type DiagramFlowEdge = Edge<DiagramEdgeData>;
+
+/** A palette kind's label, icon and shape (DIAGRAM_NODE_KINDS has every kind the server accepts). */
+export function diagramKindInfo(kind: DiagramNodeKind): (typeof DIAGRAM_NODE_KINDS)[number] {
+    const matches = DIAGRAM_NODE_KINDS.filter((info) => info.kind === kind);
+    return matches[0] ?? DIAGRAM_NODE_KINDS[0];
+}
+
+/**
+ * Which sides of two nodes a connection should leave and enter by: the pair that face each other.
+ * DiagramDoc doesn't store handles (the server and the LLMs don't care which side an arrow touches), so
+ * the canvas derives them each render, and an edge re-routes as its nodes move. Returns handle ids
+ * ("top" | "right" | "bottom" | "left"), matching DiagramNode's handles.
+ *
+ *  
+ *  Example:
+    [API] ─────────► [DB]          dx = +300, dy = +20  → horizontal, dx > 0
+                                → ["right", "left"]
+
+     [Client]                       dx = +10, dy = +200  → vertical, dy > 0
+        │                           → ["bottom", "top"]
+        ▼
+    [DB]
+
+    [Cache] ◄────── [Service]      dx = -250, dy = 0    → horizontal, dx < 0
+                                    → ["left", "right"]
+ */
+export function facingHandles(source: DiagramFlowNode, target: DiagramFlowNode): [string, string] {
+    // 1. Each node's center: `position` is its top-left corner, `measured` its rendered size (absent
+    //    on the very first render, before React Flow has measured it; the corner is close enough then).
+    const sourceX = source.position.x + (source.measured?.width ?? 0) / 2;
+    const sourceY = source.position.y + (source.measured?.height ?? 0) / 2;
+    const targetX = target.position.x + (target.measured?.width ?? 0) / 2;
+    const targetY = target.position.y + (target.measured?.height ?? 0) / 2;
+
+    // 2. How far apart the centers are on each axis. dx > 0: the target is to the RIGHT of the source;
+    //    dy > 0: the target is BELOW it (screen y grows downward).
+    const dx = targetX - sourceX;
+    const dy = targetY - sourceY;
+
+    // 3. The axis they're further apart on wins, then the sides along it that face each other:
+    //    side by side -> right/left, stacked -> bottom/top.
+    if (Math.abs(dx) > Math.abs(dy)) {
+        return dx > 0 ? ["right", "left"] : ["left", "right"];
+    }
+    return dy > 0 ? ["bottom", "top"] : ["top", "bottom"];
+}
+
+/** A blank canvas: what a new system-design question opens with. */
+export function emptyDiagram(): DiagramDoc {
+    return { version: 1, nodes: [], edges: [] };
+}
+
+/** React Flow's state -> our slim wire shape. Drops selection, size and everything else UI-only. */
+export function toDiagramDoc(nodes: DiagramFlowNode[], edges: DiagramFlowEdge[]): DiagramDoc {
+    return {
+        version: 1,
+        nodes: nodes.map((node) => ({
+            id: node.id,
+            kind: node.data.kind,
+            label: node.data.label,
+            notes: node.data.notes,
+            x: Math.round(node.position.x),
+            y: Math.round(node.position.y),
+        })),
+        edges: edges.map((edge) => ({
+            id: edge.id,
+            source: edge.source,
+            target: edge.target,
+            label: edge.data?.label ?? "",
+            bidirectional: edge.data?.bidirectional ?? false,
+        })),
+    };
+}
+
+/** Our wire shape -> React Flow's state (a resume's saved diagram). */
+export function fromDiagramDoc(doc: DiagramDoc): { nodes: DiagramFlowNode[]; edges: DiagramFlowEdge[] } {
+    return {
+        nodes: doc.nodes.map((node) => ({
+            id: node.id,
+            type: "diagram",
+            position: { x: node.x, y: node.y },
+            data: { kind: node.kind, label: node.label, notes: node.notes },
+        })),
+        edges: doc.edges.map((edge) => ({
+            id: edge.id,
+            source: edge.source,
+            target: edge.target,
+            data: { label: edge.label, bidirectional: edge.bidirectional },
+        })),
+    };
+}
+
+/**
+ * The diagram's CONTENT, blind to layout and ids: two diagrams with the same signature read the same to
+ * the interviewer. Mirrors the server's change test (it compares serialize_diagram texts), which 400s a
+ * text-less turn whose diagram only moved, so the session enables a diagram-only send only when this
+ * changed. Edges refer to nodes by position in the list, so re-creating a node isn't a change by itself.
+ */
+export function diagramSignature(doc: DiagramDoc): string {
+    const indexById = new Map<string, number>();
+    doc.nodes.forEach((node, i) => indexById.set(node.id, i));
+    return JSON.stringify({
+        nodes: doc.nodes.map((node) => [node.kind, node.label.trim(), node.notes.trim()]),
+        edges: doc.edges.map((edge) => [
+            indexById.get(edge.source),
+            indexById.get(edge.target),
+            edge.label.trim(),
+            edge.bidirectional,
+        ]),
+    });
+}
+
+/**
+ * Whether two diagrams are the same INCLUDING layout: what decides if the canvas rides along with the
+ * next answer (a moved node is sent, so positions persist). Compared field by field, not with
+ * JSON.stringify, because a diagram back from the server (JSONB) has its keys in a different order.
+ * 1. Same content (diagramSignature: kinds, names, notes, connections).
+ * 2. Same node count and ids, in order (so a delete + re-add counts as a change to send).
+ * 3. Every node at the same position.
+ */
+export function diagramsEqual(a: DiagramDoc, b: DiagramDoc): boolean {
+    if (diagramSignature(a) !== diagramSignature(b)) return false;
+    if (a.nodes.length !== b.nodes.length) return false;
+    return a.nodes.every((node, i) => {
+        const other = b.nodes[i];
+        return node.id === other.id && node.x === other.x && node.y === other.y;
+    });
 }
 
 /**

@@ -264,6 +264,42 @@
     .speaking-pulse { animation: none; }
   }
 
+  /* The system-design canvas (React Flow, DiagramBoard): its chrome on the Nocturne tokens. React Flow
+     reads these variables, falling back to its own -default values. */
+  .diagram-flow {
+    --xy-background-color: var(--color-canvas);
+    --xy-background-pattern-dots-color: var(--color-neutral-800);
+    --xy-edge-stroke: var(--color-neutral-400);
+    --xy-edge-stroke-selected: var(--color-accent-400);
+    --xy-connectionline-stroke: var(--color-accent);
+    --xy-edge-label-background-color: var(--color-canvas);
+    --xy-edge-label-color: var(--color-neutral-200);
+    --xy-selection-background-color: color-mix(in srgb, var(--color-accent) 12%, transparent);
+    --xy-selection-border: 1px dashed var(--color-accent);
+    --xy-controls-button-background-color: var(--color-surface);
+    --xy-controls-button-background-color-hover: var(--color-neutral-900);
+    --xy-controls-button-color: var(--color-neutral-300);
+    --xy-controls-button-color-hover: var(--color-ink);
+    --xy-controls-button-border-color: var(--color-divider);
+    --xy-attribution-background-color: transparent;
+  }
+  /* Connection dots: hidden until you hover or select a node, or a connection is being dragged
+     toward them, so a finished diagram reads clean. */
+  .diagram-flow .diagram-handle {
+    width: 9px;
+    height: 9px;
+    background: var(--color-accent);
+    border: 1px solid var(--color-bg);
+    opacity: 0;
+    transition: opacity 0.12s;
+  }
+  .diagram-flow .react-flow__node:hover .diagram-handle,
+  .diagram-flow .react-flow__node.selected .diagram-handle,
+  .diagram-flow .diagram-handle.connectingto {
+    opacity: 1;
+  }
+  .diagram-flow .react-flow__edge-text { font-size: 12px; }
+
   /* Three-dot "thinking…" indicator (LoadingDots). A colour wave sweeps across the dots in quick
      succession — each dot brightens to accent then fades back to muted, offset from its neighbour —
      the standard app loading animation. Dots are em-sized so the caller sets the scale via font-size

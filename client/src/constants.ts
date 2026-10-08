@@ -8,6 +8,26 @@
  * The value comes from client/.env (VITE_API_BASE_URL) so a deploy can point at a real backend
  * without a code change. The `||` fallback keeps a fresh clone (no .env) running against local.
  */
+import {
+    Archive,
+    ArrowsSplit,
+    Circle,
+    Cloud,
+    Cube,
+    Database,
+    Desktop,
+    Door,
+    GearSix,
+    GlobeHemisphereWest,
+    Lightning,
+    MagnifyingGlass,
+    Queue,
+    Square,
+    TextT,
+    type Icon,
+} from "@phosphor-icons/react";
+import type { DiagramNodeKind } from "./api";
+
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api";
 
 /**
@@ -233,6 +253,42 @@ export const EDITOR_SETTINGS_STORAGE_KEY = "ih.editorSettings";
 export const CODING_PROBLEM_CUE =
     "Here's your problem. It's in the panel on the right. Take a minute to read it, then walk me through " +
     "your approach, and be sure to state the time and space complexity of your solution.";
+
+/**
+ * The system-design canvas's palette. Mirrors NodeKind in server/diagram.py: add a kind in BOTH places.
+ * `shape` is how DiagramNode draws it (a cylinder for a database, a free-floating note for text, ...);
+ * the label is the palette's and the default a new node shows until it's named.
+ */
+export type DiagramNodeShape = "rounded" | "rect" | "cylinder" | "circle" | "text";
+export const DIAGRAM_NODE_KINDS: { kind: DiagramNodeKind; label: string; icon: Icon; shape: DiagramNodeShape }[] = [
+    { kind: "client", label: "Client", icon: Desktop, shape: "rounded" },
+    { kind: "load_balancer", label: "Load balancer", icon: ArrowsSplit, shape: "rounded" },
+    { kind: "api_gateway", label: "API gateway", icon: Door, shape: "rounded" },
+    { kind: "service", label: "Service", icon: Cube, shape: "rounded" },
+    { kind: "worker", label: "Worker", icon: GearSix, shape: "rounded" },
+    { kind: "database", label: "Database", icon: Database, shape: "cylinder" },
+    { kind: "cache", label: "Cache", icon: Lightning, shape: "rounded" },
+    { kind: "queue", label: "Queue", icon: Queue, shape: "rounded" },
+    { kind: "blob_storage", label: "Blob storage", icon: Archive, shape: "rounded" },
+    { kind: "cdn", label: "CDN", icon: GlobeHemisphereWest, shape: "rounded" },
+    { kind: "search", label: "Search", icon: MagnifyingGlass, shape: "rounded" },
+    { kind: "external", label: "External", icon: Cloud, shape: "rounded" },
+    { kind: "box", label: "Box", icon: Square, shape: "rect" },
+    { kind: "circle", label: "Circle", icon: Circle, shape: "circle" },
+    { kind: "text", label: "Note", icon: TextT, shape: "text" },
+];
+// The server's caps (server/diagram.py), enforced in the inspector and the palette so a send never 422s.
+export const DIAGRAM_MAX_NODES = 60;
+export const DIAGRAM_MAX_EDGES = 120;
+export const DIAGRAM_MAX_LABEL_CHARS = 80;
+export const DIAGRAM_MAX_NOTES_CHARS = 500;
+// Node positions snap to this grid (px), and the background dots are drawn on it.
+export const DIAGRAM_GRID = 16;
+// The dataTransfer type a palette item carries while it's dragged onto the canvas.
+export const DIAGRAM_DRAG_MIME = "application/x-diagram-kind";
+// What the server records as the answer of a diagram-only turn (server/api.py). The live transcript
+// shows the same, so it matches what the detail page and a resume will show.
+export const DIAGRAM_ONLY_ANSWER = "(updated the diagram)";
 
 export const PAGE_SIZE = 12
 // The shimmer look for loading placeholders — animation + shape + fill only. Each consumer adds its
