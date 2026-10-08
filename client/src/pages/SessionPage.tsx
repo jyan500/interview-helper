@@ -175,9 +175,11 @@ export default function SessionPage() {
     // still selectable; coding and system design are manual-only, since their long thinking pauses
     // would trip the silence countdown and submit a half-answer. A bank interview (no round, so
     // null/absent) keeps the free choice and opens in manual. A resume learns the rule from its payload.
+    // A system-design question is manual-only even in a bank interview: the canvas locks it per question
+    // (a Job system-design round is already locked by its round row).
     const [allowsSmartVoice, setAllowsSmartVoice] = useState(nav.allowsSmartVoice);
     const [voiceMode, setVoiceMode] = useState<TurnMode>(() => defaultVoiceMode(nav.allowsSmartVoice));
-    const smartVoiceLocked = allowsSmartVoice === false;
+    const smartVoiceLocked = allowsSmartVoice === false || hasDiagramCanvas;
 
     // Which microphone to capture from. "" = system default; a real deviceId pins that exact mic —
     // the picker exists because a wrong default mic silently recorded nothing on Firefox. Threaded
@@ -424,6 +426,9 @@ export default function SessionPage() {
             if (res.question.slug !== problem?.slug) {
                 setProblem(res.question);
                 setHasDiagramCanvas(res.question.has_diagram_canvas);
+                // a system-design question is manual-only: drop out of smart before it's spoken, so the
+                // mic doesn't auto-arm when the speech ends
+                if (res.question.has_diagram_canvas) setVoiceMode("manual");
                 setDiagram(emptyDiagram());
                 setLastSentDiagram(emptyDiagram());
                 if (hasCodeEditor) {

@@ -1827,11 +1827,14 @@ Done (code; `npx tsc` clean, `vite build` puts React Flow in its own lazy `Diagr
   `lastSentDiagram`. Attached on any change incl. layout (`diagramChanged`); a diagram-only send only when the
   design changed (`diagramContentChanged`). Rolled back on a failed send; reset (or hidden) on advance; seeded
   on resume. The panel is keyed by question slug. "You" rows get an "Updated the diagram" tag.
+- Voice is manual-only on a system-design question, like coding: `smartVoiceLocked` also checks
+  `hasDiagramCanvas`, so a Practice (bank) interview with no round row locks it per question, and advancing
+  onto a canvas question drops back to manual. A Job system-design round was already locked by its row.
 - Server: the resume payload's turns carry `diagram_updated` (the serialized text changed vs the question's
   previous diagram, so a layout-only move isn't tagged).
 
 NOT yet verified: the browser pass (draw, send, revise; the interviewer references it; resume reseeds; advancing
-to a non-system-design question hides it), and the `diagram_updated` resume flag against a real interview.
+to a non-system-design question hides it; the voice toggle is locked on a system-design question), and the `diagram_updated` resume flag against a real interview.
 Known gap (server, pre-existing): `/api/answer` saves the diagram BEFORE the LLM call. If that call then fails,
 the client's retry re-attaches it, but the server sees "unchanged" and the interviewer never gets the text.
 
