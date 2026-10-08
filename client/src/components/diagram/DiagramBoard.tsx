@@ -8,16 +8,22 @@
  *
  * Moving nodes, snapping, panning, box-select and connecting are all React Flow's. The only drag code
  * here is palette -> canvas, as native HTML5 drag-and-drop (React Flow's own drag-and-drop pattern).
+ *
+ * Copy/paste (Ctrl/Cmd+C, V) and undo/redo (Ctrl/Cmd+Z, Shift+Z or Y) are here too. Both live in this
+ * board, so they reset with it on each new question.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { ArrowClockwise, ArrowCounterClockwise } from "@phosphor-icons/react";
 import {
     Background,
     BackgroundVariant,
     ConnectionMode,
+    ControlButton,
     Controls,
     MarkerType,
     Panel,
     ReactFlow,
+    SelectionMode,
     useEdgesState,
     useNodesState,
     useReactFlow,
@@ -27,7 +33,14 @@ import {
     type XYPosition,
 } from "@xyflow/react";
 import type { DiagramDoc, DiagramNodeKind } from "../../api";
-import { DIAGRAM_DRAG_MIME, DIAGRAM_GRID, DIAGRAM_MAX_EDGES, DIAGRAM_MAX_NODES } from "../../constants";
+import {
+    DIAGRAM_DRAG_MIME,
+    DIAGRAM_GRID,
+    DIAGRAM_MAX_EDGES,
+    DIAGRAM_MAX_NODES,
+    DIAGRAM_PASTE_OFFSET_STEPS,
+} from "../../constants";
+import { useDiagramHistory } from "../../hooks";
 import {
     facingHandles,
     fromDiagramDoc,
@@ -74,6 +87,32 @@ export default function DiagramBoard({
     >();
     const wrapperRef = useRef<HTMLDivElement | null>(null);
 
+    // ── Undo history ────────────────────────────────────────────────────────────────────────────
+    // Every edit calls `snapshot()` just before it changes anything. Inspector typing is coalesced:
+    // a run of keystrokes in one field is one undo step, keyed by "<element id>:<field>". Any other
+    // edit (or an undo/redo) resets the key, so the next keystroke starts a new step.
+    const { takeSnapshot, undo, redo, canUndo, canRedo } = useDiagramHistory(nodes, edges, setNodes, setEdges);
+    const lastEditKeyRef = useRef<string | null>(null);
+    function snapshot() {
+        lastEditKeyRef.current = null;
+        takeSnapshot();
+    }
+    function snapshotEdit(key: string) {
+        if (lastEditKeyRef.current === key) return;
+        takeSnapshot();
+        lastEditKeyRef.current = key;
+    }
+    function handleUndo() {
+        lastEditKeyRef.current = null;
+        setEditingId(null);
+        undo();
+    }
+    function handleRedo() {
+        lastEditKeyRef.current = null;
+        setEditingId(null);
+        redo();
+    }
+
     // Report the diagram up. Skipped mid-drag: positions change every frame, and the drag's final
     // change (dragging -> false) reports where the node landed. Selection changes report an identical
     // doc, which costs nothing (toDiagramDoc drops selection).
@@ -86,6 +125,14 @@ export default function DiagramBoard({
     // The new node arrives selected (so the inspector opens on it), and a note starts in inline edit,
     // since a note is nothing until it has text.
     const [editingId, setEditingId] = useState<string | null>(null);
+
+    // Put new nodes/edges on the canvas as the only selected things (so the inspector, or a group
+    // drag, picks them up right away).
+    function appendSelected(newNodes: DiagramFlowNode[], newEdges: DiagramFlowEdge[]) {
+        setNodes((current) => [...current.map((n) => ({ ...n, selected: false })), ...newNodes]);
+        setEdges((current) => [...current.map((e) => ({ ...e, selected: false })), ...newEdges]);
+    }
+
     function addNode(kind: DiagramNodeKind, position: XYPosition) {
         if (nodes.length >= DIAGRAM_MAX_NODES) return;
         const id = crypto.randomUUID();
@@ -96,10 +143,124 @@ export default function DiagramBoard({
             data: { kind, label: "", notes: "" },
             selected: true,
         };
-        setNodes((current) => [...current.map((n) => ({ ...n, selected: false })), node]);
-        setEdges((current) => current.map((e) => ({ ...e, selected: false })));
+        snapshot();
+        appendSelected([node], []);
         if (kind === "text") setEditingId(id);
     }
+
+    // ── Copy / paste ────────────────────────────────────────────────────────────────────────────
+    // The clipboard is this board's own (not the system clipboard): the selection as a DiagramDoc,
+    // still carrying the original node ids so the copied edges know which copies to join.
+    const clipboardRef = useRef<DiagramDoc | null>(null);
+    const pasteCountRef = useRef(0);
+
+    // 1. The selected nodes. None selected: nothing to copy (an edge alone has nothing to attach to).
+    // 2. The selected edges whose BOTH ends are among them. An edge to an unselected node is left out,
+    //    since its copy would have nothing to attach to.
+    // 3. A fresh copy restarts the paste cascade.
+    function handleCopy(): boolean {
+        const copiedNodes = nodes.filter((node) => node.selected);
+        if (copiedNodes.length === 0) return false;
+        const copiedIds = new Set(copiedNodes.map((node) => node.id));
+        const copiedEdges = edges.filter(
+            (edge) => edge.selected && copiedIds.has(edge.source) && copiedIds.has(edge.target),
+        );
+        clipboardRef.current = toDiagramDoc(copiedNodes, copiedEdges);
+        pasteCountRef.current = 0;
+        return true;
+    }
+
+    // 1. Over either cap, paste nothing (silently, like the palette at the node cap).
+    // 2. Each paste lands a little further down-right than the last (whole grid steps, so it stays
+    //    snapped), so pasting twice doesn't stack copies exactly on top of each other.
+    // 3. Every copy gets a fresh id; the map remembers which original it came from.
+    // 4. The copied edges are re-pointed at the copies through that map, so the pasted group is wired
+    //    like the original but never to it. Both ends of every pasted edge are brand-new nodes, so it
+    //    can't duplicate an existing pair (handleConnect's rule 3): no duplicate check needed here.
+    function handlePaste(): boolean {
+        const clipboard = clipboardRef.current;
+        if (!clipboard) return false;
+        if (nodes.length + clipboard.nodes.length > DIAGRAM_MAX_NODES) return true;
+        if (edges.length + clipboard.edges.length > DIAGRAM_MAX_EDGES) return true;
+
+        pasteCountRef.current += 1;
+        const offset = pasteCountRef.current * DIAGRAM_PASTE_OFFSET_STEPS * DIAGRAM_GRID;
+
+        const copyIds = new Map<string, string>();
+        const pastedNodes: DiagramFlowNode[] = clipboard.nodes.map((node) => {
+            const id = crypto.randomUUID();
+            copyIds.set(node.id, id);
+            return {
+                id,
+                type: "diagram",
+                position: { x: node.x + offset, y: node.y + offset },
+                data: { kind: node.kind, label: node.label, notes: node.notes },
+                selected: true,
+            };
+        });
+        const pastedEdges: DiagramFlowEdge[] = clipboard.edges.map((edge) => ({
+            id: crypto.randomUUID(),
+            source: copyIds.get(edge.source) as string,
+            target: copyIds.get(edge.target) as string,
+            data: { label: edge.label, bidirectional: edge.bidirectional },
+            selected: true,
+        }));
+
+        snapshot();
+        appendSelected(pastedNodes, pastedEdges);
+        return true;
+    }
+
+    // ── Keyboard shortcuts ──────────────────────────────────────────────────────────────────────
+    // Ctrl/Cmd+C, V, Z only act on the canvas while it's the thing the user last clicked in, so the
+    // answer box's own copy/paste/undo are untouched. A listener on the document (rather than on the
+    // canvas element) because React Flow doesn't move focus when the empty canvas is clicked.
+    const canvasActiveRef = useRef(false);
+    useEffect(() => {
+        function handlePointerDown(e: PointerEvent) {
+            canvasActiveRef.current = wrapperRef.current?.contains(e.target as globalThis.Node) ?? false;
+        }
+        document.addEventListener("pointerdown", handlePointerDown, true);
+        return () => document.removeEventListener("pointerdown", handlePointerDown, true);
+    }, []);
+
+    // 1. Only while the canvas is active (and editable), and only with Ctrl/Cmd held.
+    // 2. Typing in a field (the inspector, an inline rename) keeps the browser's own text shortcuts.
+    // 3. Copy only: if text is highlighted on the page, the browser copies that instead.
+    // 4. preventDefault only for a shortcut that did something.
+    function handleKeyDown(e: KeyboardEvent) {
+        if (readOnly || !canvasActiveRef.current || !(e.ctrlKey || e.metaKey)) return;
+        const target = e.target as HTMLElement;
+        if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
+
+        const key = e.key.toLowerCase();
+        let handled = false;
+        if (key === "c") {
+            if (window.getSelection()?.toString()) return;
+            handled = handleCopy();
+        } else if (key === "v") {
+            handled = handlePaste();
+        } else if ((key === "z" && e.shiftKey) || key === "y") {
+            handled = canRedo;
+            handleRedo();
+        } else if (key === "z") {
+            handled = canUndo;
+            handleUndo();
+        }
+        if (handled) e.preventDefault();
+    }
+    // The listener is bound once and calls whatever handler the ref holds. handleKeyDown is recreated
+    // every render (it reads that render's nodes/edges), so the layout effect repoints the ref at the
+    // newest one after each render, before the browser can deliver another key.
+    const keyDownRef = useRef(handleKeyDown);
+    useLayoutEffect(() => {
+        keyDownRef.current = handleKeyDown;
+    });
+    useEffect(() => {
+        const listener = (e: KeyboardEvent) => keyDownRef.current(e);
+        document.addEventListener("keydown", listener);
+        return () => document.removeEventListener("keydown", listener);
+    }, []);
 
     // Dropped from the palette: place it where the pointer let go (screen -> canvas coordinates).
     function handleDrop(e: DragEvent<HTMLDivElement>) {
@@ -138,27 +299,30 @@ export default function DiagramBoard({
     // 3. One connection per pair of nodes, in either direction: a second one is almost always a
     //    mis-drag. For data flowing both ways, the inspector's "Two-way" covers it.
     // The handles the user dragged between are dropped: drawnEdges picks the facing sides instead.
-    const handleConnect = useCallback(
-        (connection: Connection) => {
-            const { source, target } = connection;
-            if (source === target) return;
-            setEdges((current) => {
-                if (current.length >= DIAGRAM_MAX_EDGES) return current;
-                const duplicate = current.some(
-                    (e) => (e.source === source && e.target === target) || (e.source === target && e.target === source),
-                );
-                if (duplicate) return current;
-                const edge: DiagramFlowEdge = {
-                    id: crypto.randomUUID(),
-                    source,
-                    target,
-                    data: { label: "", bidirectional: false },
-                };
-                return [...current, edge];
-            });
-        },
-        [setEdges],
-    );
+    // Checked against this render's edges (not inside a setEdges updater) so the undo snapshot is taken
+    // only when an edge is really added.
+    function handleConnect(connection: Connection) {
+        const { source, target } = connection;
+        if (source === target) return;
+        if (edges.length >= DIAGRAM_MAX_EDGES) return;
+        // Is this pair already joined, whichever way the existing edge points? With API -> DB on the canvas:
+        //   left half, same direction:      dragging API -> DB again (same start, same end)
+        //   right half, opposite direction: dragging DB -> API (it starts where the existing edge ends,
+        //                                   and ends where it starts)
+        // Either one is a duplicate under rule 3.
+        const duplicate = edges.some(
+            (e) => (e.source === source && e.target === target) || (e.source === target && e.target === source),
+        );
+        if (duplicate) return;
+        const edge: DiagramFlowEdge = {
+            id: crypto.randomUUID(),
+            source,
+            target,
+            data: { label: "", bidirectional: false },
+        };
+        snapshot();
+        setEdges((current) => [...current, edge]);
+    }
 
     // ── What React Flow draws for each edge ─────────────────────────────────────────────────────
     // The stored edge is just source/target + data; for drawing:
@@ -188,6 +352,9 @@ export default function DiagramBoard({
     const editing: DiagramEditing = {
         editingId,
         commitRename: (id, label) => {
+            // a blur with the name unchanged isn't an edit, so it's not an undo step
+            const renamed = nodes.find((node) => node.id === id);
+            if (renamed && renamed.data.label !== label) snapshot();
             updateNodeData(id, { label });
             setEditingId(null);
         },
@@ -203,7 +370,10 @@ export default function DiagramBoard({
         inspector = (
             <NodeInspector
                 data={node.data}
-                onChange={(patch) => updateNodeData(node.id, patch)}
+                onChange={(patch) => {
+                    snapshotEdit(`${node.id}:${Object.keys(patch).join()}`);
+                    updateNodeData(node.id, patch);
+                }}
                 onDelete={() => deleteElements({ nodes: [{ id: node.id }] })}
             />
         );
@@ -212,7 +382,10 @@ export default function DiagramBoard({
         inspector = (
             <EdgeInspector
                 data={edge.data ?? { label: "", bidirectional: false }}
-                onChange={(patch) => updateEdgeData(edge.id, patch)}
+                onChange={(patch) => {
+                    snapshotEdit(`${edge.id}:${Object.keys(patch).join()}`);
+                    updateEdgeData(edge.id, patch);
+                }}
                 onDelete={() => deleteElements({ edges: [{ id: edge.id }] })}
             />
         );
@@ -232,6 +405,14 @@ export default function DiagramBoard({
                         onNodesChange={onNodesChange}
                         onEdgesChange={onEdgesChange}
                         onConnect={handleConnect}
+                        // undo steps: a delete (Delete key or the inspector's Trash, plus any edges it
+                        // takes with it) and a whole drag are one step each
+                        onBeforeDelete={async () => {
+                            snapshot();
+                            return true;
+                        }}
+                        onNodeDragStart={snapshot}
+                        onSelectionDragStart={snapshot}
                         isValidConnection={(connection) => connection.source !== connection.target}
                         // Loose: every handle is a "source", and any can end a connection too.
                         connectionMode={ConnectionMode.Loose}
@@ -245,7 +426,7 @@ export default function DiagramBoard({
                         nodesConnectable={!readOnly}
                         elementsSelectable={!readOnly}
                         /* left click select, right click pan canvas */
-                        selectionMode="partial" 
+                        selectionMode={SelectionMode.Partial}
                         panOnDrag={[2]}
                         selectionOnDrag={true}
                         // a resumed diagram opens framed; a blank one stays at 100%
@@ -256,6 +437,22 @@ export default function DiagramBoard({
                     >
                         <Background variant={BackgroundVariant.Dots} gap={DIAGRAM_GRID} size={1} />
                         <Controls showInteractive={false} />
+                        {!readOnly && (
+                            <Controls
+                                position="top-left"
+                                orientation="horizontal"
+                                showZoom={false}
+                                showFitView={false}
+                                showInteractive={false}
+                            >
+                                <ControlButton onClick={handleUndo} disabled={!canUndo} title="Undo (Ctrl+Z)">
+                                    <ArrowCounterClockwise />
+                                </ControlButton>
+                                <ControlButton onClick={handleRedo} disabled={!canRedo} title="Redo (Ctrl+Shift+Z)">
+                                    <ArrowClockwise />
+                                </ControlButton>
+                            </Controls>
+                        )}
                         {inspector && <Panel position="top-right">{inspector}</Panel>}
                     </ReactFlow>
                 </DiagramEditingContext.Provider>
@@ -271,6 +468,8 @@ export default function DiagramBoard({
                                 Connect them by dragging between the dots on their edges.
                                 <br />
                                 Double-click to rename. Delete removes what's selected.
+                                <br />
+                                Ctrl+C / Ctrl+V copies what's selected. Ctrl+Z undoes.
                             </span>
                         )}
                     </div>

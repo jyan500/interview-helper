@@ -284,6 +284,10 @@ export const DIAGRAM_MAX_LABEL_CHARS = 80;
 export const DIAGRAM_MAX_NOTES_CHARS = 500;
 // Node positions snap to this grid (px), and the background dots are drawn on it.
 export const DIAGRAM_GRID = 16;
+// Each paste lands this many grid steps down-right of the last, so repeated pastes cascade.
+export const DIAGRAM_PASTE_OFFSET_STEPS = 2;
+// How many canvas edits undo can step back through (the oldest drop off).
+export const DIAGRAM_HISTORY_LIMIT = 50;
 // The dataTransfer type a palette item carries while it's dragged onto the canvas.
 export const DIAGRAM_DRAG_MIME = "application/x-diagram-kind";
 // What the server records as the answer of a diagram-only turn (server/api.py). The live transcript
