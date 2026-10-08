@@ -244,6 +244,10 @@ export default function DiagramBoard({
                         nodesDraggable={!readOnly}
                         nodesConnectable={!readOnly}
                         elementsSelectable={!readOnly}
+                        /* left click select, right click pan canvas */
+                        selectionMode="partial" 
+                        panOnDrag={[2]}
+                        selectionOnDrag={true}
                         // a resumed diagram opens framed; a blank one stays at 100%
                         fitView={initial.nodes.length > 0}
                         fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
