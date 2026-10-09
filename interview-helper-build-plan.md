@@ -1830,11 +1830,23 @@ Done (code; `npx tsc` clean, `vite build` puts React Flow in its own lazy `Diagr
 - Voice is manual-only on a system-design question, like coding: `smartVoiceLocked` also checks
   `hasDiagramCanvas`, so a Practice (bank) interview with no round row locks it per question, and advancing
   onto a canvas question drops back to manual. A Job system-design round was already locked by its row.
+- Copy/paste + undo/redo on the canvas (DiagramBoard):
+  - **Copy/paste:** Ctrl/Cmd+C copies the selected nodes, plus selected edges whose both ends are selected, to a
+    board-local clipboard (a DiagramDoc). Ctrl/Cmd+V pastes with fresh ids and remapped edges, cascading by
+    `DIAGRAM_PASTE_OFFSET_STEPS` grid steps. The paste arrives selected, with no confirmation message.
+  - **Undo/redo:** `useDiagramHistory` (hooks.ts) keeps snapshot stacks, capped at `DIAGRAM_HISTORY_LIMIT`. A snapshot
+    is taken before add, paste, connect, delete (`onBeforeDelete`), drag start and a changed rename. Inspector typing
+    is coalesced per element and field. Ctrl/Cmd+Z, Shift+Z or Y, plus top-left Undo/Redo buttons.
+  - **Shortcut scope:** keys are scoped by "last pointerdown was inside the canvas" (document listeners; the
+    latest-handler ref is updated in a `useLayoutEffect`), and skipped in inputs and textareas.
+  - **Selection:** the user switched selection to left-drag box-select (`SelectionMode.Partial`) and pan to
+    right-drag (`panOnDrag={[2]}`).
 - Server: the resume payload's turns carry `diagram_updated` (the serialized text changed vs the question's
   previous diagram, so a layout-only move isn't tagged).
 
 NOT yet verified: the browser pass (draw, send, revise; the interviewer references it; resume reseeds; advancing
-to a non-system-design question hides it; the voice toggle is locked on a system-design question), and the `diagram_updated` resume flag against a real interview.
+to a non-system-design question hides it; the voice toggle is locked on a system-design question; copy/paste and undo/redo,
+incl. that shortcuts don't fire in the answer box), and the `diagram_updated` resume flag against a real interview.
 Known gap (server, pre-existing): `/api/answer` saves the diagram BEFORE the LLM call. If that call then fails,
 the client's retry re-attaches it, but the server sees "unchanged" and the interviewer never gets the text.
 

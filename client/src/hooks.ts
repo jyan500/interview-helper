@@ -5,6 +5,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import type { FieldValues, Path, PathValue, UseFormSetValue } from "react-hook-form";
+// type-only: erased at build time, so React Flow stays out of the main chunk
+import type { Edge, Node } from "@xyflow/react";
 import hark from "hark";
 import { audioConstraints } from "./voice/helpers";
 import {
@@ -19,6 +21,7 @@ import type { SelectOption } from "./components/AsyncPaginateSelect";
 import type { SessionNavState } from "./pages/SessionLayout";
 import { useToast } from "./toast/ToastProvider";
 import {
+    DIAGRAM_HISTORY_LIMIT,
     HARK_POLL_INTERVAL_MS,
     HARK_SPEAKING_THRESHOLD_DB,
     MIC_LEVEL_FLOOR_DB,
@@ -546,4 +549,59 @@ export function useMicLevel(
     }, [deviceId, active]);
 
     return { level, silent, ready, error };
+}
+
+/** One point in the diagram canvas's undo history: the whole canvas, as it was. */
+interface DiagramSnapshot<N extends Node, E extends Edge> {
+    nodes: N[];
+    edges: E[];
+}
+
+/**
+ * Undo/redo for the diagram canvas (DiagramBoard). The caller calls `takeSnapshot()` right BEFORE each
+ * edit (add, paste, connect, delete, drag, rename), so `past` holds what the canvas looked like before
+ * each one. Any new edit clears `future`, as in every editor: redo only replays what was just undone.
+ */
+export function useDiagramHistory<N extends Node, E extends Edge>(
+    nodes: N[],
+    edges: E[],
+    setNodes: (nodes: N[]) => void,
+    setEdges: (edges: E[]) => void,
+) {
+    const [past, setPast] = useState<DiagramSnapshot<N, E>[]>([]);
+    const [future, setFuture] = useState<DiagramSnapshot<N, E>[]>([]);
+
+    function takeSnapshot() {
+        // the oldest steps drop off past the limit
+        setPast((stack) => [...stack, { nodes, edges }].slice(-DIAGRAM_HISTORY_LIMIT));
+        setFuture([]);
+    }
+
+    // Selection isn't history: a restored canvas comes back with nothing selected.
+    function restore(snapshot: DiagramSnapshot<N, E>) {
+        setNodes(snapshot.nodes.map((node) => ({ ...node, selected: false })));
+        setEdges(snapshot.edges.map((edge) => ({ ...edge, selected: false })));
+    }
+
+    // 1. Take the newest snapshot off `past`.
+    // 2. Park the canvas as it is now on `future`, so redo can bring it back.
+    // 3. Put the snapshot on the canvas.
+    function undo() {
+        const previous = past[past.length - 1];
+        if (!previous) return;
+        setPast(past.slice(0, -1));
+        setFuture((stack) => [...stack, { nodes, edges }]);
+        restore(previous);
+    }
+
+    // The mirror image: off `future`, the current canvas back onto `past`.
+    function redo() {
+        const next = future[future.length - 1];
+        if (!next) return;
+        setFuture(future.slice(0, -1));
+        setPast((stack) => [...stack, { nodes, edges }]);
+        restore(next);
+    }
+
+    return { takeSnapshot, undo, redo, canUndo: past.length > 0, canRedo: future.length > 0 };
 }
