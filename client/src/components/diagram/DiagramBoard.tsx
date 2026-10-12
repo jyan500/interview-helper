@@ -394,7 +394,11 @@ export default function DiagramBoard({
     return (
         <div className="flex min-h-0 flex-1 gap-3">
             {!readOnly && <DiagramPalette disabled={nodes.length >= DIAGRAM_MAX_NODES} onAdd={handleAdd} />}
-            <div ref={wrapperRef} className="relative min-h-0 flex-1 overflow-hidden rounded-md border border-divider">
+            <div
+                ref={wrapperRef}
+                data-tour="diagram-canvas"
+                className="relative min-h-0 flex-1 overflow-hidden rounded-md border border-divider"
+            >
                 <DiagramEditingContext.Provider value={editing}>
                     <ReactFlow
                         className="diagram-flow"
@@ -436,9 +440,11 @@ export default function DiagramBoard({
                         maxZoom={2}
                     >
                         <Background variant={BackgroundVariant.Dots} gap={DIAGRAM_GRID} size={1} />
-                        <Controls showInteractive={false} />
+                        {/* the class names are DiagramTour's step targets */}
+                        <Controls className="diagram-zoom-controls" showInteractive={false} />
                         {!readOnly && (
                             <Controls
+                                className="diagram-history-controls"
                                 position="top-left"
                                 orientation="horizontal"
                                 showZoom={false}
