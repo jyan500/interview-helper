@@ -39,6 +39,8 @@ function buildSteps(firstNode: HTMLElement | null): Step[] {
                 "panel on the right.",
             placement: firstNode ? "right" : "center",
         },
+        //  React Flow's <Controls> don't pass data attributes through, so React Joyride needs to detect these components 
+        // using classnames
         {
             target: ".diagram-history-controls",
             title: "Undo and redo",
