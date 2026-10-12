@@ -18,13 +18,13 @@ import Modal from "./Modal";
 import MicMeter from "./MicMeter";
 import SegmentedControl from "./SegmentedControl";
 import { nocturneSelectStyles } from "../selectStyles";
+import type { AnswerMode } from "../constants";
 import type { TtsEngine } from "../voice/speech";
 
-type Mode = "voice" | "text";
 type EngineOption = { value: TtsEngine; label: string };
 type MicOption = { value: string; label: string };
 
-const MODE_OPTIONS: { value: Mode; label: string }[] = [
+const MODE_OPTIONS: { value: AnswerMode; label: string }[] = [
     { value: "voice", label: "Voice" },
     { value: "text", label: "Text" },
 ];
@@ -49,8 +49,8 @@ export default function SettingsModal({
 }: {
     open: boolean;
     onClose: () => void;
-    mode: Mode;
-    onChangeMode: (m: Mode) => void;
+    mode: AnswerMode;
+    onChangeMode: (m: AnswerMode) => void;
     ttsEngine: TtsEngine;
     onChangeTtsEngine: (e: TtsEngine) => void;
     micOptions: MicOption[];
@@ -66,7 +66,7 @@ export default function SettingsModal({
                 <div>
                     <div className="kicker">Mode</div>
                     <div className="mt-2">
-                        <SegmentedControl<Mode>
+                        <SegmentedControl<AnswerMode>
                             label="Mode"
                             options={MODE_OPTIONS}
                             value={mode}

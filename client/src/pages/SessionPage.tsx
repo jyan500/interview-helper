@@ -55,7 +55,7 @@ import {
     sentCodeByLanguage,
     withCodeFence,
 } from "../helpers";
-import { CODING_PROBLEM_CUE, DIAGRAM_ONLY_ANSWER, type CodeLanguage } from "../constants";
+import { CODING_PROBLEM_CUE, DIAGRAM_ONLY_ANSWER, type AnswerMode, type CodeLanguage } from "../constants";
 import { useAudioInputDevices, useElapsedClock, useNoInputPrompt, useSpeaking } from "../hooks";
 import {
     pickPreferredVoice,
@@ -66,8 +66,6 @@ import {
     type TtsEngine,
     type TurnMode,
 } from "../voice/speech";
-
-type Mode = "voice" | "text";
 
 // A visible transcript line. `id` is a STABLE key so a specific interviewer bubble can be revealed
 // later by id (race-safe even if other lines were appended meanwhile); `pending` = an interviewer
@@ -98,7 +96,7 @@ export default function SessionPage() {
     // once off nav rather than threading nav.interviewId through every handler.
     const interviewId = nav.interviewId;
 
-    const [mode, setMode] = useState<Mode>("voice");
+    const [mode, setMode] = useState<AnswerMode>("voice");
     const [transcript, setTranscript] = useState<Line[]>([]);
     const [draft, setDraft] = useState("");
     // done = the client-driven loop exhausted the bank (submitAnswer told us). ended = we've kicked
@@ -619,6 +617,7 @@ export default function SessionPage() {
                         onChangeCode={setCode}
                         language={language}
                         onChangeLanguage={handleChangeLanguage}
+                        mode={mode}
                         readOnly={done || ended}
                     />
                 ) : hasDiagramCanvas ? (
@@ -637,6 +636,7 @@ export default function SessionPage() {
                             question={problem}
                             initialDiagram={diagram}
                             onChange={setDiagram}
+                            mode={mode}
                             readOnly={done || ended}
                         />
                     </Suspense>
@@ -800,6 +800,7 @@ function VoiceColumn({
                             className="flex items-center gap-[9px] text-[15px] disabled:opacity-50"
                             style={{ padding: "13px 30px" }}
                             onClick={onToggleMic}
+                            data-tour="answer-button" // the coding and diagram tours' last step (tour/steps.ts)
                             // Locked while the AI is speaking, while a turn is being prepared
                             // (transcribe/answer/TTS), or once ended — so no new recording starts over any of those.
                             disabled={speaking || preparing || ended}
@@ -1046,6 +1047,7 @@ function TextColumn({
                                 className="text-[15px] disabled:opacity-50"
                                 style={{ padding: "11px 28px" }}
                                 onClick={onSend}
+                                data-tour="answer-button" // the coding and diagram tours' last step (tour/steps.ts)
                                 disabled={answering || transcribing || ended || !canSend}
                             >
                                 {transcribing ? "Transcribing…" : answering ? "Sending…" : "Send answer"}
@@ -1067,7 +1069,7 @@ function RightRail({
     interviewerLines,
     scoring,
 }: {
-    mode: Mode;
+    mode: AnswerMode;
     isResume: boolean;
     interviewerLines: Line[];
     scoring: boolean;

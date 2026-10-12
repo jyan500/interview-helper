@@ -191,6 +191,9 @@ export const INTERVIEW_KINDS = [
 ] as const;
 export type InterviewKind = (typeof INTERVIEW_KINDS)[number]["value"];
 
+/** How the candidate answers in an interview: speaking (STT) or typing. */
+export type AnswerMode = "voice" | "text";
+
 /**
  * The coding round's editor languages — the slug is what POST /api/answer sends as `language` (and so
  * the fence's info string the model and the grader read); the label is the picker's. CodingPanel maps

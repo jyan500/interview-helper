@@ -9,23 +9,27 @@
 import { useState } from "react";
 import { ReactFlowProvider } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Question } from "@phosphor-icons/react";
 import type { DiagramDoc, PlanQuestion } from "../../api";
-import Button from "../Button";
+import type { AnswerMode } from "../../constants";
 import FormattedText from "../FormattedText";
 import LoadingDots from "../LoadingDots";
+import GuidedTour from "../tour/GuidedTour";
+import NeedHelpButton from "../tour/NeedHelpButton";
+import { diagramTourSteps } from "../tour/steps";
 import DiagramBoard from "./DiagramBoard";
-import DiagramTour from "./DiagramTour";
 
 export default function DiagramPanel({
     question,
     initialDiagram,
     onChange,
+    mode,
     readOnly,
 }: {
     question: PlanQuestion | null;
     initialDiagram: DiagramDoc;
     onChange: (doc: DiagramDoc) => void;
+    // voice or text: the tour's last step points at that mode's answer button
+    mode: AnswerMode;
     readOnly: boolean;
 }) {
     // The "Need help?" tour. Mounted only while it runs, so each run starts again at step 1.
@@ -49,19 +53,9 @@ export default function DiagramPanel({
                 <div className="flex items-center justify-between">
                     <div className="kicker">Your design</div>
                     {/* nothing to teach once it's read-only: no palette, no undo */}
-                    {!readOnly && (
-                        <Button
-                            variant="ghost"
-                            className="flex items-center gap-1.5 text-[12.5px]"
-                            onClick={() => setTouring(true)}
-                            disabled={touring}
-                        >
-                            <Question size={14} />
-                            Need help?
-                        </Button>
-                    )}
+                    {!readOnly && <NeedHelpButton onClick={() => setTouring(true)} disabled={touring} />}
                 </div>
-                {touring && <DiagramTour onEnd={() => setTouring(false)} />}
+                {touring && <GuidedTour buildSteps={() => diagramTourSteps(mode)} onEnd={() => setTouring(false)} />}
                 <ReactFlowProvider>
                     <DiagramBoard initialDiagram={initialDiagram} onChange={onChange} readOnly={readOnly} />
                 </ReactFlowProvider>

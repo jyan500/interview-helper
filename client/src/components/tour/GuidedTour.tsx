@@ -1,11 +1,8 @@
 /**
- * The canvas's "Need help?" tour: four tooltips, one at a time, each beside the part of the canvas it
- * explains (react-joyride). DiagramPanel mounts this only while the tour runs, so every run starts
- * fresh at step 1, and unmounts it through `onEnd`.
- *
- * Steps find their targets in the DOM: `data-tour` attributes on the palette and the canvas, and class
- * names on React Flow's two <Controls> (which don't forward data attributes). There's one canvas on
- * the page at a time, so plain document selectors are enough.
+ * The app's "Need help?" tour shell: tooltips one at a time, each beside the part of the page it
+ * explains (react-joyride). Flow-agnostic: the caller hands in `buildSteps` (see ./steps.ts, one builder
+ * per flow) and owns whether the tour is running. Callers mount this only while the tour runs, so every
+ * run starts fresh at step 1, and unmount it through `onEnd`.
  */
 import { useState } from "react";
 import { ACTIONS, EVENTS, Joyride, ORIGIN, type EventData, type Step } from "react-joyride";
@@ -17,54 +14,9 @@ const INK = "#e9e9ed"; // --color-ink
 const ACCENT = "#9184d9"; // --color-accent
 const MUTED = "#a1a1aa"; // secondary button text
 
-const CANVAS = "[data-tour='diagram-canvas']";
-
-// Step 2 points at a real component when there is one (so the handles it talks about are right
-// there), and at the whole canvas, centered, when the canvas is still empty.
-function buildSteps(firstNode: HTMLElement | null): Step[] {
-    return [
-        {
-            target: "[data-tour='diagram-palette']",
-            title: "Add components",
-            content:
-                "Drag a component onto the canvas to place it there, or click it to drop one in the middle of the view.",
-            placement: "right",
-        },
-        {
-            target: firstNode ?? CANVAS,
-            title: "Connect and rename",
-            content:
-                "Hover a component to see the dots on its edges. Drag from a dot to another component to draw an " +
-                "arrow. Double-click a component to rename it, or select it to edit its name and notes in the " +
-                "panel on the right.",
-            placement: firstNode ? "right" : "center",
-        },
-        //  React Flow's <Controls> don't pass data attributes through, so React Joyride needs to detect these components 
-        // using classnames
-        {
-            target: ".diagram-history-controls",
-            title: "Undo and redo",
-            content:
-                "Undo or redo your last changes. Ctrl+Z and Ctrl+Shift+Z work too, and Ctrl+C / Ctrl+V copies " +
-                "what's selected.",
-            placement: "bottom-start",
-        },
-        {
-            target: ".diagram-zoom-controls",
-            title: "Move around",
-            content:
-                "Zoom in, zoom out, or fit the whole design on screen. Left-click and drag on empty canvas to " +
-                "select several components; right-click and drag to move the canvas.",
-            placement: "right",
-        },
-    ];
-}
-
-export default function DiagramTour({ onEnd }: { onEnd: () => void }) {
-    // Built once, when the tour opens: whether there's a component to point at is decided then.
-    const [steps] = useState(() =>
-        buildSteps(document.querySelector<HTMLElement>(`${CANVAS} .react-flow__node`)),
-    );
+export default function GuidedTour({ buildSteps, onEnd }: { buildSteps: () => Step[]; onEnd: () => void }) {
+    // Built once, when the tour opens: anything a builder reads off the page is decided then.
+    const [steps] = useState(buildSteps);
 
     // The tour is over when Joyride says so (Done, Skip, or the X), or on Esc: Joyride's own Esc only
     // closes the current step and moves on, but Esc should end the whole tour, like closing a modal.
