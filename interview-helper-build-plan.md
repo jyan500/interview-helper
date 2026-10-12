@@ -1850,4 +1850,32 @@ incl. that shortcuts don't fire in the answer box), and the `diagram_updated` re
 Known gap (server, pre-existing): `/api/answer` saves the diagram BEFORE the LLM call. If that call then fails,
 the client's retry re-attaches it, but the server sees "unchanged" and the interviewer never gets the text.
 
-**Next:** that browser pass, then commit; then Phase 3 (read-only `DiagramView` on the detail page, undo/redo).
+### 2026-10-11 — Canvas "Need help?" tour (branch `system-design-canvas-instruction-tour`)
+
+The Phase 2 canvas, copy/paste and undo/redo are committed and merged (PRs #52, #53).
+
+Done (code; `npx tsc` clean, build clean):
+- `react-joyride` 3.2.0. New `components/diagram/DiagramTour.tsx` has 4 steps:
+  1. the palette;
+  2. connect and rename (points at the first component, or at the canvas, centered, when it's empty);
+  3. undo/redo;
+  4. zoom, left-drag select and right-drag pan.
+- The steps find their targets through `data-tour` on the palette and canvas, and through the class names
+  `diagram-history-controls` / `diagram-zoom-controls` on the two React Flow `<Controls>`.
+- `DiagramPanel` has a "Need help?" ghost button (hidden when read-only). It mounts the tour only while it runs, so
+  each run starts at step 1.
+- v3 details found in the installed types:
+  - The X advances to the next step by default, so it's set to end the tour (`closeButtonAction: "skip"`).
+  - Esc only closes the current step by default, so `onEvent` also ends the tour on a keyboard CLOSE.
+  - `primaryColor` must be hex (Joyride derives tints from it), so the theme colors are literal values of the
+    `index.css` tokens.
+  - `overlayClickAction: false`, per the modal convention.
+- Bundle: Joyride is in the lazy `DiagramPanel` chunk (+62 kB raw). The main chunk grew ~14 kB (~6 kB gz) because
+  `@floating-ui/dom` is shared with react-select, which pulls `@floating-ui/core` into the main chunk. Accepted:
+  splitting it out wouldn't help, because the main chunk would still load it at startup.
+
+NOT yet verified in the browser: tooltip placement for each step, the empty vs. populated step 2, Esc / X / Skip /
+Done all ending the tour and allowing a rerun, and the theme.
+
+**Next:** that browser pass and the earlier canvas pass, then commit. Then Phase 3: a read-only `DiagramView` on the
+detail page.

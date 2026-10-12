@@ -6,12 +6,16 @@
  * system-design question comes up. Like CodingPanel it's presentational: SessionPage owns the
  * DiagramDoc it attaches to the next answer; the board inside owns React Flow's own state.
  */
+import { useState } from "react";
 import { ReactFlowProvider } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { Question } from "@phosphor-icons/react";
 import type { DiagramDoc, PlanQuestion } from "../../api";
+import Button from "../Button";
 import FormattedText from "../FormattedText";
 import LoadingDots from "../LoadingDots";
 import DiagramBoard from "./DiagramBoard";
+import DiagramTour from "./DiagramTour";
 
 export default function DiagramPanel({
     question,
@@ -24,6 +28,9 @@ export default function DiagramPanel({
     onChange: (doc: DiagramDoc) => void;
     readOnly: boolean;
 }) {
+    // The "Need help?" tour. Mounted only while it runs, so each run starts again at step 1.
+    const [touring, setTouring] = useState(false);
+
     return (
         <div className="flex min-h-0 flex-col gap-4 border-t border-divider p-5 lg:border-l lg:border-t-0">
             {/* The question: its own scroll, so a long prompt never squeezes the canvas */}
@@ -39,7 +46,22 @@ export default function DiagramPanel({
             </div>
 
             <div className="flex min-h-0 flex-1 flex-col gap-2.5">
-                <div className="kicker">Your design</div>
+                <div className="flex items-center justify-between">
+                    <div className="kicker">Your design</div>
+                    {/* nothing to teach once it's read-only: no palette, no undo */}
+                    {!readOnly && (
+                        <Button
+                            variant="ghost"
+                            className="flex items-center gap-1.5 text-[12.5px]"
+                            onClick={() => setTouring(true)}
+                            disabled={touring}
+                        >
+                            <Question size={14} />
+                            Need help?
+                        </Button>
+                    )}
+                </div>
+                {touring && <DiagramTour onEnd={() => setTouring(false)} />}
                 <ReactFlowProvider>
                     <DiagramBoard initialDiagram={initialDiagram} onChange={onChange} readOnly={readOnly} />
                 </ReactFlowProvider>

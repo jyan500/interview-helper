@@ -13,7 +13,7 @@ export default function DiagramPalette({
     onAdd: (kind: DiagramNodeKind) => void;
 }) {
     return (
-        <div className="flex min-h-0 w-[132px] flex-none flex-col gap-1 overflow-y-auto pr-1">
+        <div data-tour="diagram-palette" className="flex min-h-0 w-[132px] flex-none flex-col gap-1 overflow-y-auto pr-1">
             {DIAGRAM_NODE_KINDS.map((item) => {
                 const KindIcon = item.icon;
                 return (
