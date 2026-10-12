@@ -33,6 +33,9 @@ import SettingsModal from "../components/SettingsModal";
 import CodingPanel from "../components/CodingPanel";
 import Button from "../components/Button";
 import Tooltip from "../components/Tooltip";
+import GuidedTour from "../components/tour/GuidedTour";
+import NeedHelpButton from "../components/tour/NeedHelpButton";
+import { sessionTourSteps } from "../components/tour/steps";
 import {
     useGetScorecardMutation,
     useLazyGetResumeQuery,
@@ -195,6 +198,9 @@ export default function SessionPage() {
     // The in-session Settings modal (behind the header gear): mic + live test meter, TTS engine, and
     // the voice/text mode toggle. Open state only — the settings themselves live in the state above.
     const [settingsOpen, setSettingsOpen] = useState(false);
+    // The header's "How it works" tour of the session controls. Mounted only while it runs, so each run
+    // starts again at step 1. (The coding and diagram panels have their own "Need help?" tours.)
+    const [touring, setTouring] = useState(false);
 
     const { supported, listening, confirming, countdownMs, transcribing, stream, start, stop, cancel, keepListening } =
         useSmartVoiceTurn({
@@ -539,17 +545,22 @@ export default function SessionPage() {
                     <span className="tag tag-outline capitalize">{mode}</span>
                 </div>
                 <div className="flex items-center gap-[18px] text-[13px] text-neutral-300">
+                    {!ended && <NeedHelpButton label="How it works" onClick={() => setTouring(true)} disabled={touring} />}
                     <span className="font-heading text-[18px] text-ink">{clock}</span>
                     <Button
                         variant="ghost"
                         icon
                         aria-label="Settings"
                         onClick={() => setSettingsOpen(true)}
+                        data-tour="session-settings"
                     >
                         <Gear size={17} weight="regular" />
                     </Button>
                 </div>
             </div>
+            {touring && (
+                <GuidedTour buildSteps={() => sessionTourSteps(mode, smartVoiceLocked)} onEnd={() => setTouring(false)} />
+            )}
 
             {/* ── Body: centre column + right rail — or, in a coding round or on a system-design question,
                 the conversation beside the coding panel / diagram canvas (stacked on narrow screens, where
@@ -722,6 +733,7 @@ function VoiceColumn({
             className="flex items-center gap-2 border-l border-divider disabled:opacity-50"
             style={{ padding: "13px 18px" }}
             onClick={onToggleVoiceMode}
+            data-tour="voice-mode"
             disabled={smartVoiceLocked || listening || confirming || preparing}
         >
             Mode: {voiceMode}
@@ -800,7 +812,7 @@ function VoiceColumn({
                             className="flex items-center gap-[9px] text-[15px] disabled:opacity-50"
                             style={{ padding: "13px 30px" }}
                             onClick={onToggleMic}
-                            data-tour="answer-button" // the coding and diagram tours' last step (tour/steps.ts)
+                            data-tour="answer-button" // every tour's answer step (tour/steps.ts)
                             // Locked while the AI is speaking, while a turn is being prepared
                             // (transcribe/answer/TTS), or once ended — so no new recording starts over any of those.
                             disabled={speaking || preparing || ended}
@@ -824,6 +836,7 @@ function VoiceColumn({
                     className="flex items-center gap-2 border-l border-divider"
                     style={{ padding: "13px 18px" }}
                     onClick={onSwitch}
+                    data-tour="switch-mode"
                 >
                     <PencilSimple size={16} weight="regular" />
                     Switch to text
@@ -833,6 +846,7 @@ function VoiceColumn({
                     className="border-l border-divider disabled:opacity-50"
                     style={{ padding: "13px 20px" }}
                     onClick={onEnd}
+                    data-tour="end-session"
                     disabled={ended}
                 >
                     {ended ? "Ending…" : "End session"}
@@ -1027,6 +1041,7 @@ function TextColumn({
                                 className="flex items-center gap-2"
                                 style={{ padding: "10px 16px" }}
                                 onClick={onSwitch}
+                                data-tour="switch-mode"
                             >
                                 <Microphone size={16} weight="regular" />
                                 Switch to voice
@@ -1036,6 +1051,7 @@ function TextColumn({
                                 className="border-l border-divider disabled:opacity-50"
                                 style={{ padding: "10px 18px" }}
                                 onClick={onEnd}
+                                data-tour="end-session"
                                 disabled={ended}
                             >
                                 {ended ? "Ending…" : "End session"}
@@ -1047,7 +1063,7 @@ function TextColumn({
                                 className="text-[15px] disabled:opacity-50"
                                 style={{ padding: "11px 28px" }}
                                 onClick={onSend}
-                                data-tour="answer-button" // the coding and diagram tours' last step (tour/steps.ts)
+                                data-tour="answer-button" // every tour's answer step (tour/steps.ts)
                                 disabled={answering || transcribing || ended || !canSend}
                             >
                                 {transcribing ? "Transcribing…" : answering ? "Sending…" : "Send answer"}
@@ -1106,7 +1122,7 @@ function RightRail({
             </div>
 
             {/* Scratchpad — real, editable, local to this browser tab */}
-            <div>
+            <div data-tour="scratchpad">
                 <div className="kicker">Scratchpad</div>
                 <textarea
                     value={scratch}

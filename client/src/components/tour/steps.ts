@@ -80,6 +80,84 @@ function answerStep(mode: AnswerMode, deliverable: string, explain: string): Ste
     };
 }
 
+// The interview session itself, for every kind of interview (the header's "How it works"). The answer
+// controls follow the mode: voice shows the mic and the smart/manual toggle, text shows Send answer.
+//   smartVoiceLocked — the round turns smart mode off (coding, system design), so the toggle can't flip
+export function sessionTourSteps(mode: AnswerMode, smartVoiceLocked: boolean): Step[] {
+    const answerSteps: Step[] =
+        mode === "voice"
+            ? [
+                  {
+                      target: "[data-tour='answer-button']",
+                      title: "Record your answer",
+                      content:
+                          "Press Record your answer when you're ready to speak. The interviewer hears your answer " +
+                          "once it's sent, and replies with a follow-up or the next question.",
+                      placement: "top",
+                  },
+                  {
+                      target: "[data-tour='voice-mode']",
+                      title: "Smart or manual",
+                      content: smartVoiceLocked
+                          ? "This round uses manual mode: press the button again when you're done to send your " +
+                            "answer. Smart mode is off here, since you'll pause to write."
+                          : "In manual mode, press the button again when you're done to send your answer. In smart " +
+                            "mode, recording starts on its own after each question, and your answer is sent " +
+                            "automatically after a short silence. A countdown lets you keep talking if you were " +
+                            "only pausing.",
+                      placement: "top",
+                  },
+              ]
+            : [
+                  {
+                      target: "[data-tour='answer-button']",
+                      title: "Send your answer",
+                      content:
+                          "Type your answer in the box, then press Send answer or Enter. Shift + Enter adds a new line.",
+                      placement: "top",
+                  },
+              ];
+    const steps: Step[] = [
+        ...answerSteps,
+        {
+            target: "[data-tour='switch-mode']",
+            title: mode === "voice" ? "Prefer typing?" : "Prefer speaking?",
+            content:
+                mode === "voice"
+                    ? "Switch to text to type your answers instead. You can switch back at any time."
+                    : "Switch to voice to speak your answers instead. You can switch back at any time.",
+            placement: "top",
+        },
+        {
+            target: "[data-tour='end-session']",
+            title: "End early",
+            content:
+                "End the session whenever you like. Your answers up to that point are graded, and you get a " +
+                "scorecard for them.",
+            placement: "top",
+        },
+    ];
+    // The scratchpad lives in the right rail, which only shows beside a behavioral interview (a coding or
+    // system-design panel takes its place) and only on wide screens; skip the step when it isn't visible.
+    const scratchpad = document.querySelector<HTMLElement>("[data-tour='scratchpad']");
+    if (scratchpad?.offsetParent) {
+        steps.push({
+            target: scratchpad,
+            title: "Scratchpad",
+            content:
+                "Jot notes here while you think. It's private: it isn't sent to the interviewer or saved.",
+            placement: "left",
+        });
+    }
+    steps.push({
+        target: "[data-tour='session-settings']",
+        title: "Settings",
+        content: "Pick and test your microphone, choose the interviewer's voice, or switch between voice and text.",
+        placement: "bottom-end",
+    });
+    return steps;
+}
+
 // The coding round.
 export function codingTourSteps(mode: AnswerMode): Step[] {
     return [
