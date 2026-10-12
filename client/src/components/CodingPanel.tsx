@@ -18,13 +18,22 @@ import { cpp } from "@codemirror/lang-cpp";
 import { vim } from "@replit/codemirror-vim";
 import { emacs } from "@replit/codemirror-emacs";
 import type { PlanQuestion } from "../api";
-import { CODE_LANGUAGES, type CodeLanguage, type EditorKeymap, type EditorSettings } from "../constants";
+import {
+    CODE_LANGUAGES,
+    type AnswerMode,
+    type CodeLanguage,
+    type EditorKeymap,
+    type EditorSettings,
+} from "../constants";
 import { loadStoredEditorSettings, saveStoredEditorSettings } from "../helpers";
 import { nocturneSelectStyles } from "../selectStyles";
 import Button from "./Button";
 import EditorSettingsModal from "./EditorSettingsModal";
 import FormattedText from "./FormattedText";
 import LoadingDots from "./LoadingDots";
+import GuidedTour from "./tour/GuidedTour";
+import NeedHelpButton from "./tour/NeedHelpButton";
+import { codingTourSteps } from "./tour/steps";
 
 type LanguageOption = (typeof CODE_LANGUAGES)[number];
 
@@ -63,6 +72,7 @@ export default function CodingPanel({
     onChangeCode,
     language,
     onChangeLanguage,
+    mode,
     readOnly,
 }: {
     problem: PlanQuestion | null;
@@ -70,8 +80,13 @@ export default function CodingPanel({
     onChangeCode: (code: string) => void;
     language: CodeLanguage;
     onChangeLanguage: (language: CodeLanguage) => void;
+    // voice or text: the tour's last step points at that mode's answer button
+    mode: AnswerMode;
     readOnly: boolean;
 }) {
+    // The "Need help?" tour. Mounted only while it runs, so each run starts again at step 1.
+    const [touring, setTouring] = useState(false);
+
     // The editor preferences (the gear). Editor-only, so they live here rather than in SessionPage —
     // unlike `code`/`language`, nothing about them is sent with an answer. Persisted on every change.
     const [settings, setSettings] = useState<EditorSettings>(loadStoredEditorSettings);
@@ -117,7 +132,9 @@ export default function CodingPanel({
                 <div className="flex items-center justify-between gap-3">
                     <div className="kicker">Your code</div>
                     <div className="flex items-center gap-2">
-                        <div className="w-[160px]">
+                        {/* nothing to teach once it's read-only */}
+                        {!readOnly && <NeedHelpButton onClick={() => setTouring(true)} disabled={touring} />}
+                        <div data-tour="code-language" className="w-[160px]">
                             <Select<LanguageOption>
                                 options={CODE_LANGUAGES}
                                 value={CODE_LANGUAGES.find((o) => o.value === language)}
@@ -132,7 +149,8 @@ export default function CodingPanel({
                         </Button>
                     </div>
                 </div>
-                <div className="min-h-0 flex-1 overflow-hidden rounded-md border border-divider">
+                {touring && <GuidedTour buildSteps={() => codingTourSteps(mode)} onEnd={() => setTouring(false)} />}
+                <div data-tour="code-editor" className="min-h-0 flex-1 overflow-hidden rounded-md border border-divider">
                     <CodeMirror
                         value={code}
                         onChange={onChangeCode}

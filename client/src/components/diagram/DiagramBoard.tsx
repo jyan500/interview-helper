@@ -440,7 +440,7 @@ export default function DiagramBoard({
                         maxZoom={2}
                     >
                         <Background variant={BackgroundVariant.Dots} gap={DIAGRAM_GRID} size={1} />
-                        {/* the class names are DiagramTour's step targets */}
+                        {/* the class names are the diagram tour's step targets (tour/steps.ts) */}
                         <Controls className="diagram-zoom-controls" showInteractive={false} />
                         {!readOnly && (
                             <Controls
