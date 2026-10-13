@@ -45,6 +45,15 @@ export const nocturneSelectStyles: StylesConfig<any, boolean, GroupBase<any>> = 
         ":active": { backgroundColor: "var(--color-accent-800)" },
     }),
     singleValue: (base) => ({ ...base, color: "var(--color-ink)" }),
+    // A multi-select's picked values (chips): an accent tint, readable ink, and a remove (x) that
+    // highlights on hover instead of react-select's light-red default.
+    multiValue: (base) => ({ ...base, backgroundColor: "var(--color-accent-900)" }),
+    multiValueLabel: (base) => ({ ...base, color: "var(--color-ink)" }),
+    multiValueRemove: (base) => ({
+        ...base,
+        color: "var(--color-neutral-400)",
+        ":hover": { backgroundColor: "var(--color-accent-800)", color: "var(--color-ink)" },
+    }),
     input: (base) => ({ ...base, color: "var(--color-ink)" }),
     placeholder: (base) => ({
         ...base,

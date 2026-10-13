@@ -156,7 +156,7 @@ export const MIC_SILENCE_LEVEL = 0.05;
 export const MIC_SILENCE_MS = 2500;
 
 /**
- * Profile pictures — the client-direct Supabase Storage upload (see SettingsPage + supabase.ts).
+ * Profile pictures — the client-direct Supabase Storage upload (see profile/AvatarCard + supabase.ts).
  *
  *   AVATAR_BUCKET         — the public Storage bucket name; must match the one created by
  *                           server/db/policies/storage_avatars_bucket.sql. The object path is
@@ -177,6 +177,18 @@ export const AVATAR_ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp", "
  */
 export const JD_MIN_CHARS = 100;
 export const JD_MAX_CHARS = 20_000;
+
+/**
+ * The candidate background's caps — mirror server/api.py (field lengths) and server/tools/background.py
+ * (counts). Checked in the Profile page's forms so a save never round-trips just to be rejected; the Add
+ * buttons disable at the count caps.
+ */
+export const BACKGROUND_NAME_MAX_CHARS = 128;
+export const BACKGROUND_DESCRIPTION_MAX_CHARS = 1500;
+export const BACKGROUND_URL_MAX_CHARS = 512;
+export const MAX_EXPERIENCES = 15;
+export const MAX_PROJECTS = 15;
+export const MAX_SKILLS = 50;
 
 /**
  * The two KINDS of interview as the UI names them: a "Job" interview is a round written for a saved

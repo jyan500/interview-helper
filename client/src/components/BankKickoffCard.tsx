@@ -6,7 +6,7 @@
  *
  * The searchable async role/level pickers are wrapped in RHF so both are required before Start
  * enables (mode "onChange" keeps formState.isValid live). They PRE-FILL from the profile default, keyed
- * on the default's slugs so they re-seed when it changes (e.g. on the Settings page) but never clobber
+ * on the default's slugs so they re-seed when it changes (e.g. on the Profile page) but never clobber
  * a manual pick — see useSeededSelectFields. "Set as default" saves the current picks as that default.
  */
 import { useForm } from "react-hook-form";

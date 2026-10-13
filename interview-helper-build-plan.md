@@ -412,7 +412,7 @@ get different questions and level-calibrated feedback).
 ## CURRENT STATUS (resume point)
 
 *2026-10-12: **Candidate background** (Profile page roles, projects and skills, fed into behavioral interviews).
-Phase 1 (schema + API) is done on branch `profile-page`; Phase 2 (client) is next. See the 2026-10-12 section at
+Phases 1 (schema + API) and 2 (client, browser pass pending) are done on branch `profile-page`; Phase 3 (prompt injection) is next. See the 2026-10-12 section at
 the end.*
 
 *Last updated 2026-10-01. Phases A–F all ✅; Phase G (production hardening & deploy) is still
@@ -1922,3 +1922,44 @@ Done (migration `d8f2b4a6c0e3` applied, seed run, tool smoke test passed):
 
 **Next:** review and commit Phase 1, then Phase 2 (the client). The plan is in
 `~/.claude/plans/i-would-like-to-magical-prism.md`.
+
+### 2026-10-13 — Candidate background, Phase 2: client (branch `profile-page`)
+
+Done (`npx tsc` clean, `vite build` clean):
+- **Account menu.**
+  - The nav avatar now opens a dropdown with Profile and Settings, instead of linking to `/settings`.
+  - Split into three parts:
+    - `Dropdown.tsx`: a reusable shell that owns the open state and the trigger button, takes its items as `children`,
+      and closes on a click inside its panel.
+    - `DropdownItem.tsx`: an icon plus a route link.
+    - `AccountMenu.tsx`: the two pieces composed together.
+  - New `useClickOutside(ref, onOutside, active)` in `hooks.ts` closes it on a mousedown outside or on Esc.
+- **`/profile` page** (`pages/ProfilePage.tsx`). It holds AvatarCard and DefaultsCard (both moved from `settings/`
+  to `components/profile/`), plus three new cards:
+  - `ExperienceCard`, with `ExperienceModal` for add/edit. It uses month inputs, "I currently work here" sends
+    `end: null`, the end month can't be before the start, and the description has a counter.
+  - `ProjectsCard`, with `ProjectModal` (name, optional http(s) link, description).
+  - `SkillsCard`: a non-creatable multi-select over `/api/skills`, saved with a Save button.
+
+  The role and project rows share `BackgroundRow`, which has a `loading` skeleton. Deleting a row asks first, through
+  a new generic `ConfirmDeleteModal`. The Add buttons are disabled at the caps of 15 roles and 15 projects.
+- **Settings** keeps only AccountCard and PasswordCard. `SettingsCard` gained an optional `action` slot in its header,
+  which holds the "Add role" and "Add project" buttons.
+- **Selects.**
+  - New `AsyncPaginateMultiSelect` with its RHF wrapper `ControlledAsyncPaginateMultiSelect`.
+  - The paging logic moved into `pagedLoadOptions` in `helpers.ts`, so the single and multi selects share one copy.
+  - `useSeededSelectFields` now also seeds an Option[].
+  - `selectStyles` gained dark-theme styles for the multi-select chips.
+- **Dates.** `formatMonthYear` / `formatMonthRange` ("Jan 2022 to Present") in `helpers.ts` are a deliberate,
+  month-only exception to the formatShortDate rule. They parse the parts in local time, because
+  `new Date("2022-01")` is UTC midnight and would show as Dec 2021 in US time zones.
+
+NOT yet verified in the browser:
+- the dropdown: an outside click, Esc, and choosing an item all close it;
+- avatar upload and the defaults card from `/profile`;
+- role and project add, edit and delete (including the current-role checkbox and the date order check);
+- the skills multi-select seeding, saving, and surviving a reload;
+- how the dark theme renders the month inputs' picker.
+
+**Next:** that browser pass and the Phase 2 commit, then Phase 3: inject `format_candidate_background` into the
+behavioral persona and round generation, gated on a new `round_types.uses_candidate_background` flag.

@@ -11,6 +11,7 @@ import InterviewDetailPage from "./pages/InterviewDetailPage";
 import QuestionsPage from "./pages/QuestionsPage";
 import JobsPage from "./pages/JobsPage";
 import JobDetailPage from "./pages/JobDetailPage";
+import ProfilePage from "./pages/ProfilePage";
 import SettingsPage from "./pages/SettingsPage";
 import { AuthProvider } from "./auth/AuthProvider";
 import { ToastProvider } from "./toast/ToastProvider";
@@ -75,6 +76,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                             <Route path="/questions" element={<QuestionsPage />} />
                             <Route path="/jobs" element={<JobsPage />} />
                             <Route path="/jobs/:id" element={<JobDetailPage />} />
+                            <Route path="/profile" element={<ProfilePage />} />
                             <Route path="/settings" element={<SettingsPage />} />
                         </Route>
 

@@ -19,7 +19,7 @@ import { optionFromItem } from "../../helpers";
 import type { SelectOption } from "../AsyncPaginateSelect";
 import { ControlledAsyncPaginateSelect } from "../ControlledAsyncPaginateSelect";
 import Button from "../Button";
-import SettingsCard from "./SettingsCard";
+import SettingsCard from "../settings/SettingsCard";
 
 type DefaultsFields = {
     role: SelectOption | null;

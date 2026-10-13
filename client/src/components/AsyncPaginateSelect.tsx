@@ -10,9 +10,9 @@
  * back) and a `name` (the label we show), which is the shape both option endpoints already return.
  */
 import { AsyncPaginate } from "react-select-async-paginate";
-import type { LoadOptions } from "react-select-async-paginate";
 import type { GroupBase } from "react-select";
 import type { OptionPageQuery, Page } from "../api";
+import { pagedLoadOptions } from "../helpers";
 import { nocturneSelectStyles } from "../selectStyles";
 
 // The Option shape react-select speaks natively: the value we send back (a slug) plus the label
@@ -37,12 +37,15 @@ interface SelectRow {
     name: string;
 }
 
+// THE ONE INJECTION POINT: the endpoint that pulls a page of rows. This is a lazy RTK Query trigger
+// (e.g. from useLazyGetRolesQuery) — call it with { q, page }, then `.unwrap()` for the Page envelope.
+// Passing the trigger (not a hand-written loadOptions) is what keeps the fetch/paginate logic in ONE
+// place (pagedLoadOptions), while still letting each instance hit its own route. Shared with the multi
+// variant (AsyncPaginateMultiSelect).
+export type FetchPage = (arg: OptionPageQuery) => { unwrap: () => Promise<Page<SelectRow>> };
+
 export interface AsyncPaginateSelectProps {
-    // THE ONE INJECTION POINT: the endpoint that pulls a page of rows. This is a lazy RTK Query
-    // trigger (e.g. from useLazyGetRolesQuery) — call it with { q, page }, then `.unwrap()` for the
-    // Page envelope. Passing the trigger (not a hand-written loadOptions) is what keeps the
-    // fetch/paginate logic in ONE place, here, while still letting each instance hit its own route.
-    fetchPage: (arg: OptionPageQuery) => { unwrap: () => Promise<Page<SelectRow>> };
+    fetchPage: FetchPage;
     // Controlled value/onChange in Option shape. The RHF glue in ControlledAsyncPaginateSelect
     // feeds these from a form field; a non-form caller can drive them from plain useState.
     value: SelectOption | null;
@@ -74,38 +77,9 @@ export function AsyncPaginateSelect({
     isLoading,
     cacheUniqs,
 }: AsyncPaginateSelectProps) {
-    // The pagination dance, owned here instead of at every call site. AsyncPaginate calls this with
-    // the live search text + current cursor; we fetch that page, map rows→Options, and report both
-    // the next cursor and whether more pages remain (page*size < total => there's another).
-    const loadOptions: LoadOptions<SelectOption, GroupBase<SelectOption>, PageAdditional> = async (
-        search,
-        _loaded,
-        additional,
-    ) => {
-        const page = additional?.page ?? 1;
-        try {
-            const res = await fetchPage({ q: search, page }).unwrap();
-            return {
-                options: res.items.map((row) => ({ value: row.slug, label: row.name })),
-                hasMore: res.page * res.size < res.total,
-                additional: { page: page + 1 },
-            };
-        } catch (e) {
-            // loadOptions MUST NOT throw. react-select-async-paginate's error path (see its
-            // requestOptions) only flips `isLoading` back to false on a rejected load — it leaves
-            // `hasMore` at its previous value, which is `true` for a first load. That keeps the
-            // library's "may I request?" gate open, so every subsequent re-render re-fires the fetch.
-            // A token refresh makes this pathological: refreshSession() -> onAuthStateChange ->
-            // AuthProvider re-renders the tree -> gate is open -> fetch -> 401 -> refresh -> ... a
-            // tight retry loop against a failing endpoint (the bug seen intermittently on the pickers).
-            //
-            // Returning a TERMINAL page instead — no options, hasMore:false, cursor NOT advanced —
-            // records a completed load with nothing more to fetch, which closes that gate. The user
-            // can retry by changing the search text (a fresh cache key) or reopening the menu later.
-            console.error("Failed to load options", e);
-            return { options: [], hasMore: false, additional: { page } };
-        }
-    };
+    // The pagination dance (cursor threading, row→Option mapping, hasMore), shared with the multi
+    // variant; see pagedLoadOptions in helpers.ts.
+    const loadOptions = pagedLoadOptions(fetchPage);
 
     return (
         <AsyncPaginate<SelectOption, GroupBase<SelectOption>, PageAdditional, false>

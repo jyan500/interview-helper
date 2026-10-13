@@ -3,7 +3,7 @@
  *
  * This object is the frontend's entire relationship with Supabase, and it is worth being
  * precise about how small that relationship is: we use it for AUTH, plus ONE narrow bit of
- * STORAGE — uploading the profile picture (see SettingsPage). It can also query tables directly
+ * STORAGE — uploading the profile picture (see profile/AvatarCard). It can also query tables directly
  * (that's the PostgREST "Data API" your RLS policies guard), and we deliberately don't — every
  * piece of INTERVIEW data comes from FastAPI, which owns the rules. See the Phase B notes in
  * server/api.py for why that split is the design. The avatar is the one exception, and a

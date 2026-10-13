@@ -1,7 +1,6 @@
 /**
- * Profile picture card — the profile-photo upload, unchanged in behaviour from when it was the whole
- * Settings page; it's just been lifted into its own self-contained card so the page can compose it
- * alongside the other settings sections.
+ * Profile picture card — the profile-photo upload, a self-contained card on the Profile page (it began
+ * as the whole Settings page, then moved to Profile with the rest of the interview-facing profile).
  *
  * THE UPLOAD IS CLIENT-DIRECT to Supabase Storage (the one place in the SPA that talks to Supabase for
  * something other than auth — a profile picture isn't interview data, it's a public image, and Storage
@@ -27,7 +26,7 @@ import { AVATAR_ACCEPTED_TYPES, AVATAR_BUCKET } from "../../constants";
 import { avatarObjectPath, initialsFrom, validateAvatarFile } from "../../helpers";
 import Avatar from "../Avatar";
 import Button from "../Button";
-import SettingsCard from "./SettingsCard";
+import SettingsCard from "../settings/SettingsCard";
 
 export default function AvatarCard() {
     const { session } = useAuth();
