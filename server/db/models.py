@@ -102,12 +102,13 @@ details.
 from __future__ import annotations
 
 import uuid as uuid_pkg
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
     Column,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -230,6 +231,10 @@ class Profile(Base, TimestampMixin):
     # selectinload (see the lazy="raise" note up top).
     role: Mapped[Role | None] = relationship(lazy="raise")
     level: Mapped[Level | None] = relationship(lazy="raise")
+    # the candidate's background (the Profile page) — see ProfileExperience and friends below.
+    experiences: Mapped[list[ProfileExperience]] = relationship(lazy="raise")
+    projects: Mapped[list[ProfileProject]] = relationship(lazy="raise")
+    skill_links: Mapped[list[ProfileSkill]] = relationship(lazy="raise")
 
 
 # ===========================================================================
@@ -952,3 +957,89 @@ class Job(Base, TimestampMixin):
 
     role: Mapped[Role] = relationship(lazy="raise")
     level: Mapped[Level] = relationship(lazy="raise")
+
+
+# ===========================================================================
+# THE CANDIDATE'S BACKGROUND — past roles, projects, skills. What a behavioral interviewer draws on.
+# ===========================================================================
+class ProfileExperience(Base, TimestampMixin):
+    """One past (or current) role on the candidate's Profile page: title, company, dates, what they did.
+
+    A TABLE, not a JSONB list on profiles: each row is edited and deleted on its own (the Profile page's
+    per-row modal), carries dates the API validates, and is owned the same direct way as jobs, so RLS is
+    the one-line `auth.uid() = profile_id`.
+
+    DATES ARE MONTH-GRANULAR — a résumé says "Jan 2022 – Present", never a day. Stored as a Date pinned
+    to the 1st of the month (the API takes "YYYY-MM") so they still sort and compare as dates.
+    `end_date` NULL means "current role".
+
+    `slug` is a short uuid hex (like jobs) — what the client edits/deletes by; the int id stays internal.
+    """
+    __tablename__ = "profile_experiences"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    slug: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    profile_id: Mapped[uuid_pkg.UUID] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE"), index=True
+    )
+    title: Mapped[str] = mapped_column(String(128))
+    company: Mapped[str] = mapped_column(String(128))
+    start_date: Mapped[date] = mapped_column(Date)
+    end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+
+
+class ProfileProject(Base, TimestampMixin):
+    """A project the candidate wants to talk about: work, side, or school, with an optional link.
+
+    Deliberately NOT linked to ProfileExperience: a side project has no employer, and a work project's
+    context is already in its description. Same ownership + slug shape as ProfileExperience.
+    """
+    __tablename__ = "profile_projects"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    slug: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    profile_id: Mapped[uuid_pkg.UUID] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(128))
+    description: Mapped[str] = mapped_column(Text, default="")
+    url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
+
+class Skill(Base, TimestampMixin):
+    """A skill a candidate lists: "Python", "Kubernetes", "C++". A CURATED vocabulary, seeded from
+    data/skills.json.
+
+    A vocab table rather than per-profile strings for the usual reason (see Tag): "PostgreSQL" exists
+    once, spelled one way, and a later "which skills does this role use" join has something to point
+    at. Deliberately NOT user-generated: candidates pick from the seeded list and can't add to it, so
+    the vocabulary never fills up with typos and one-off spellings. Slugs are authored (`cpp`,
+    `csharp`), not derived from the name. RLS is public-read like the other vocab tables.
+    """
+    __tablename__ = "skills"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    slug: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # "c-plus-plus"
+    name: Mapped[str] = mapped_column(String(64))                           # "C++"
+
+
+class ProfileSkill(Base, TimestampMixin):
+    """A skill on a candidate's profile — the plain N:N of profile to skill, shaped like ProfileQuestion.
+
+    UNIQUE (profile_id, skill_id): a skill is either listed or not. Both FKs cascade.
+    """
+    __tablename__ = "profile_skills"
+    __table_args__ = (
+        UniqueConstraint("profile_id", "skill_id", name="uq_profile_skill"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[uuid_pkg.UUID] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE"), index=True
+    )
+    skill_id: Mapped[int] = mapped_column(
+        ForeignKey("skills.id", ondelete="CASCADE"), index=True
+    )
+
+    skill: Mapped[Skill] = relationship(lazy="raise")

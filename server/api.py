@@ -81,6 +81,7 @@ import asyncio
 import os
 import time
 from contextlib import asynccontextmanager
+from typing import Annotated
 
 from fastapi import Depends, FastAPI, File, HTTPException, Query, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -92,7 +93,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # why it breaks on FastAPI 0.139 and why we don't need it.)
 from fastapi_pagination import Page, Params
 from openai import AsyncOpenAI
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 # pydantic-ai owns the shape of `message_history`, so it also owns the (de)serialization.
 # Never hand-roll it: dump_python(msgs, mode="json") out, validate_python(raw) back in.
 # (Verified against pydantic-ai 2.13.0 — the repo's "check live API shapes" rule.)
@@ -135,6 +136,20 @@ from tools.interview import (
     save_scorecard,
     set_profile_avatar,
     set_profile_defaults,
+)
+from functions import parse_month
+from tools.background import (
+    create_experience,
+    create_project,
+    delete_experience,
+    delete_project,
+    list_experiences,
+    list_profile_skills,
+    list_projects,
+    list_skills,
+    set_profile_skills,
+    update_experience,
+    update_project,
 )
 from tools.jobs import create_job, delete_job, get_job, list_jobs_page, update_job
 from tools.rounds import get_round_type_by_slug, list_round_types
@@ -227,6 +242,71 @@ class ProfileUpdate(BaseModel):
 # it's stored (see AVATAR_URL_PREFIX / put_profile_avatar).
 class AvatarUpdate(BaseModel):
     avatar_url: str
+
+
+# --- THE CANDIDATE'S BACKGROUND (the Profile page) — see tools/background.py. -----------------------
+# Length caps live here (a 422 before the tool runs) because every one of these lands in a prompt that's
+# replayed each turn. The count caps (how MANY roles/projects/skills) are the tool's.
+BACKGROUND_DESCRIPTION_MAX = 1500
+MonthField = Annotated[str, Field(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")]   # "YYYY-MM"
+# strip_whitespace runs BEFORE the length checks, so "   " is rejected as empty rather than stored blank.
+NameField = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)]
+DescriptionField = Annotated[
+    str, StringConstraints(strip_whitespace=True, max_length=BACKGROUND_DESCRIPTION_MAX)
+]
+
+
+# POST /api/profile/experiences and PUT /api/profile/experiences/{slug} body. PUT replaces the whole
+# row, not a PATCH: `end = None` MEANS "current role", so None can't double as "leave this alone".
+class ExperienceBody(BaseModel):
+    title: NameField
+    company: NameField
+    start: MonthField
+    end: MonthField | None = None
+    description: DescriptionField = ""
+
+    @model_validator(mode="after")
+    def _end_not_before_start(self) -> ExperienceBody:
+        # "YYYY-MM" strings compare correctly as text
+        if self.end is not None and self.end < self.start:
+            raise ValueError("end month must not be before the start month")
+        return self
+
+
+class ExperienceOut(BaseModel):
+    slug: str
+    title: str
+    company: str
+    start: str
+    end: str | None
+    description: str
+
+
+# POST /api/profile/projects and PUT /api/profile/projects/{slug} body (full replace, url=None clears).
+class ProjectBody(BaseModel):
+    name: NameField
+    # a plain checked string, not HttpUrl: HttpUrl normalizes (adds a trailing "/"), so the link the
+    # user typed wouldn't round-trip. http(s) only, since it's rendered as a link on the Profile page.
+    url: str | None = Field(default=None, max_length=512, pattern=r"^https?://\S+$")
+    description: DescriptionField = ""
+
+
+class ProjectOut(BaseModel):
+    slug: str
+    name: str
+    url: str | None
+    description: str
+
+
+# PUT /api/profile/skills body — the whole selection, as slugs from GET /api/skills.
+class SkillsUpdate(BaseModel):
+    skills: list[str]
+
+
+class SkillOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    slug: str
+    name: str
 
 
 # Phase F — the /api/tts request. Unlike /api/transcribe (whose request is raw multipart audio,
@@ -1467,6 +1547,107 @@ async def delete_profile_avatar(user_id: str = Depends(require_user)) -> dict:
     if not result["ok"]:
         raise HTTPException(status_code=400, detail=result["error"])
     return result
+
+
+# ===========================================================================
+# THE CANDIDATE'S BACKGROUND — the Profile page's roles, projects and skills (tools/background.py).
+#
+# /api/profile/experiences  GET (list) · POST (add) · PUT/DELETE /{slug} (replace/remove one)
+# /api/profile/projects     the same shape
+# /api/profile/skills       GET · PUT {skills: [slug, ...]} replaces the whole selection
+# /api/skills               the curated skill vocab, paginated + ?q= for the async picker
+#
+# Owner-scoped like the rest of /api/profile: the VERIFIED uid goes into every query, and a single-row
+# lookup matches on slug AND that uid, so someone else's slug is just a 404, never a 403 leak.
+# ===========================================================================
+def _background_result(result: dict, key: str | None = None):
+    """Map a tools/background envelope onto HTTP: not_found -> 404, any other error -> 400."""
+    if not result["ok"]:
+        status = 404 if result["error"] == "not_found" else 400
+        raise HTTPException(status_code=status, detail=result["error"])
+    return result[key] if key else result
+
+
+@app.get("/api/profile/experiences", response_model=list[ExperienceOut])
+async def my_experiences(user_id: str = Depends(require_user)):
+    return await list_experiences(user_id)
+
+
+@app.post("/api/profile/experiences", response_model=ExperienceOut)
+async def add_experience(body: ExperienceBody, user_id: str = Depends(require_user)):
+    result = await create_experience(
+        user_id,
+        title=body.title,
+        company=body.company,
+        start=parse_month(body.start),
+        end=parse_month(body.end) if body.end is not None else None,
+        description=body.description,
+    )
+    return _background_result(result, "experience")
+
+
+@app.put("/api/profile/experiences/{slug}", response_model=ExperienceOut)
+async def replace_experience(slug: str, body: ExperienceBody, user_id: str = Depends(require_user)):
+    result = await update_experience(
+        user_id,
+        slug,
+        title=body.title,
+        company=body.company,
+        start=parse_month(body.start),
+        end=parse_month(body.end) if body.end is not None else None,
+        description=body.description,
+    )
+    return _background_result(result, "experience")
+
+
+@app.delete("/api/profile/experiences/{slug}")
+async def remove_experience(slug: str, user_id: str = Depends(require_user)) -> dict:
+    return _background_result(await delete_experience(user_id, slug))
+
+
+@app.get("/api/profile/projects", response_model=list[ProjectOut])
+async def my_projects(user_id: str = Depends(require_user)):
+    return await list_projects(user_id)
+
+
+@app.post("/api/profile/projects", response_model=ProjectOut)
+async def add_project(body: ProjectBody, user_id: str = Depends(require_user)):
+    result = await create_project(
+        user_id, name=body.name, url=body.url, description=body.description
+    )
+    return _background_result(result, "project")
+
+
+@app.put("/api/profile/projects/{slug}", response_model=ProjectOut)
+async def replace_project(slug: str, body: ProjectBody, user_id: str = Depends(require_user)):
+    result = await update_project(
+        user_id, slug, name=body.name, url=body.url, description=body.description
+    )
+    return _background_result(result, "project")
+
+
+@app.delete("/api/profile/projects/{slug}")
+async def remove_project(slug: str, user_id: str = Depends(require_user)) -> dict:
+    return _background_result(await delete_project(user_id, slug))
+
+
+@app.get("/api/profile/skills", response_model=list[SkillOut])
+async def my_skills(user_id: str = Depends(require_user)):
+    return await list_profile_skills(user_id)
+
+
+@app.put("/api/profile/skills", response_model=list[SkillOut])
+async def replace_skills(body: SkillsUpdate, user_id: str = Depends(require_user)):
+    return _background_result(await set_profile_skills(user_id, body.skills), "skills")
+
+
+@app.get("/api/skills", response_model=Page[SkillOut])
+async def skills(
+    params: Params = Depends(),
+    q: str | None = None,
+    user_id: str = Depends(require_user),
+):
+    return await list_skills(params, search=q)
 
 
 @app.get("/api/dashboard")

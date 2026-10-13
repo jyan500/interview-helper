@@ -411,6 +411,10 @@ get different questions and level-calibrated feedback).
 
 ## CURRENT STATUS (resume point)
 
+*2026-10-12: **Candidate background** (Profile page roles, projects and skills, fed into behavioral interviews).
+Phase 1 (schema + API) is done on branch `profile-page`; Phase 2 (client) is next. See the 2026-10-12 section at
+the end.*
+
 *Last updated 2026-10-01. Phases A–F all ✅; Phase G (production hardening & deploy) is still
 ahead. Interview simulation (Sim Phases 1–4), the simulation dashboard, and the Job vs Practice UI
 copy are in. **Latest (branch `addressing-interview-latency`): voice-turn latency Phase 1. Added
@@ -1879,3 +1883,42 @@ Done all ending the tour and allowing a rerun, and the theme.
 
 **Next:** that browser pass and the earlier canvas pass, then commit. Then Phase 3: a read-only `DiagramView` on the
 detail page.
+
+### 2026-10-12 — Candidate background, Phase 1: schema + backend CRUD (branch `profile-page`)
+
+The goal is for behavioral interviews to draw on the candidate's real career: ask about a role they held or a
+project they shipped, and tie it to the JD. It's split into 3 phases:
+1. schema and API (this one);
+2. client: an avatar dropdown (Profile / Settings), a new `/profile` page that takes over the avatar card and
+   default role/level card from Settings, and cards for roles, projects and skills;
+3. injecting the background into behavioral contexts only. A new `round_types.uses_candidate_background` flag
+   gates job rounds, the practice persona uses it only when the question is behavioral, and the behavioral
+   round generator gets it too.
+
+Done (migration `d8f2b4a6c0e3` applied, seed run, tool smoke test passed):
+- **Tables:**
+  - `profile_experiences`: title, company, start/end stored as Dates pinned to the 1st (NULL end means a current
+    role), description.
+  - `profile_projects`: name, url, description. Deliberately not linked to experiences.
+  - `skills`: a CURATED vocab with authored slugs (`cpp`, `csharp`), seeded from `data/skills.json` (197 entries).
+    Users only pick from it; nothing is crowdsourced.
+  - `profile_skills`: the N:N link.
+  - RLS: the owned tables use `auth.uid() = profile_id`; `skills` is public-read.
+- **`tools/background.py`:**
+  - CRUD for experiences and projects. Every lookup filters on slug AND profile_id, so another user's slug is a 404.
+  - `set_profile_skills` replaces the whole set; an unknown slug is a 400.
+  - `list_skills` is the paginated `?q=` vocab.
+  - `format_candidate_background` builds the prompt block for Phase 3.
+  - Count caps: 15 roles, 15 projects, 50 skills.
+- **Routes:**
+  - `GET/POST /api/profile/experiences` and `PUT/DELETE /api/profile/experiences/{slug}`. These are full-replace
+    PUTs, not PATCH, because `end=None` means "current".
+  - `/api/profile/projects`, with the same shape.
+  - `GET/PUT /api/profile/skills`.
+  - `GET /api/skills`.
+  - Strings are whitespace-stripped by `StringConstraints`. Descriptions are capped at 1500 characters, months must
+    match `YYYY-MM` with end ≥ start, and project URLs must be http(s).
+- **`server/functions.py`:** a new home for pure shared helpers (`parse_month`, `format_month`, `month_label`).
+
+**Next:** review and commit Phase 1, then Phase 2 (the client). The plan is in
+`~/.claude/plans/i-would-like-to-magical-prism.md`.

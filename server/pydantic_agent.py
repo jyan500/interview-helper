@@ -7,12 +7,11 @@ the Agent setup (that's copy-paste from the helpdesk); it's the LOOP at the bott
 that carries `message_history` across turns and reads the candidate's answer each
 time.
 
-READ THIS — the seam for audio (Phase 4):
-    The loop below asks the user with `speak(...)` and reads their answer with
-    `listen(...)`. Right now those are thin wrappers over print()/input() in
-    voice/adapters.py. In Phase 4 you swap ONLY their bodies for TTS/STT — the
-    agent, tools, resources, and this loop's logic don't change at all. That's the
-    entire thesis of the project, made concrete in ~2 function calls.
+THE AUDIO SEAM, historically: the loop below used to call `speak()`/`listen()` from a
+    repo-root `voice/adapters.py` (thin print()/input() wrappers), so Phase 4 could swap
+    in TTS/STT without touching the agent. Audio ended up living in the browser instead
+    (client/src/voice/ + the /api/transcribe and /api/tts routes), so that package had no
+    caller left and was removed. This text-only CLI just uses print()/input() directly.
 
 Run (from server/):  .venv/Scripts/python.exe pydantic_agent.py
 Requires .env (GEMINI_API_KEY) — copy it from ../mcp-helpdesk/server/.env.
@@ -33,11 +32,6 @@ from pydantic_ai.models.google import GoogleModel
 from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import UsageLimits
-
-# Phase 4 seam: today these are print()/input(); later they become TTS/STT. Import
-# them here so the ONLY thing that changes when you add audio is that file.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from voice.adapters import listen, speak  # noqa: E402
 
 # --- MODEL: same Gemini-via-google-genai wiring as the helpdesk. Copy USE_MODEL from
 #     there, or hardcode the model id string for now. --------------------------------
@@ -103,11 +97,11 @@ agent = Agent(
 #               message_history=history,
 #               usage_limits=UsageLimits(request_limit=8),
 #           )
-#           speak(result.output)               # <- TTS seam (print for now)
+#           print(result.output)
 #           history = result.all_messages()    # carry context across turns
 #
 #           for _ in range(6):                 # turn cap = interview-loop guardrail
-#               answer = listen()              # <- STT seam (input for now)
+#               answer = input("your answer > ")
 #               if answer.strip().lower() in {"quit", "exit", "done"}:
 #                   break
 #               result = await agent.run(
@@ -119,7 +113,7 @@ agent = Agent(
 #                   message_history=history,
 #                   usage_limits=UsageLimits(request_limit=8),
 #               )
-#               speak(result.output)
+#               print(result.output)
 #               history = result.all_messages()
 #               print("USAGE:", result.usage)  # cost visibility per turn (property, no parens)
 #
@@ -146,15 +140,14 @@ async def main():
             usage_limits=UsageLimits(request_limit=8)
         )
 
-        # placeholder until Text-To-Speech is implemented
-        speak(result.output)
+        print(f"\n🧑‍💼 {result.output}\n")
 
         # accumulate the result history
         history = result.all_messages()
 
         # arbitrary loop guardrail 
         for _ in range(6):
-            answer = listen()
+            answer = input("🗣️  your answer > ")
             if answer.strip().lower() in {"quit", "exit", "done"}:
                 break
 
@@ -166,8 +159,7 @@ async def main():
                 usage_limits=UsageLimits(request_limit=8)
             )
 
-            # speak LLM output
-            speak(result.output)
+            print(f"\n🧑‍💼 {result.output}\n")
             # notice that it's not appending to a list because when we pass in the previous
             # messages' history, the agent run will take that into account into its own history,
             # so we just need to store "all_messages" each time
