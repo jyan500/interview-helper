@@ -72,7 +72,7 @@ interaction style is a prompt.
   a `reference://` resource) — leveling bands + concept anchors, written in-house. Deterministic
   `question_id → brief`; no semantic retrieval.
 - **Seniority-aware:** entry/mid/senior get different questions and level-calibrated grading.
-- **Audio (cloud, behind `voice/adapters.py` + `client/src/voice/`):** STT = OpenAI **`whisper-1`**;
+- **Audio (cloud, behind `client/src/voice/`):** STT = OpenAI **`whisper-1`**;
   TTS = OpenAI **`tts-1`** via the `/api/tts` proxy, engine-switchable with a free browser
   `SpeechSynthesis` fallback. That swapping local→cloud was cheap is the adapter seam paying off.
 - **Deploy target:** SPA on Vercel (`vercel.json` SPA rewrite + `VITE_*` vars) · FastAPI on

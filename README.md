@@ -25,7 +25,7 @@ pointers — fill them in phase by phase.
 - `server/tools/questions.py`, `server/tools/session.py` — the tool bodies (read / side-effecting).
 - `server/data/questions.json` — a tiny seed question bank with rubrics.
 - `server/pydantic_agent.py` — the framework client + the **multi-turn** interview loop.
-- `voice/adapters.py` — `speak()`/`listen()`: print/input now, TTS/STT in Phase 4.
+- `client/src/voice/` — the audio edge adapters (browser STT/TTS via `/api/transcribe` + `/api/tts`).
 
 ## Getting started
 

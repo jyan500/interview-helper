@@ -16,6 +16,7 @@ statement of how the old shape maps to the new one:
         .tags[]                         -> tags rows + question_tags pairings
     bank["rounds"][slug]                -> a round_types row (interview simulation) + a round-owned
                                           rubrics row + its rubric_dimensions
+    data/skills.json[]                  -> a skills row each (the Profile page's skill picker)
 
 Two things about LEVELS and SLUGS the raw bank doesn't spell out:
   - The LEVEL ROWS (entry/mid/senior) are authored HERE, not in the bank — they're a fixed
@@ -56,10 +57,14 @@ from db.models import (
     RoundType,
     Rubric,
     RubricDimension,
+    Skill,
     Tag,
 )
 
 _BANK = Path(__file__).resolve().parent.parent / "data" / "questions.json"
+# The curated skill vocabulary. Slugs are authored, not slugified, so "C", "C++" and "C#" stay three
+# skills (`c`, `cpp`, `csharp`) instead of collapsing to one.
+_SKILLS = _BANK.parent / "skills.json"
 
 # The seniority ladder. Not in the JSON — authored here. rank is the ordering Phase D's
 # picker and "at or below this level" filtering both need.
@@ -142,7 +147,7 @@ async def _seed_dimensions(db: AsyncSession, rubric: Rubric, names: list[str]) -
 async def seed() -> None:
     bank = json.loads(_BANK.read_text(encoding="utf-8"))
     created = {"levels": 0, "roles": 0, "types": 0, "tags": 0, "dimensions": 0,
-               "questions": 0, "question_roles": 0, "briefs": 0, "rounds": 0}
+               "questions": 0, "question_roles": 0, "briefs": 0, "rounds": 0, "skills": 0}
 
     async with get_session() as db:
         # --- levels: authored, not from the bank ---------------------------------------
@@ -347,6 +352,16 @@ async def seed() -> None:
                 db.add(rubric)
                 await db.flush()
             created["dimensions"] += await _seed_dimensions(db, rubric, rubric_data["dimensions"])
+
+        # --- skills: the curated vocabulary the Profile page picks from ----------------------
+        # Users can only PICK skills, never add one, so this list is the whole vocabulary. The
+        # display name is updated in place (a casing fix should land on re-seed); the slug is the
+        # identity and never changes. Removing an entry here does NOT delete the row.
+        for entry in json.loads(_SKILLS.read_text(encoding="utf-8")):
+            skill, was_new = await _get_or_create(db, Skill, slug=entry["slug"], name=entry["name"])
+            created["skills"] += was_new
+            if not was_new and skill.name != entry["name"]:
+                skill.name = entry["name"]
 
         await db.commit()
 
