@@ -332,6 +332,10 @@ class RoundType(Base, TimestampMixin):
                        -> auto-submit) — and, when offered, opens in it. Off for coding and system
                        design: long thinking pauses there blow past the silence threshold and would
                        submit a half-answer, so those rounds are manual-only.
+      uses_candidate_background  whether the round reads the candidate's Profile background (roles,
+                       projects, skills): the generator grounds its questions in it and the persona's
+                       follow-ups may reference it. On for behavioral only; a coding problem or a design
+                       prompt has no use for a résumé.
     Its grading rubric hangs off it too (Rubric.round_type_id) — see Rubric.
     """
     __tablename__ = "round_types"
@@ -346,6 +350,7 @@ class RoundType(Base, TimestampMixin):
     max_followups: Mapped[int] = mapped_column(Integer)
     has_code_editor: Mapped[bool] = mapped_column(Boolean, default=False)
     allows_smart_voice: Mapped[bool] = mapped_column(Boolean, default=False)
+    uses_candidate_background: Mapped[bool] = mapped_column(Boolean, default=False)
 
     rubric: Mapped[Rubric | None] = relationship(back_populates="round_type", lazy="raise")
 

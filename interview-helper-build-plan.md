@@ -412,7 +412,7 @@ get different questions and level-calibrated feedback).
 ## CURRENT STATUS (resume point)
 
 *2026-10-12: **Candidate background** (Profile page roles, projects and skills, fed into behavioral interviews).
-Phases 1 (schema + API) and 2 (client, browser pass pending) are done on branch `profile-page`; Phase 3 (prompt injection) is next. See the 2026-10-12 section at
+Phases 1 (schema + API), 2 (client) and 3 (background in behavioral interviews) are done on branch `profile-page`; a browser pass is pending. See the 2026-10-12 section at
 the end.*
 
 *Last updated 2026-10-01. Phases A–F all ✅; Phase G (production hardening & deploy) is still
@@ -1963,3 +1963,31 @@ NOT yet verified in the browser:
 
 **Next:** that browser pass and the Phase 2 commit, then Phase 3: inject `format_candidate_background` into the
 behavioral persona and round generation, gated on a new `round_types.uses_candidate_background` flag.
+
+### 2026-10-13 — Candidate background, Phase 3: background in behavioral interviews (branch `profile-page`)
+
+Done (migration `e2a4c6b8d0f1` applied, seed re-run, free checks plus 6 live generation calls):
+- **`round_types.uses_candidate_background`** is a seeded flag like `allows_smart_voice`. It's true for behavioral
+  only, and set in both the migration and `questions.json`.
+- **`prompts.py`.**
+  - `behavioral_interview` and `simulation_interview` take an optional `candidate_background`. When it's
+    non-empty, they insert an "About the candidate" paragraph via `_candidate_background_paragraph`.
+  - The paragraph tells the interviewer to make follow-ups specific to a listed role or project, to treat the
+    background as the candidate's own claims, and never to invent details or state them back as fact.
+  - The Practice persona scopes it to behavioral questions, because a practice plan can mix kinds.
+- **`simulation.generate_round`** takes `candidate_background` and adds a `CANDIDATE BACKGROUND` section with
+  the requirement restated under it. `round_agent`'s instructions require every experience question to NAME a
+  listed role, company or project and connect it to the job.
+  - With the rule only in the instructions, 1 of 3 test rounds used the background. With it restated in the
+    prompt, 3 of 3 did.
+- **`api.start_interview`** reads the background once.
+  - Practice interviews always get it.
+  - A simulation gets it (persona and generator) only when the round's flag is set.
+  - It's frozen into the stored persona, so profile edits apply from the next interview on.
+  - Grading is unchanged.
+- An empty background leaves every prompt byte-identical to before.
+
+NOT yet verified: interviewer follow-ups in a real behavioral interview, through the browser.
+
+**Next:** run a behavioral Job interview and a Practice interview with a filled-in profile, then commit Phases 2
+and 3.
