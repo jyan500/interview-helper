@@ -190,29 +190,49 @@ round_agent = Agent(
         "For a CODING question, the brief must also give the brute-force approach, the optimal approach "
         "with its time and space complexity, and the edge cases a strong answer handles. For a "
         "behavioral question, anchor on structure, the candidate's own actions, measurable results, and "
-        "(where the question is about this company) genuine knowledge of the company and role."
+        "(where the question is about this company) genuine knowledge of the company and role.\n\n"
+        "When a CANDIDATE BACKGROUND section is present, it is the candidate's own profile (roles, "
+        "projects, skills), and the round must be personal to it while still following the round "
+        "guidance: every question that asks about their experience must NAME a specific role, company, "
+        "or project from the background (the one that best fits this job) and ask them to connect it to "
+        "this job. A generic 'tell me about a project' when the background lists one is a failure. "
+        "Reference only what the background lists, never invent details about it. Keep each brief about "
+        "the quality of the answer, not about the background itself."
     ),
     model_settings=ModelSettings(max_tokens=8000),
 )
 
 
-async def generate_round(job: dict, round_type) -> list[dict]:
+async def generate_round(job: dict, round_type, candidate_background: str = "") -> list[dict]:
     """Write one round's questions for a job. Returns `plan_size` dicts of {text, type_slug, brief},
     in ask order — the shape create_interview(generated=...) takes (plain dicts, so the data layer
     never imports this module's model stack).
 
     `job` is the tools/jobs detail dict (company, title, summary, level); `round_type` is the
     RoundType ORM row, whose `question_guidance` says what to ask and `plan_size` how many. The allowed
-    question types are passed with their names, like the JD extractor's roles."""
+    question types are passed with their names, like the JD extractor's roles.
+
+    `candidate_background` (optional, "" = leave it out) is the candidate's Profile background
+    (tools/background.format_candidate_background). The caller passes it only for a round that opts in
+    (RoundType.uses_candidate_background); the agent's instructions say how to use it."""
     types = (await list_question_types(Params(page=1, size=100))).items
     output_type = _round_output_type([t.slug for t in types], round_type.plan_size)
 
+    # The requirement is restated right under the background, not only in the instructions: with it
+    # only in the instructions, the model used the background in 1 of 3 test rounds.
+    background_section = (
+        f"CANDIDATE BACKGROUND (from their own profile):\n{candidate_background}\n"
+        "Every question about their experience must name a specific role, company, or project from this "
+        "background.\n\n"
+        if candidate_background else ""
+    )
     prompt = (
         f"Allowed question types (slug: name): {'; '.join(f'{t.slug}: {t.name}' for t in types)}\n\n"
         f"COMPANY: {job['company']}\n"
         f"JOB TITLE: {job['title']}\n"
         f"CANDIDATE LEVEL: {job['level']} ({job['level_name']})\n"
         f"JOB SUMMARY: {job['summary']}\n\n"
+        f"{background_section}"
         f"ROUND: {round_type.name}\n"
         f"ROUND GUIDANCE: {round_type.question_guidance}\n\n"
         f"Write exactly {round_type.plan_size} question(s), each with its brief."

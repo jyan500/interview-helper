@@ -88,7 +88,30 @@ _TURN_CONTRACT = textwrap.dedent("""
 """).strip()
 
 
-def behavioral_interview(role: str, seniority: str = "mid") -> str:
+def _candidate_background_paragraph(candidate_background: str, *, behavioral_only: bool) -> str:
+    """The persona paragraph that hands the interviewer the candidate's Profile background (roles,
+    projects, skills — tools/background.format_candidate_background).
+
+    The background is the CANDIDATE'S OWN CLAIMS, so the model is told to ask about it, never to
+    embellish it: a follow-up that invents a detail ("and that migration cut latency by 40%, right?")
+    puts words in the candidate's mouth. `behavioral_only` scopes it for a Practice interview, whose
+    plan can mix kinds under one frozen persona: a coding or design follow-up has no use for a résumé.
+    """
+    scope = (
+        "Use it only while the question on the table is a behavioral one; ignore it for technical, "
+        "coding, or system-design questions. "
+        if behavioral_only else ""
+    )
+    return (
+        f"About the candidate (from their own profile):\n{candidate_background}\n\n"
+        f"{scope}Where it fits the question, make a follow-up specific to this background: ask about a "
+        "particular role or project listed above, or how that experience applies here. Treat it as what "
+        "the candidate says about themselves. Never invent details they didn't list, never state any of "
+        "it as fact back to them, and never let it replace probing what they actually said in the answer."
+    )
+
+
+def behavioral_interview(role: str, seniority: str = "mid", candidate_background: str = "") -> str:
     """The interviewer PERSONA — seeds a consistent interviewer for a role and seniority.
 
     REDUCED ROLE (client-driven loop): the CLIENT (api.py) owns the question spine — it picks
@@ -98,9 +121,15 @@ def behavioral_interview(role: str, seniority: str = "mid") -> str:
     field of the TurnReply output_type). All the old "use next_question / log with
     record_answer / run until exhausted" rules are gone BY DESIGN — the model can't invent a
     question or mislabel an id if it never touches either.
+
+    `candidate_background` (optional, "" = leave it out): the candidate's Profile background, scoped to
+    behavioral questions, since a Practice plan can mix question kinds.
     """
-    return (f"You are an experienced interviewer conducting a {seniority}-level {role} interview."
-            f"\n\n{_TURN_CONTRACT}")
+    paragraphs = [f"You are an experienced interviewer conducting a {seniority}-level {role} interview."]
+    if candidate_background:
+        paragraphs.append(_candidate_background_paragraph(candidate_background, behavioral_only=True))
+    paragraphs.append(_TURN_CONTRACT)
+    return "\n\n".join(paragraphs)
 
 
 def simulation_interview(
@@ -110,6 +139,7 @@ def simulation_interview(
     round_name: str,
     round_guidance: str,
     seniority: str = "mid",
+    candidate_background: str = "",
 ) -> str:
     """The interviewer PERSONA for an interview SIMULATION — one company's round, from a saved job.
 
@@ -122,14 +152,22 @@ def simulation_interview(
     back-and-forth on a good one (a coding problem isn't done until there's working code and its
     complexity). So the persona is told to keep probing while the guidance says the question isn't
     covered. The client still caps it (the round's `max_followups`), so that's a request, not a loop.
+
+    `candidate_background` (optional, "" = leave it out): the candidate's Profile background. The caller
+    passes it only for a round that opts in (RoundType.uses_candidate_background, i.e. behavioral), so
+    here it's unscoped: every question in such a round may draw on it.
     """
     # Paragraphs joined rather than one dedented f-string: `summary` is LLM text that may span lines,
     # and interpolating it before dedent() would break the common-indent strip for the whole block.
-    return "\n\n".join([
+    paragraphs = [
         f'You are an experienced interviewer at {company}, running the {round_name} round for a '
         f'{seniority}-level candidate applying for "{title}". Stay in character as someone who '
         f'works there.',
         f"About the company and the job:\n{summary}",
+    ]
+    if candidate_background:
+        paragraphs.append(_candidate_background_paragraph(candidate_background, behavioral_only=False))
+    return "\n\n".join(paragraphs + [
         f"How to run this round (the round's questions are already written, and the system presents "
         f"each one itself; this is only about your style and what to probe):\n{round_guidance}",
         "The round guidance decides when a question is fully covered. While it isn't (for example, "

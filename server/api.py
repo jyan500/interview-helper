@@ -143,6 +143,7 @@ from tools.background import (
     create_project,
     delete_experience,
     delete_project,
+    format_candidate_background,
     list_experiences,
     list_profile_skills,
     list_projects,
@@ -452,7 +453,13 @@ async def start_interview(
     # rebuilding per turn) keeps the interviewer's character stable even if the template is
     # edited mid-interview.
     role, seniority = req.role, req.seniority
-    persona = behavioral_interview(role=role, seniority=seniority)
+    # THE CANDIDATE'S BACKGROUND (Profile page roles/projects/skills), read once, as prompt text ("" when
+    # they've filled in nothing, and every template then leaves its paragraph out). FROZEN with the
+    # persona: it's baked into the stored string, so editing the profile mid-interview changes nothing
+    # until the next interview. A Practice persona always gets it (scoped to behavioral questions, since
+    # a plan can mix kinds); a simulation only when its round opts in, below.
+    candidate_background = await format_candidate_background(user_id)
+    persona = behavioral_interview(role=role, seniority=seniority, candidate_background=candidate_background)
     simulation: dict = {}
 
     # INTERVIEW SIMULATION — `{job, round}`. The job supplies role + level, the round its guidance,
@@ -467,6 +474,8 @@ async def start_interview(
         if round_row is None:
             raise HTTPException(status_code=400, detail=f"unknown round type: {req.round}")
         role, seniority = job["role"], job["level"]
+        # only a round that opts in (behavioral) reads the background; a coding or design round gets "".
+        round_background = candidate_background if round_row.uses_candidate_background else ""
         persona = simulation_interview(
             company=job["company"],
             title=job["title"],
@@ -474,9 +483,10 @@ async def start_interview(
             round_name=round_row.name,
             round_guidance=round_row.interviewer_guidance,
             seniority=seniority,
+            candidate_background=round_background,
         )
         try:
-            generated = await generate_round(job, round_row)
+            generated = await generate_round(job, round_row, candidate_background=round_background)
         except AgentRunError as exc:
             # the model couldn't produce a valid round within its retries/limits — nothing was
             # written, so the candidate can simply try again.
