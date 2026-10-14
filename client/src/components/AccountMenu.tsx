@@ -1,6 +1,7 @@
 /**
  * The nav's account menu: the avatar (picture-or-initials) opens a Dropdown with the two account pages,
- * Profile (picture, default role/level, background) and Settings (name, email, password).
+ * Profile (picture, default role/level, background) and User settings (name, email, password). Both live
+ * under /settings, whose sidebar also reaches Interview settings.
  */
 import { Gear, User } from "@phosphor-icons/react";
 import Dropdown from "./Dropdown";
@@ -8,8 +9,8 @@ import DropdownItem from "./DropdownItem";
 import UserAvatar from "./UserAvatar";
 
 const ACCOUNT_MENU_ITEMS = [
-    { to: "/profile", label: "Profile", icon: User },
-    { to: "/settings", label: "Settings", icon: Gear },
+    { to: "/settings/profile", label: "Profile", icon: User },
+    { to: "/settings/user", label: "User settings", icon: Gear },
 ];
 
 export default function AccountMenu() {
