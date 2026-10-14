@@ -20,7 +20,17 @@ import {
 import type { SelectOption } from "./components/AsyncPaginateSelect";
 import type { SessionNavState } from "./pages/SessionLayout";
 import { useToast } from "./toast/ToastProvider";
+import type { TtsEngine } from "./voice/speech";
 import {
+    loadStoredAnswerMode,
+    loadStoredMicDeviceId,
+    loadStoredTtsEngine,
+    saveStoredAnswerMode,
+    saveStoredMicDeviceId,
+    saveStoredTtsEngine,
+} from "./helpers";
+import {
+    DEFAULT_MIC_OPTION,
     DIAGRAM_HISTORY_LIMIT,
     HARK_POLL_INTERVAL_MS,
     HARK_SPEAKING_THRESHOLD_DB,
@@ -29,6 +39,8 @@ import {
     MIC_SILENCE_LEVEL,
     MIC_SILENCE_MS,
     NO_INPUT_TIMEOUT_MS,
+    type AnswerMode,
+    type MicOption,
 } from "./constants";
 
 /**
@@ -491,6 +503,49 @@ export function useAudioInputDevices(): { devices: MediaDeviceInfo[]; refresh: (
     }, [refresh]);
 
     return { devices, refresh };
+}
+
+/**
+ * The mic picker's options: system default first, then one per detected mic (real label once permission
+ * lands). `refresh` re-reads the devices; call it once a mic stream opens so the labels populate.
+ */
+export function useMicOptions(): { micOptions: MicOption[]; refresh: () => void } {
+    const { devices, refresh } = useAudioInputDevices();
+    const micOptions = useMemo(
+        () => [
+            DEFAULT_MIC_OPTION,
+            ...devices.map((d, i) => ({ value: d.deviceId, label: d.label || `Microphone ${i + 1}` })),
+        ],
+        [devices],
+    );
+    return { micOptions, refresh };
+}
+
+/**
+ * The candidate's interview settings (answer mode, TTS engine, microphone), seeded from localStorage
+ * and written back on every change. Shared by the Interview settings page (set them before starting)
+ * and the session (the in-interview Settings modal), so a change in either is the next interview's
+ * default.
+ */
+export function useInterviewSettings() {
+    const [mode, setModeState] = useState<AnswerMode>(loadStoredAnswerMode);
+    const [ttsEngine, setTtsEngineState] = useState<TtsEngine>(loadStoredTtsEngine);
+    const [micDeviceId, setMicDeviceIdState] = useState<string>(loadStoredMicDeviceId);
+
+    const setMode = useCallback((next: AnswerMode) => {
+        setModeState(next);
+        saveStoredAnswerMode(next);
+    }, []);
+    const setTtsEngine = useCallback((next: TtsEngine) => {
+        setTtsEngineState(next);
+        saveStoredTtsEngine(next);
+    }, []);
+    const setMicDeviceId = useCallback((next: string) => {
+        setMicDeviceIdState(next);
+        saveStoredMicDeviceId(next);
+    }, []);
+
+    return { mode, setMode, ttsEngine, setTtsEngine, micDeviceId, setMicDeviceId };
 }
 
 /**

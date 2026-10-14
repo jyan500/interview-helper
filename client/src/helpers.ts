@@ -7,8 +7,9 @@ import type { Edge, Node } from "@xyflow/react";
 import type { GroupBase } from "react-select";
 import type { LoadOptions } from "react-select-async-paginate";
 import type { BasePageItem, DiagramDoc, DiagramNodeKind } from "./api";
-import type { TurnMode } from "./voice/speech";
+import type { TtsEngine, TurnMode } from "./voice/speech";
 import {
+    ANSWER_MODE_STORAGE_KEY,
     AVATAR_ACCEPTED_TYPES,
     AVATAR_MAX_BYTES,
     CODE_LANGUAGE_STORAGE_KEY,
@@ -21,6 +22,8 @@ import {
     EDITOR_SETTINGS_STORAGE_KEY,
     IGNORED_INTERVIEWS_STORAGE_KEY,
     MIC_DEVICE_STORAGE_KEY,
+    TTS_ENGINE_STORAGE_KEY,
+    type AnswerMode,
     type CodeLanguage,
     type EditorSettings,
     type InterviewKind,
@@ -79,6 +82,30 @@ export function loadStoredMicDeviceId(): string {
 
 export function saveStoredMicDeviceId(deviceId: string): void {
     localStorage.setItem(MIC_DEVICE_STORAGE_KEY, deviceId);
+}
+
+/**
+ * The answer mode the next interview opens in (see ANSWER_MODE_STORAGE_KEY). An unknown or missing
+ * value falls back to voice.
+ */
+export function loadStoredAnswerMode(): AnswerMode {
+    return localStorage.getItem(ANSWER_MODE_STORAGE_KEY) === "text" ? "text" : "voice";
+}
+
+export function saveStoredAnswerMode(mode: AnswerMode): void {
+    localStorage.setItem(ANSWER_MODE_STORAGE_KEY, mode);
+}
+
+/**
+ * The TTS engine the interviewer speaks with (see TTS_ENGINE_STORAGE_KEY). An unknown or missing value
+ * falls back to the free browser engine, so nobody spends OpenAI tokens without choosing to.
+ */
+export function loadStoredTtsEngine(): TtsEngine {
+    return localStorage.getItem(TTS_ENGINE_STORAGE_KEY) === "openai" ? "openai" : "browser";
+}
+
+export function saveStoredTtsEngine(engine: TtsEngine): void {
+    localStorage.setItem(TTS_ENGINE_STORAGE_KEY, engine);
 }
 
 /**

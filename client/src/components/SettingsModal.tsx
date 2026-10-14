@@ -1,39 +1,19 @@
 /**
  * In-session Settings — the panel behind the session header's gear icon, rendered inside the reusable
- * <Modal> shell (which owns the backdrop + close plumbing). It's the ONE home for the knobs that used to
- * be scattered (the mic + TTS pickers lived in the right rail; voice/text was only the in-column
- * "Switch to…" buttons):
+ * <Modal> shell (which owns the backdrop + close plumbing). The controls themselves (mode, mic + live
+ * test meter, TTS engine) are <InterviewSettingsFields>, shared with the Interview settings page.
  *
- *   - Mode         — voice ⇆ text.
- *   - Microphone   — which input the recorder + VAD capture from, PLUS a live "test your mic" meter
- *                    (<MicMeter>) so you can confirm the right device is picked BEFORE it's your turn to
- *                    answer. The choice is persisted by SessionPage (localStorage), so it's the default
- *                    next time — the fix for "the mic doesn't take effect until a turn passes".
- *   - Voice        — the TTS engine (neural OpenAI vs. free browser).
- *
- * Presentational: it owns no interview state, just renders the current values and calls back up.
+ * Unlike the page there's no Save: mid-interview a change takes effect immediately. So the form here is
+ * just the FormProvider the fields need — kept in sync with the session's current values (`values`, so a
+ * "Switch to text" outside the modal shows here too) — and each field change is forwarded straight back
+ * up. The test meter runs only while the modal is open.
  */
-import Select from "react-select";
+import { useEffect } from "react";
+import { FormProvider, useForm } from "react-hook-form";
 import Modal from "./Modal";
-import MicMeter from "./MicMeter";
-import SegmentedControl from "./SegmentedControl";
-import { nocturneSelectStyles } from "../selectStyles";
-import type { AnswerMode } from "../constants";
+import InterviewSettingsFields, { type InterviewSettingsValues } from "./InterviewSettingsFields";
+import type { AnswerMode, MicOption } from "../constants";
 import type { TtsEngine } from "../voice/speech";
-
-type EngineOption = { value: TtsEngine; label: string };
-type MicOption = { value: string; label: string };
-
-const MODE_OPTIONS: { value: AnswerMode; label: string }[] = [
-    { value: "voice", label: "Voice" },
-    { value: "text", label: "Text" },
-];
-
-// The TTS engine picker options (react-select shape). Static, so module scope.
-const TTS_ENGINE_OPTIONS: EngineOption[] = [
-    { value: "openai", label: "OpenAI (neural, uses tokens)" },
-    { value: "browser", label: "Browser (free, robotic)" },
-];
 
 export default function SettingsModal({
     open,
@@ -59,51 +39,24 @@ export default function SettingsModal({
     // Forwarded to <MicMeter>: called once the test meter's stream is live (real labels become readable).
     onMicReady: () => void;
 }) {
+    const form = useForm<InterviewSettingsValues>({ values: { mode, ttsEngine, micDeviceId } });
+
+    // Apply each change live. `name` is set only for a field change (a sync from `values` has none), so
+    // a value coming IN from the session is never echoed back out.
+    useEffect(() => {
+        const subscription = form.watch((values, { name }) => {
+            if (name === "mode" && values.mode) onChangeMode(values.mode);
+            if (name === "ttsEngine" && values.ttsEngine) onChangeTtsEngine(values.ttsEngine);
+            if (name === "micDeviceId" && values.micDeviceId !== undefined) onChangeMic(values.micDeviceId);
+        });
+        return () => subscription.unsubscribe();
+    }, [form, onChangeMode, onChangeTtsEngine, onChangeMic]);
+
     return (
         <Modal open={open} onClose={onClose} title="Settings">
-            <div className="flex flex-col gap-5">
-                {/* ── Mode ─────────────────────────────────────────────────── */}
-                <div>
-                    <div className="kicker">Mode</div>
-                    <div className="mt-2">
-                        <SegmentedControl<AnswerMode>
-                            label="Mode"
-                            options={MODE_OPTIONS}
-                            value={mode}
-                            onChange={onChangeMode}
-                        />
-                    </div>
-                </div>
-
-                {/* ── Microphone + live test meter ─────────────────────────── */}
-                <div>
-                    <div className="kicker">Microphone</div>
-                    <div className="mt-2">
-                        <Select<MicOption>
-                            options={micOptions}
-                            value={micOptions.find((o) => o.value === micDeviceId) ?? micOptions[0]}
-                            onChange={(opt) => opt && onChangeMic(opt.value)}
-                            isSearchable={false}
-                            styles={nocturneSelectStyles}
-                        />
-                    </div>
-                    <MicMeter deviceId={micDeviceId} active={open} onReady={onMicReady} />
-                </div>
-
-                {/* ── Voice (TTS engine) ───────────────────────────────────── */}
-                <div>
-                    <div className="kicker">Voice</div>
-                    <div className="mt-2">
-                        <Select<EngineOption>
-                            options={TTS_ENGINE_OPTIONS}
-                            value={TTS_ENGINE_OPTIONS.find((o) => o.value === ttsEngine)}
-                            onChange={(opt) => opt && onChangeTtsEngine(opt.value)}
-                            isSearchable={false}
-                            styles={nocturneSelectStyles}
-                        />
-                    </div>
-                </div>
-            </div>
+            <FormProvider {...form}>
+                <InterviewSettingsFields micOptions={micOptions} micTestActive={open} onMicReady={onMicReady} />
+            </FormProvider>
         </Modal>
     );
 }

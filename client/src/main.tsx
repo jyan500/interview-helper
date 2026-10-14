@@ -12,7 +12,9 @@ import QuestionsPage from "./pages/QuestionsPage";
 import JobsPage from "./pages/JobsPage";
 import JobDetailPage from "./pages/JobDetailPage";
 import ProfilePage from "./pages/ProfilePage";
-import SettingsPage from "./pages/SettingsPage";
+import UserSettingsPage from "./pages/UserSettingsPage";
+import SettingsLayout from "./pages/SettingsLayout";
+import InterviewSettingsPage from "./pages/InterviewSettingsPage";
 import { AuthProvider } from "./auth/AuthProvider";
 import { ToastProvider } from "./toast/ToastProvider";
 import LoginPage from "./auth/LoginPage";
@@ -76,8 +78,14 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
                             <Route path="/questions" element={<QuestionsPage />} />
                             <Route path="/jobs" element={<JobsPage />} />
                             <Route path="/jobs/:id" element={<JobDetailPage />} />
-                            <Route path="/profile" element={<ProfilePage />} />
-                            <Route path="/settings" element={<SettingsPage />} />
+                            {/* The account pages, all under /settings and sharing SettingsLayout (the nav
+                                plus a sidebar between them). Bare /settings lands on the profile. */}
+                            <Route path="/settings" element={<SettingsLayout />}>
+                                <Route index element={<Navigate to="profile" replace />} />
+                                <Route path="profile" element={<ProfilePage />} />
+                                <Route path="user" element={<UserSettingsPage />} />
+                                <Route path="interview" element={<InterviewSettingsPage />} />
+                            </Route>
                         </Route>
 
                         {/* anything else -> home, which is itself gated. `replace` so a

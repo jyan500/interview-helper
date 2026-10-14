@@ -52,21 +52,18 @@ import {
     emptyDiagram,
     interviewTitle,
     loadStoredCodeLanguage,
-    loadStoredMicDeviceId,
     saveStoredCodeLanguage,
-    saveStoredMicDeviceId,
     sentCodeByLanguage,
     withCodeFence,
 } from "../helpers";
 import { CODING_PROBLEM_CUE, DIAGRAM_ONLY_ANSWER, type AnswerMode, type CodeLanguage } from "../constants";
-import { useAudioInputDevices, useElapsedClock, useNoInputPrompt, useSpeaking } from "../hooks";
+import { useElapsedClock, useInterviewSettings, useMicOptions, useNoInputPrompt, useSpeaking } from "../hooks";
 import {
     pickPreferredVoice,
     setVoicePrefs,
     useSmartVoiceTurn,
     useSpeak,
     useVoices,
-    type TtsEngine,
     type TurnMode,
 } from "../voice/speech";
 
@@ -81,12 +78,6 @@ type Line = { id: number; who: "interviewer" | "you"; text: string; pending?: bo
 // question comes up. Every other interview never pays for it.
 const DiagramPanel = lazy(() => import("../components/diagram/DiagramPanel"));
 
-// The microphone picker options (react-select shape). value "" is the system-default sentinel; a
-// real value is a MediaDeviceInfo.deviceId. Labels are blank until mic permission is granted, so we
-// fall back to "Microphone N" until the meter/first recording populates the real device names.
-type MicOption = { value: string; label: string };
-const DEFAULT_MIC_OPTION: MicOption = { value: "", label: "System default" };
-
 /* ══════════════════════════════════════════════════════════════════════════
    The running interview — all the state + loop lives here. A valid interview is
    guaranteed by SessionLayout and read via useSessionNav().
@@ -99,7 +90,9 @@ export default function SessionPage() {
     // once off nav rather than threading nav.interviewId through every handler.
     const interviewId = nav.interviewId;
 
-    const [mode, setMode] = useState<AnswerMode>("voice");
+    // The candidate's interview settings — answer mode, TTS engine and mic — seeded from localStorage
+    // (what they picked on the Interview settings page or last session) and written back on change.
+    const { mode, setMode, ttsEngine, setTtsEngine, micDeviceId, setMicDeviceId } = useInterviewSettings();
     const [transcript, setTranscript] = useState<Line[]>([]);
     const [draft, setDraft] = useState("");
     // done = the client-driven loop exhausted the bank (submitAnswer told us). ended = we've kicked
@@ -163,8 +156,7 @@ export default function SessionPage() {
 
     // Which TTS engine speaks the interviewer's turns. "openai" = neural (spends tokens),
     // "browser" = free/robotic (handy for debugging without burning credit). useSpeak(engine)
-    // dispatches; the picker in the right rail flips it, mid-session is fine.
-    const [ttsEngine, setTtsEngine] = useState<TtsEngine>("browser");
+    // dispatches; the Settings modal flips it, mid-session is fine.
     const { speak, speaking } = useSpeak(ttsEngine);
 
     // Smart voice turn-taking, exactly as App.tsx drove it. "manual" = tap to start/stop;
@@ -182,18 +174,11 @@ export default function SessionPage() {
     const [voiceMode, setVoiceMode] = useState<TurnMode>(() => defaultVoiceMode(nav.allowsSmartVoice));
     const smartVoiceLocked = allowsSmartVoice === false || hasDiagramCanvas;
 
-    // Which microphone to capture from. "" = system default; a real deviceId pins that exact mic —
-    // the picker exists because a wrong default mic silently recorded nothing on Firefox. Threaded
-    // into useSmartVoiceTurn so BOTH the recorder and the smart-mode VAD open the same device.
-    //
-    // SEEDED FROM localStorage so a mic chosen in a previous session is the DEFAULT this one opens with,
-    // rather than only taking effect after a turn passes. handleChangeMic writes every change back.
-    const { devices: micDevices, refresh: refreshMics } = useAudioInputDevices();
-    const [micDeviceId, setMicDeviceId] = useState<string>(loadStoredMicDeviceId);
-    function handleChangeMic(id: string) {
-        setMicDeviceId(id);
-        saveStoredMicDeviceId(id); // persist so it's the default next session too
-    }
+    // Which microphone to capture from (micDeviceId, from useInterviewSettings above). "" = system
+    // default; a real deviceId pins that exact mic — the picker exists because a wrong default mic
+    // silently recorded nothing on Firefox. Threaded into useSmartVoiceTurn so BOTH the recorder and the
+    // smart-mode VAD open the same device. Seeded from localStorage, so it takes effect from turn one.
+    const { micOptions, refresh: refreshMics } = useMicOptions();
 
     // The in-session Settings modal (behind the header gear): mic + live test meter, TTS engine, and
     // the voice/text mode toggle. Open state only — the settings themselves live in the state above.
@@ -525,15 +510,6 @@ export default function SessionPage() {
     const clock = useElapsedClock();
 
 
-    // System default first, then one option per detected mic (real label once permission lands).
-    const micOptions: MicOption[] = useMemo(
-        () => [
-            DEFAULT_MIC_OPTION,
-            ...micDevices.map((d, i) => ({ value: d.deviceId, label: d.label || `Microphone ${i + 1}` })),
-        ],
-        [micDevices],
-    );
-
     return (
         <div className="flex h-screen flex-col bg-bg text-ink">
             {/* ── Session header (shared) ─────────────────────────────────────── */}
@@ -657,7 +633,7 @@ export default function SessionPage() {
             </div>
 
             {/* In-session settings (mic + live test meter, TTS engine, voice/text mode), behind the
-                header gear. Mic changes persist via handleChangeMic; onMicReady re-reads device labels
+                header gear. Changes persist via useInterviewSettings; onMicReady re-reads device labels
                 once the test meter grants mic permission. */}
             <SettingsModal
                 open={settingsOpen}
@@ -668,7 +644,7 @@ export default function SessionPage() {
                 onChangeTtsEngine={setTtsEngine}
                 micOptions={micOptions}
                 micDeviceId={micDeviceId}
-                onChangeMic={handleChangeMic}
+                onChangeMic={setMicDeviceId}
                 onMicReady={refreshMics}
             />
         </div>

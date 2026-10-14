@@ -125,6 +125,21 @@ export const VAD_ONNX_WASM_BASE = import.meta.env.DEV
 export const MIC_DEVICE_STORAGE_KEY = "ih.micDeviceId";
 
 /**
+ * The answer mode (voice/text) and TTS engine persist the same way as the mic, so what's picked on the
+ * Interview settings page (or in the in-session Settings modal) is what the next interview opens with.
+ */
+export const ANSWER_MODE_STORAGE_KEY = "ih.answerMode";
+export const TTS_ENGINE_STORAGE_KEY = "ih.ttsEngine";
+
+/**
+ * The microphone picker options (react-select shape). value "" is the system-default sentinel; a real
+ * value is a MediaDeviceInfo.deviceId. Labels are blank until mic permission is granted, so useMicOptions
+ * falls back to "Microphone N" until the meter/first recording populates the real device names.
+ */
+export type MicOption = { value: string; label: string };
+export const DEFAULT_MIC_OPTION: MicOption = { value: "", label: "System default" };
+
+/**
  * The resume banner's "Ignore" button dismisses the unfinished-session banner for a specific
  * interview WITHOUT abandoning it — the interview stays resumable, the banner just stops nagging.
  * The set of ignored interview ids is persisted here (a JSON array of slugs) so the dismissal
