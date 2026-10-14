@@ -2,8 +2,10 @@
  * Small, dependency-free UI helpers shared across pages. Pure functions only — no React, no
  * network, no module state — so they're trivial to reuse and to reason about.
  */
-import type { SelectOption } from "./components/AsyncPaginateSelect";
+import type { FetchPage, PageAdditional, SelectOption } from "./components/AsyncPaginateSelect";
 import type { Edge, Node } from "@xyflow/react";
+import type { GroupBase } from "react-select";
+import type { LoadOptions } from "react-select-async-paginate";
 import type { BasePageItem, DiagramDoc, DiagramNodeKind } from "./api";
 import type { TurnMode } from "./voice/speech";
 import {
@@ -358,6 +360,22 @@ export function formatShortDate(iso: string): string {
 }
 
 /**
+ * A "Jan 2022" label from the background API's month-granular "YYYY-MM" string (a role's start/end).
+ * Built from the parts in LOCAL time on purpose: `new Date("2022-01")` parses as UTC midnight, which a
+ * US timezone renders as Dec 2021. The one deliberate exception to formatShortDate: a résumé date has no
+ * day, so mm/dd/yyyy would invent one.
+ */
+export function formatMonthYear(month: string): string {
+    const [year, monthNumber] = month.split("-").map(Number);
+    return new Date(year, monthNumber - 1, 1).toLocaleDateString("en-US", { month: "short", year: "numeric" });
+}
+
+/** A role's span as the Profile page shows it: "Jan 2022 to Jun 2024", or "Jan 2022 to Present". */
+export function formatMonthRange(start: string, end: string | null): string {
+    return `${formatMonthYear(start)} to ${end ? formatMonthYear(end) : "Present"}`;
+}
+
+/**
  * A "6:30 PM" clock time for a single transcript turn, from an ISO timestamp (InterviewTurn.at).
  * Just hours:minutes — the header already carries the date, so each message row shows only its time.
  */
@@ -428,6 +446,44 @@ export function optionFromSlug(slug: string | null): SelectOption | null {
  */
 export function optionFromItem(item: BasePageItem | null | undefined): SelectOption | null {
     return item ? { value: item.slug, label: item.name } : null;
+}
+
+/**
+ * The async-paginate `loadOptions` for a picker, built from the endpoint that pulls one page (a lazy RTK
+ * Query trigger). Shared by AsyncPaginateSelect and AsyncPaginateMultiSelect so the pagination dance lives
+ * in one place. AsyncPaginate calls it with the live search text + current cursor:
+ *   1. fetch that page;
+ *   2. map rows -> Options and report the next cursor and whether more pages remain (page*size < total);
+ *   3. on failure, return a TERMINAL empty page rather than throwing (see the catch).
+ */
+export function pagedLoadOptions(
+    fetchPage: FetchPage,
+): LoadOptions<SelectOption, GroupBase<SelectOption>, PageAdditional> {
+    return async (search, _loaded, additional) => {
+        const page = additional?.page ?? 1;
+        try {
+            const res = await fetchPage({ q: search, page }).unwrap();
+            return {
+                options: res.items.map((row) => ({ value: row.slug, label: row.name })),
+                hasMore: res.page * res.size < res.total,
+                additional: { page: page + 1 },
+            };
+        } catch (e) {
+            // loadOptions MUST NOT throw. react-select-async-paginate's error path (see its
+            // requestOptions) only flips `isLoading` back to false on a rejected load — it leaves
+            // `hasMore` at its previous value, which is `true` for a first load. That keeps the
+            // library's "may I request?" gate open, so every subsequent re-render re-fires the fetch.
+            // A token refresh makes this pathological: refreshSession() -> onAuthStateChange ->
+            // AuthProvider re-renders the tree -> gate is open -> fetch -> 401 -> refresh -> ... a
+            // tight retry loop against a failing endpoint (the bug seen intermittently on the pickers).
+            //
+            // Returning a TERMINAL page instead — no options, hasMore:false, cursor NOT advanced —
+            // records a completed load with nothing more to fetch, which closes that gate. The user
+            // can retry by changing the search text (a fresh cache key) or reopening the menu later.
+            console.error("Failed to load options", e);
+            return { options: [], hasMore: false, additional: { page } };
+        }
+    };
 }
 
 /**

@@ -2,7 +2,7 @@
  * Small, reusable React hooks shared across pages. (Distinct from helpers.ts, which is pure,
  * React-free functions — anything that calls useState/useEffect/etc. lives here.)
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import type { FieldValues, Path, PathValue, UseFormSetValue } from "react-hook-form";
 // type-only: erased at build time, so React Flow stays out of the main chunk
@@ -33,11 +33,12 @@ import {
 
 /**
  * One field to pre-fill in useSeededSelectFields: the form field `name` and the Option to seed it with
- * (null = leave this field alone, e.g. the source has no value for it).
+ * — a single Option, or an Option[] for a multi-select (null = leave this field alone, e.g. the source
+ * has no value for it).
  */
 export interface SeededSelectField<TForm extends FieldValues> {
     name: Path<TForm>;
-    option: SelectOption | null;
+    option: SelectOption | SelectOption[] | null;
 }
 
 /**
@@ -68,12 +69,47 @@ export function useSeededSelectFields<TForm extends FieldValues>(
         if (key === null || seededKey.current === key) return;
         const { setValue, fields, shouldValidate } = latest.current;
         for (const { name, option } of fields) {
-            // SelectOption is what every caller's targeted field holds, but the generic can't prove it —
-            // assert at this one boundary, the same contract ControlledAsyncPaginateSelect relies on.
+            // SelectOption (or SelectOption[]) is what every caller's targeted field holds, but the generic
+            // can't prove it — assert at this one boundary, the same contract the Controlled selects rely on.
             if (option) setValue(name, option as PathValue<TForm, Path<TForm>>, { shouldValidate });
         }
         seededKey.current = key;
     }, [key]);
+}
+
+/**
+ * Call `onOutside` when the user presses the mouse outside `ref`'s element, or presses Esc — the close
+ * behaviour of a dropdown/popover (first consumer: the nav's AccountMenu). Only listens while `active`,
+ * so a closed menu costs no document listeners.
+ *
+ * `mousedown`, not `click`: it fires before focus moves, so a press on another control closes the menu
+ * in the same gesture, and a drag that starts inside and ends outside doesn't count as outside.
+ * `onOutside` is read through a ref so callers can pass an inline arrow without re-binding listeners.
+ */
+export function useClickOutside(
+    ref: RefObject<HTMLElement | null>,
+    onOutside: () => void,
+    active: boolean,
+): void {
+    const latest = useRef(onOutside);
+    latest.current = onOutside;
+
+    useEffect(() => {
+        if (!active) return;
+        const onMouseDown = (e: MouseEvent) => {
+            // `as Element`, not `as Node`: this module's `Node` is React Flow's (imported above)
+            if (ref.current && !ref.current.contains(e.target as Element)) latest.current();
+        };
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === "Escape") latest.current();
+        };
+        document.addEventListener("mousedown", onMouseDown);
+        document.addEventListener("keydown", onKey);
+        return () => {
+            document.removeEventListener("mousedown", onMouseDown);
+            document.removeEventListener("keydown", onKey);
+        };
+    }, [ref, active]);
 }
 
 /**

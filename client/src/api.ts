@@ -328,6 +328,30 @@ export interface ProfileUpdate {
     level?: string;
 }
 
+// THE CANDIDATE'S BACKGROUND (the Profile page) — mirrors tools/background.py. The *Base shapes are the
+// request bodies (POST, and the full-replace PUT /{slug}); the row adds the slug the server minted.
+// Months travel as "YYYY-MM"; `end: null` means a current role.
+export interface ExperienceBase {
+    title: string;
+    company: string;
+    start: string;
+    end: string | null;
+    description: string;
+}
+export interface Experience extends ExperienceBase {
+    slug: string;
+}
+export interface ProjectBase {
+    name: string;
+    url: string | null;
+    description: string;
+}
+export interface Project extends ProjectBase {
+    slug: string;
+}
+// A skill from the curated vocab (GET /api/skills, GET /api/profile/skills) — just {slug, name}.
+export type SkillItem = BasePageItem;
+
 // Phase 5 robust STT — the /api/transcribe response. The REQUEST is a FormData (the recorded
 // audio blob), not a JSON body, so there's no matching request interface: fetchBaseQuery detects
 // a FormData body, leaves it un-stringified, and lets the browser set the multipart Content-Type.
@@ -473,7 +497,9 @@ export const interviewApi = createApi({
     // invalidates it, so committing a "My questions" edit re-syncs both of the Questions page's
     // tables with no manual refetch.
     // "Jobs" — the saved job descriptions (list + detail); every job write invalidates it.
-    tagTypes: ["Interviews", "Dashboard", "Profile", "Questions", "Jobs"],
+    // "Experiences" / "Projects" / "Skills" — the Profile page's background lists, each invalidated by
+    // its own writes.
+    tagTypes: ["Interviews", "Dashboard", "Profile", "Questions", "Jobs", "Experiences", "Projects", "Skills"],
     endpoints: (builder) => ({
         // It's a MUTATION, not a query. Even though it "gets" the first question, the POST
         // CREATES server-side state — a row in `interviews` (a side effect). Rule of thumb:
@@ -580,7 +606,7 @@ export const interviewApi = createApi({
             invalidatesTags: ["Profile"],
         }),
         // Set/replace the profile PICTURE. The file itself is uploaded client-direct to Supabase
-        // Storage (see SettingsPage); this only stores the resulting public URL. PUT because the
+        // Storage (see profile/AvatarCard); this only stores the resulting public URL. PUT because the
         // avatar is a singleton sub-resource — idempotent whether it's the first upload or a replace.
         // Invalidates Profile so every avatar on screen (nav, session) re-reads the new URL at once.
         setAvatar: builder.mutation<{ ok: boolean }, string>({
@@ -592,6 +618,62 @@ export const interviewApi = createApi({
         deleteAvatar: builder.mutation<{ ok: boolean }, void>({
             query: () => ({ url: "/profile/avatar", method: "DELETE" }),
             invalidatesTags: ["Profile"],
+        }),
+        // THE CANDIDATE'S BACKGROUND — roles and projects are small owner-scoped lists (capped server-side),
+        // so each is one unpaginated GET. Edits are a full-replace PUT, never a PATCH: a null `end`/`url`
+        // MEANS "current role"/"no link", so it can't also mean "leave alone".
+        getExperiences: builder.query<Experience[], void>({
+            query: () => "/profile/experiences",
+            providesTags: ["Experiences"],
+        }),
+        createExperience: builder.mutation<Experience, ExperienceBase>({
+            query: (body) => ({ url: "/profile/experiences", method: "POST", body }),
+            invalidatesTags: ["Experiences"],
+        }),
+        updateExperience: builder.mutation<Experience, { slug: string; body: ExperienceBase }>({
+            query: ({ slug, body }) => ({
+                url: `/profile/experiences/${encodeURIComponent(slug)}`,
+                method: "PUT",
+                body,
+            }),
+            invalidatesTags: ["Experiences"],
+        }),
+        deleteExperience: builder.mutation<{ ok: boolean }, string>({
+            query: (slug) => ({ url: `/profile/experiences/${encodeURIComponent(slug)}`, method: "DELETE" }),
+            invalidatesTags: ["Experiences"],
+        }),
+        getProjects: builder.query<Project[], void>({
+            query: () => "/profile/projects",
+            providesTags: ["Projects"],
+        }),
+        createProject: builder.mutation<Project, ProjectBase>({
+            query: (body) => ({ url: "/profile/projects", method: "POST", body }),
+            invalidatesTags: ["Projects"],
+        }),
+        updateProject: builder.mutation<Project, { slug: string; body: ProjectBase }>({
+            query: ({ slug, body }) => ({
+                url: `/profile/projects/${encodeURIComponent(slug)}`,
+                method: "PUT",
+                body,
+            }),
+            invalidatesTags: ["Projects"],
+        }),
+        deleteProject: builder.mutation<{ ok: boolean }, string>({
+            query: (slug) => ({ url: `/profile/projects/${encodeURIComponent(slug)}`, method: "DELETE" }),
+            invalidatesTags: ["Projects"],
+        }),
+        // The candidate's skills, and the curated vocab the picker pages through. Saving REPLACES the
+        // whole selection (a list of vocab slugs) in one PUT.
+        getProfileSkills: builder.query<SkillItem[], void>({
+            query: () => "/profile/skills",
+            providesTags: ["Skills"],
+        }),
+        saveProfileSkills: builder.mutation<SkillItem[], string[]>({
+            query: (skills) => ({ url: "/profile/skills", method: "PUT", body: { skills } }),
+            invalidatesTags: ["Skills"],
+        }),
+        getSkills: builder.query<Page<SkillItem>, OptionPageQuery>({
+            query: ({ q = "", page = 1 }) => `/skills?q=${encodeURIComponent(q)}&page=${page}`,
         }),
         getLevel: builder.query<LevelPageItem, string>({
             query: (slug) => `/levels/${encodeURIComponent(slug)}`,
@@ -677,6 +759,17 @@ export const {
     useUpdateProfileMutation,
     useSetAvatarMutation,
     useDeleteAvatarMutation,
+    useGetExperiencesQuery,
+    useCreateExperienceMutation,
+    useUpdateExperienceMutation,
+    useDeleteExperienceMutation,
+    useGetProjectsQuery,
+    useCreateProjectMutation,
+    useUpdateProjectMutation,
+    useDeleteProjectMutation,
+    useGetProfileSkillsQuery,
+    useSaveProfileSkillsMutation,
+    useLazyGetSkillsQuery,
     useGetQuestionsQuery,
     useSaveQuestionsMutation,
     useGetRoundTypesQuery,
