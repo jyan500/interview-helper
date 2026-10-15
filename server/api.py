@@ -107,7 +107,7 @@ from pydantic_ai.usage import UsageLimits
 # GEMINI_API_KEY / OPENAI_API_KEY in the environment for this process.
 from grading import AnswerGrade, aggregate, grade_one, turn_agent
 # Interview simulation — the JD extractor and the round generator.
-from simulation import extract_job, generate_round
+from simulation import extract_job, generate_brief, generate_round
 
 # --- THE DATA LAYER + THE TEMPLATES, imported directly (see point 2 above). ------------
 # Note the asymmetry, and that it's intentional: `record_answer` is a legitimate interview
@@ -151,6 +151,13 @@ from tools.background import (
     set_profile_skills,
     update_experience,
     update_project,
+)
+from tools.custom_questions import (
+    archive_custom_question,
+    check_custom_question_input,
+    create_custom_question,
+    get_custom_question,
+    update_custom_question,
 )
 from tools.jobs import create_job, delete_job, get_job, list_jobs_page, update_job
 from tools.rounds import get_round_type_by_slug, list_round_types
@@ -406,6 +413,45 @@ class QuestionOut(BaseModel):
     level_name: str | None = None
     tags: list[str]
     selected: bool
+    is_custom: bool = False
+
+
+# POST /api/questions and PUT /api/questions/{slug} body — a candidate's OWN practice question (see
+# tools/custom_questions.py). A full replace on PUT, like the background routes. Length caps are a 422
+# before anything runs, so bad input never reaches the paid brief call. `grading_notes` "" or omitted
+# both mean "no guidance": the brief is written from the question alone.
+CUSTOM_QUESTION_TEXT_MAX = 2000
+CUSTOM_QUESTION_NOTES_MAX = 2000
+
+
+class CustomQuestionBody(BaseModel):
+    text: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=CUSTOM_QUESTION_TEXT_MAX)
+    ]
+    # aliased so the wire stays `type` while the Python name doesn't shadow the builtin
+    question_type: str = Field(alias="type")
+    level: str
+    roles: list[str] = Field(min_length=1)
+    grading_notes: Annotated[
+        str, StringConstraints(strip_whitespace=True, max_length=CUSTOM_QUESTION_NOTES_MAX)
+    ] = ""
+
+
+class NamedSlugOut(BaseModel):
+    slug: str
+    name: str
+
+
+# GET /api/questions/{slug} — the edit form's detail of the caller's own question.
+class CustomQuestionOut(BaseModel):
+    slug: str
+    text: str
+    type_slug: str
+    type_name: str
+    level_slug: str
+    level_name: str
+    roles: list[NamedSlugOut]
+    grading_notes: str | None
 
 
 # PUT /api/profile/questions body — a staged "My questions" edit committed in one batch. The SPA
@@ -1461,6 +1507,7 @@ async def questions(
     # aliased so the wire stays `?type=` while the Python name doesn't shadow the builtin.
     question_type: str | None = Query(default=None, alias="type"),
     exact_level: bool = False,
+    authored: bool | None = None,
     user_id: str = Depends(require_user),
 ):
     return await list_questions_page(
@@ -1472,7 +1519,91 @@ async def questions(
         saved=saved,
         type_slug=question_type,
         exact_level=exact_level,
+        authored=authored,
     )
+
+
+# ===========================================================================
+# THE CANDIDATE'S OWN QUESTIONS — see tools/custom_questions.py.
+#
+# POST   /api/questions         write one: check input, LLM-write its brief, insert (+ save it)
+# GET    /api/questions/{slug}  the edit form's detail
+# PUT    /api/questions/{slug}  replace it; the brief is rewritten only if what it depends on changed
+# DELETE /api/questions/{slug}  archive it (soft delete: past interviews still resolve it)
+#
+# Owner-scoped by the VERIFIED uid: a bank question or someone else's slug is a 404, never a 403, so
+# a slug's existence isn't leaked. Wallet-gated: POST and PUT can make a paid LLM call.
+
+@app.post("/api/questions", response_model=QuestionOut)
+async def add_custom_question(body: CustomQuestionBody, user_id: str = Depends(require_user)):
+    # 1. validate the vocab + the count cap BEFORE the paid call
+    check = _envelope_result(await check_custom_question_input(
+        user_id, body.question_type, body.level, body.roles, creating=True
+    ))
+    # 2. write the grader-only brief, steered by the author's notes when given
+    brief = await generate_brief(
+        body.text, check["type_name"], check["level_name"], check["role_names"], body.grading_notes
+    )
+    # 3. insert the question, its roles, its brief, and the saved-set row
+    result = await create_custom_question(
+        user_id,
+        text=body.text,
+        type_slug=body.question_type,
+        level_slug=body.level,
+        role_slugs=body.roles,
+        grading_notes=body.grading_notes or None,
+        brief=brief,
+    )
+    return _envelope_result(result, "question")
+
+
+@app.get("/api/questions/{slug}", response_model=CustomQuestionOut)
+async def custom_question_detail(slug: str, user_id: str = Depends(require_user)):
+    return _envelope_result(await get_custom_question(user_id, slug), "question")
+
+
+@app.put("/api/questions/{slug}", response_model=QuestionOut)
+async def replace_custom_question(
+    slug: str, body: CustomQuestionBody, user_id: str = Depends(require_user)
+):
+    # 1. the current version (404 if it isn't the caller's), to tell whether the brief is stale
+    current = _envelope_result(await get_custom_question(user_id, slug), "question")
+    check = _envelope_result(await check_custom_question_input(
+        user_id, body.question_type, body.level, body.roles, creating=False
+    ))
+
+    # 2. rewrite the brief only when something it's written FROM changed. Roles are context, not
+    #    substance, so a roles-only edit costs no LLM call.
+    notes = body.grading_notes or None
+    brief_inputs_changed = (
+        body.text != current["text"]
+        or body.question_type != current["type_slug"]
+        or body.level != current["level_slug"]
+        or notes != current["grading_notes"]
+    )
+    brief = None
+    if brief_inputs_changed:
+        brief = await generate_brief(
+            body.text, check["type_name"], check["level_name"], check["role_names"], notes
+        )
+
+    # 3. write it back
+    result = await update_custom_question(
+        user_id,
+        slug,
+        text=body.text,
+        type_slug=body.question_type,
+        level_slug=body.level,
+        role_slugs=body.roles,
+        grading_notes=notes,
+        brief=brief,
+    )
+    return _envelope_result(result, "question")
+
+
+@app.delete("/api/questions/{slug}")
+async def remove_custom_question(slug: str, user_id: str = Depends(require_user)) -> dict:
+    return _envelope_result(await archive_custom_question(user_id, slug))
 
 
 # PUT /api/profile/questions : commit a staged "My questions" edit (add/remove question slugs) in one
@@ -1570,8 +1701,9 @@ async def delete_profile_avatar(user_id: str = Depends(require_user)) -> dict:
 # Owner-scoped like the rest of /api/profile: the VERIFIED uid goes into every query, and a single-row
 # lookup matches on slug AND that uid, so someone else's slug is just a 404, never a 403 leak.
 # ===========================================================================
-def _background_result(result: dict, key: str | None = None):
-    """Map a tools/background envelope onto HTTP: not_found -> 404, any other error -> 400."""
+def _envelope_result(result: dict, key: str | None = None):
+    """Map an {"ok", "error"} tool envelope (tools/background, tools/custom_questions) onto HTTP:
+    not_found -> 404, any other error -> 400."""
     if not result["ok"]:
         status = 404 if result["error"] == "not_found" else 400
         raise HTTPException(status_code=status, detail=result["error"])
@@ -1593,7 +1725,7 @@ async def add_experience(body: ExperienceBody, user_id: str = Depends(require_us
         end=parse_month(body.end) if body.end is not None else None,
         description=body.description,
     )
-    return _background_result(result, "experience")
+    return _envelope_result(result, "experience")
 
 
 @app.put("/api/profile/experiences/{slug}", response_model=ExperienceOut)
@@ -1607,12 +1739,12 @@ async def replace_experience(slug: str, body: ExperienceBody, user_id: str = Dep
         end=parse_month(body.end) if body.end is not None else None,
         description=body.description,
     )
-    return _background_result(result, "experience")
+    return _envelope_result(result, "experience")
 
 
 @app.delete("/api/profile/experiences/{slug}")
 async def remove_experience(slug: str, user_id: str = Depends(require_user)) -> dict:
-    return _background_result(await delete_experience(user_id, slug))
+    return _envelope_result(await delete_experience(user_id, slug))
 
 
 @app.get("/api/profile/projects", response_model=list[ProjectOut])
@@ -1625,7 +1757,7 @@ async def add_project(body: ProjectBody, user_id: str = Depends(require_user)):
     result = await create_project(
         user_id, name=body.name, url=body.url, description=body.description
     )
-    return _background_result(result, "project")
+    return _envelope_result(result, "project")
 
 
 @app.put("/api/profile/projects/{slug}", response_model=ProjectOut)
@@ -1633,12 +1765,12 @@ async def replace_project(slug: str, body: ProjectBody, user_id: str = Depends(r
     result = await update_project(
         user_id, slug, name=body.name, url=body.url, description=body.description
     )
-    return _background_result(result, "project")
+    return _envelope_result(result, "project")
 
 
 @app.delete("/api/profile/projects/{slug}")
 async def remove_project(slug: str, user_id: str = Depends(require_user)) -> dict:
-    return _background_result(await delete_project(user_id, slug))
+    return _envelope_result(await delete_project(user_id, slug))
 
 
 @app.get("/api/profile/skills", response_model=list[SkillOut])
@@ -1648,7 +1780,7 @@ async def my_skills(user_id: str = Depends(require_user)):
 
 @app.put("/api/profile/skills", response_model=list[SkillOut])
 async def replace_skills(body: SkillsUpdate, user_id: str = Depends(require_user)):
-    return _background_result(await set_profile_skills(user_id, body.skills), "skills")
+    return _envelope_result(await set_profile_skills(user_id, body.skills), "skills")
 
 
 @app.get("/api/skills", response_model=Page[SkillOut])

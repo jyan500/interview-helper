@@ -34,7 +34,7 @@ from fastapi_pagination import Params
 # in favour of it; it's removed in 0.16). Same contract — (session, select_stmt, params) ->
 # Page(items, total, page, size, pages) — just the coroutine the async engine needs.
 from fastapi_pagination.ext.sqlalchemy import apaginate
-from sqlalchemy import delete, select
+from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.orm import selectinload
 
 from db.engine import get_session
@@ -188,9 +188,23 @@ async def next_question(
         return {"status": "ok", "question": _question_dict(question_result)}
 
 
-def _filtered_questions_stmt(role_id: int, level_rank: int | None):
+def _visible_to(profile_id):
+    """The bank-visibility clause: not archived, and either a bank question (no author) or one the
+    caller wrote. `profile_id=None` (the MCP surface, which has no user) means the public bank only.
+
+    Generated (job) questions need no clause here: they have no `question_roles` pairing, so the
+    bank reads never reach them."""
+    if profile_id is None:
+        owner_clause = Question.profile_id.is_(None)
+    else:
+        owner_clause = or_(Question.profile_id.is_(None), Question.profile_id == profile_id)
+    return and_(Question.archived_at.is_(None), owner_clause)
+
+
+def _filtered_questions_stmt(role_id: int, level_rank: int | None, profile_id=None):
     """The bank query shared by next_question and the interview-plan builder: every question for a
-    role, at or below a seniority, in that role's bank order.
+    role, at or below a seniority, in that role's bank order, that `profile_id` may see (see
+    _visible_to: the public bank plus their own questions; None = public only).
 
     question<->role is N:N, so join the `question_roles` pairing to scope to this role and order by
     its `sort_order` (a shared question sits at a different place in each role's list). The level
@@ -204,7 +218,7 @@ def _filtered_questions_stmt(role_id: int, level_rank: int | None):
     stmt = (
         select(Question)
         .join(QuestionRole, QuestionRole.question_id == Question.id)
-        .where(QuestionRole.role_id == role_id)
+        .where(QuestionRole.role_id == role_id, _visible_to(profile_id))
         .order_by(QuestionRole.sort_order)
         .options(*QUESTION_LOADS)
     )
@@ -275,7 +289,7 @@ async def build_interview_plan(
       2. otherwise the DEFAULT: `DEFAULT_PLAN_SIZE` random questions of increasing seniority, so a
          brand-new candidate still gets a bounded, sensibly-ramped interview.
     """
-    base = _filtered_questions_stmt(role_row.id, level_row.rank)
+    base = _filtered_questions_stmt(role_row.id, level_row.rank, profile_id)
 
     if profile_id is not None:
         saved_ids = select(ProfileQuestion.question_id).where(
@@ -310,6 +324,9 @@ def _question_out(question: Question, selected: bool) -> dict:
         "level_name": question.level.name if question.level is not None else None,
         "tags": [tag.name for tag in question.tags],
         "selected": selected,
+        # a user-written question (only ever the caller's own: see _visible_to), so the UI can badge
+        # it and offer edit/delete
+        "is_custom": question.profile_id is not None,
     }
 
 
@@ -350,6 +367,7 @@ async def list_questions_page(
     saved: bool | None = None,
     type_slug: str | None = None,
     exact_level: bool = False,
+    authored: bool | None = None,
 ):
     """A PAGE of bank questions for the browse UI — backs GET /api/questions.
 
@@ -364,6 +382,9 @@ async def list_questions_page(
     draws entry+mid+senior) — what the dashboard "My questions" table and the Add-question modal
     want. The Questions-page filter passes `exact_level=True` to instead match ONLY the chosen level,
     which is what a browse filter reads intuitively (and mirrors the Interviews-page level filter).
+
+    `authored` is another TRI-STATE: True → only the caller's own questions, False → only bank
+    questions, None → both (the bank always includes the caller's own, see _visible_to).
     """
     async with get_session() as db:
         role_row = (
@@ -382,7 +403,9 @@ async def list_questions_page(
             # unknown level -> a rank nothing can be at-or-below, i.e. an empty result.
             at_or_below_rank = level_row.rank if level_row is not None else -1
         # unknown role -> a role_id nothing pairs with, again an empty page.
-        stmt = _filtered_questions_stmt(role_row.id if role_row else -1, at_or_below_rank)
+        stmt = _filtered_questions_stmt(
+            role_row.id if role_row else -1, at_or_below_rank, profile_id
+        )
 
         if level is not None and exact_level:
             # exact seniority: only this level's questions. Unknown level -> -1, matching nothing.
@@ -395,6 +418,11 @@ async def list_questions_page(
 
         if search:
             stmt = stmt.where(Question.text.ilike(f"%{search}%"))
+        if authored is True:
+            # the visibility clause already limits authored rows to the caller's own
+            stmt = stmt.where(Question.profile_id.is_not(None))
+        elif authored is False:
+            stmt = stmt.where(Question.profile_id.is_(None))
         if saved is not None and profile_id is not None:
             saved_ids = select(ProfileQuestion.question_id).where(
                 ProfileQuestion.profile_id == profile_id
@@ -442,23 +470,34 @@ async def save_saved_questions(
     question is skipped, so re-saving never errors on the unique constraint); removes that aren't
     saved are simply no-ops. Unknown slugs are ignored — the bank is authoritative, and a stale slug
     from the client shouldn't 500 a save. Returns {"ok": True, "added": n, "removed": m}.
+
+    ADDS go through _visible_to, so another user's question (or an archived one) is ignored like an
+    unknown slug. REMOVES don't need it: they only ever delete the caller's own rows.
     """
     add = add or []
     remove = remove or []
-    slugs = set(add) | set(remove)
-    if not slugs:
+    if not add and not remove:
         return {"ok": True, "added": 0, "removed": 0}
 
     async with get_session() as db:
-        id_by_slug = dict(
+        addable_by_slug = dict(
             (
                 await db.execute(
-                    select(Question.slug, Question.id).where(Question.slug.in_(slugs))
+                    select(Question.slug, Question.id).where(
+                        Question.slug.in_(add), _visible_to(profile_id)
+                    )
                 )
             ).all()
         )
-        add_ids = [id_by_slug[s] for s in add if s in id_by_slug]
-        remove_ids = [id_by_slug[s] for s in remove if s in id_by_slug]
+        removable_by_slug = dict(
+            (
+                await db.execute(
+                    select(Question.slug, Question.id).where(Question.slug.in_(remove))
+                )
+            ).all()
+        )
+        add_ids = [addable_by_slug[s] for s in add if s in addable_by_slug]
+        remove_ids = [removable_by_slug[s] for s in remove if s in removable_by_slug]
 
         removed = 0
         if remove_ids:
@@ -526,16 +565,21 @@ async def get_level_by_slug(slug: str) -> Level | None:
         ).scalar_one_or_none()
 
 
-async def get_question(question_id: str) -> dict:
+async def get_question(question_id: str, public_only: bool = False) -> dict:
     """Look up a single question by SLUG (backs the question:// resource).
 
     Returns {"status": "ok", "question": {...}}, or
     {"status": "not_found", "question_id": question_id}.
+
+    `public_only=True` (the MCP surface, which has no user) hides user-written questions. The app's
+    own callers leave it False: they resolve slugs from an interview the caller already owns, and an
+    archived question in that interview's history must still resolve.
     """
     async with get_session() as db:
-        stmt = await db.execute(
-            select(Question).where(Question.slug == question_id).options(*QUESTION_LOADS)
-        )
+        stmt = select(Question).where(Question.slug == question_id).options(*QUESTION_LOADS)
+        if public_only:
+            stmt = stmt.where(_visible_to(None))
+        stmt = await db.execute(stmt)
         result = stmt.scalar_one_or_none()
         if result is None:
             return {"status": "not_found", "question_id": question_id}
@@ -547,6 +591,8 @@ async def list_questions(role: str) -> dict:
 
     Returns {"status": "ok", "role": role, "questions": [...]}, or
     {"status": "not_found", "role": role}.
+
+    MCP-only, so the PUBLIC bank: user-written and archived questions are left out.
     """
     async with get_session() as db:
         # `role.questions` is an association proxy through question_links -> question
@@ -558,10 +604,14 @@ async def list_questions(role: str) -> dict:
         result = stmt.scalar_one_or_none()
         if result is None:
             return {"status": "not_found", "role": role}
-        return {"status": "ok", "role": role, "questions": [_question_dict(q) for q in result.questions]}
+        public = []
+        for q in result.questions:
+            if q.profile_id is None and q.archived_at is None:
+                public.append(_question_dict(q))
+        return {"status": "ok", "role": role, "questions": public}
 
 
-async def get_reference(question_id: str) -> dict:
+async def get_reference(question_id: str, public_only: bool = False) -> dict:
     """Return the authored reference brief for a question (backs the reference:// resource).
 
     PHASE E — SCAFFOLD, fill in the body. The brief is the grader's ANSWER KEY: leveling bands +
@@ -598,8 +648,12 @@ async def get_reference(question_id: str) -> dict:
       * get the brief via (a) or (b); not_found if there's no brief row.
       * return the ok envelope with the brief text.
     """
+    # `public_only`: same as get_question's (the MCP surface passes True; the grader leaves it False).
     async with get_session() as db:
-        stmt = await db.execute(select(Question).where(Question.slug == question_id))
+        stmt = select(Question).where(Question.slug == question_id)
+        if public_only:
+            stmt = stmt.where(_visible_to(None))
+        stmt = await db.execute(stmt)
         result = stmt.scalar_one_or_none()
         if result is None:
             return {"status": "not_found", "question_id": question_id}
