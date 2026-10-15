@@ -10,14 +10,21 @@
  * useQuestionSelection) may have staged an unsaved toggle — so we ask through `isChecked(slug,
  * serverSelected)` and report clicks back through `onToggle(slug, serverSelected)`. Whether a click
  * saves immediately or stages until a Save button is the caller's business.
+ *
+ * The candidate's OWN questions (`is_custom`) carry a "Custom" tag. Pass `onEdit`/`onDelete` and those
+ * rows also get Edit / Delete icon buttons in a trailing actions column (bank rows leave it blank).
  */
+import { PencilSimple, Trash } from "@phosphor-icons/react";
 import type { QuestionItem } from "../api";
+import Button from "./Button";
 import { Skeleton } from "./Skeleton";
 
 export default function QuestionsTable({
     questions,
     isChecked,
     onToggle,
+    onEdit,
+    onDelete,
     loading = false,
     skeletonRows = 8,
     emptyMessage = "No questions here yet.",
@@ -25,11 +32,14 @@ export default function QuestionsTable({
     questions: QuestionItem[];
     isChecked?: (slug: string, serverSelected: boolean) => boolean;
     onToggle?: (slug: string, serverSelected: boolean) => void;
+    onEdit?: (question: QuestionItem) => void;
+    onDelete?: (question: QuestionItem) => void;
     loading?: boolean;
     skeletonRows?: number;
     emptyMessage?: string;
 }) {
     const selectable = Boolean(isChecked && onToggle);
+    const editable = Boolean(onEdit && onDelete);
 
     // Empty line only when settled with no rows — never mid-fetch, when the skeleton shows.
     if (!loading && questions.length === 0) {
@@ -48,6 +58,7 @@ export default function QuestionsTable({
                     <col />
                     <col className="w-36" />
                     <col className="w-24" />
+                    {editable && <col className="w-24" />}
                 </colgroup>
                 <thead>
                     <tr>
@@ -56,6 +67,7 @@ export default function QuestionsTable({
                         <th>Question</th>
                         <th>Type</th>
                         <th>Level</th>
+                        {editable && <th></th>}
                     </tr>
                 </thead>
                 <tbody>
@@ -66,6 +78,7 @@ export default function QuestionsTable({
                                 <td><Skeleton inline className="h-3.5 w-72" /></td>
                                 <td><Skeleton inline className="h-3.5 w-24" /></td>
                                 <td><Skeleton inline className="h-3.5 w-16" /></td>
+                                {editable && <td></td>}
                             </tr>
                         ))}
                     {!loading &&
@@ -93,7 +106,10 @@ export default function QuestionsTable({
                                         className={selectable ? "cursor-pointer align-top" : "align-top"}
                                         onClick={selectable ? toggle : undefined}
                                     >
-                                        <div className="line-clamp-2" title={q.text}>{q.text}</div>
+                                        <div className="line-clamp-2" title={q.text}>
+                                            {q.is_custom && <span className="tag tag-accent mr-2 align-middle">Custom</span>}
+                                            {q.text}
+                                        </div>
                                     </td>
                                     <td className="truncate align-top text-neutral-300" title={q.type_name}>
                                         {q.type_name}
@@ -101,6 +117,20 @@ export default function QuestionsTable({
                                     <td className="truncate align-top text-neutral-400" title={q.level_name ?? undefined}>
                                         {q.level_name ?? "—"}
                                     </td>
+                                    {editable && (
+                                        <td className="align-top">
+                                            {q.is_custom && (
+                                                <div className="flex justify-end gap-1">
+                                                    <Button variant="ghost" icon aria-label={`Edit "${q.text}"`} title="Edit" onClick={() => onEdit!(q)}>
+                                                        <PencilSimple size={17} weight="regular" />
+                                                    </Button>
+                                                    <Button variant="ghost" icon aria-label={`Delete "${q.text}"`} title="Delete" onClick={() => onDelete!(q)}>
+                                                        <Trash size={17} weight="regular" />
+                                                    </Button>
+                                                </div>
+                                            )}
+                                        </td>
+                                    )}
                                 </tr>
                             );
                         })}

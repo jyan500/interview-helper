@@ -239,10 +239,12 @@ async def create_interview(
         # session is expire_on_commit=False (see db/engine.py).
         first = plan[0] if plan else None
         first_has_diagram_canvas = False
+        first_has_code_editor = False
         if first is not None:
-            first_has_diagram_canvas = (await db.execute(
-                select(QuestionType.has_diagram_canvas).where(QuestionType.id == first.type_id)
-            )).scalar_one()
+            first_has_diagram_canvas, first_has_code_editor = (await db.execute(
+                select(QuestionType.has_diagram_canvas, QuestionType.has_code_editor)
+                .where(QuestionType.id == first.type_id)
+            )).one()
         return {
             "ok": True,
             "interview_id": slug,
@@ -252,8 +254,9 @@ async def create_interview(
             "from_saved": from_saved,
             "first_qid": first.slug if first is not None else None,
             "first_qtext": first.text if first is not None else None,
-            # whether the SPA shows the diagram canvas for it (its question type's flag)
+            # whether the SPA shows the diagram canvas / code editor for it (its question type's flags)
             "first_has_diagram_canvas": first_has_diagram_canvas,
+            "first_has_code_editor": first_has_code_editor,
         }
 
 
@@ -375,7 +378,7 @@ async def load_interview_state(interview_id: str) -> dict:
         # question is the first one in the plan, by position, that hasn't been asked yet. None means
         # the plan is exhausted, which is the ADVANCE branch's cue to END the interview.
         plan = (await db.execute(
-            select(Question.slug, Question.text, QuestionType.has_diagram_canvas)
+            select(Question.slug, Question.text, QuestionType.has_diagram_canvas, QuestionType.has_code_editor)
             .join(InterviewQuestion, InterviewQuestion.question_id == Question.id)
             .join(QuestionType, Question.type_id == QuestionType.id)
             .where(InterviewQuestion.interview_id == pk)
@@ -384,11 +387,13 @@ async def load_interview_state(interview_id: str) -> dict:
         next_planned_qid = None
         next_planned_qtext = None
         next_planned_has_diagram_canvas = False
-        for slug, text, has_diagram_canvas in plan:
+        next_planned_has_code_editor = False
+        for slug, text, has_diagram_canvas, has_code_editor in plan:
             if slug not in asked_ids:
                 next_planned_qid = slug
                 next_planned_qtext = text
                 next_planned_has_diagram_canvas = has_diagram_canvas
+                next_planned_has_code_editor = has_code_editor
                 break
 
         # THE CURRENT DIAGRAM — the question's newest non-NULL turns.diagram, the baseline /api/answer
@@ -430,6 +435,7 @@ async def load_interview_state(interview_id: str) -> dict:
             "next_planned_qid": next_planned_qid,
             "next_planned_qtext": next_planned_qtext,
             "next_planned_has_diagram_canvas": next_planned_has_diagram_canvas,
+            "next_planned_has_code_editor": next_planned_has_code_editor,
             "message_history": message_history
         }
 
@@ -1524,18 +1530,18 @@ async def load_resume_payload(interview_id: str) -> dict:
             "level": interview.level.name,
             "turns": turns,
             "current_question": current_question,
-            # INTERVIEW SIMULATION — so a round resumes into the right UI: the job/company/round for
-            # the header, whether to show the code editor, and the PARENT question on the table (its
-            # full text — the coding panel's problem statement — even while a probe is the open turn).
+            # So an interview resumes into the right UI: the job/company/round for the header, and the
+            # PARENT question on the table (its full text — the coding panel's problem statement — even
+            # while a probe is the open turn), whose type flags say whether the code editor or the
+            # diagram canvas shows.
             **_simulation_fields(interview),
-            "has_code_editor": (interview.round_type.has_code_editor
-                                if interview.round_type is not None else False),
             # None for a bank interview (no round) — the SPA keeps its free manual/smart choice there.
             "allows_smart_voice": (interview.round_type.allows_smart_voice
                                    if interview.round_type is not None else None),
             "question": ({"slug": interview.current_question.slug,
                           "text": interview.current_question.text,
-                          "has_diagram_canvas": interview.current_question.type.has_diagram_canvas}
+                          "has_diagram_canvas": interview.current_question.type.has_diagram_canvas,
+                          "has_code_editor": interview.current_question.type.has_code_editor}
                          if interview.current_question is not None else None),
             "diagram": diagram,
         }

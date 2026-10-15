@@ -28,8 +28,8 @@ import type { PlanQuestion } from "../api";
 //                  current question from GET /api/interviews/{id}/resume and redraws instead of seeding.
 //   role / level — human-readable LABELS for the header (both flows carry them).
 //   company / round — a job SIMULATION's header labels instead (null/absent for a bank interview).
-//   hasCodeEditor / question — FRESH START of a coding round: open with the coding panel, showing the
-//                  first plan question. A RESUME learns both from the resume payload instead.
+//   question     — FRESH START: the first plan question. Its type flags say whether to open with the
+//                  coding panel or the diagram canvas. A RESUME learns it from the resume payload instead.
 //   allowsSmartVoice — FRESH START of a round: whether smart voice turn-taking is offered (then the
 //                  default) or the round is manual-only. Absent for a bank interview. A RESUME learns it
 //                  from the resume payload.
@@ -41,7 +41,6 @@ export type SessionNavState = {
     level: string;
     company?: string | null;
     round?: string | null;
-    hasCodeEditor?: boolean;
     allowsSmartVoice?: boolean | null;
     question?: PlanQuestion | null;
 };

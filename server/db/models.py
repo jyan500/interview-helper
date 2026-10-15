@@ -302,6 +302,11 @@ class QuestionType(Base, TimestampMixin):
     # question by question, and a simulation round's generated questions carry a type too, so one
     # flag covers both. A flag, so the client never branches on a slug.
     has_diagram_canvas: Mapped[bool] = mapped_column(Boolean, default=False)
+    # whether the SPA shows the code editor while a question of this kind is on the table. On the type
+    # for the same reason as has_diagram_canvas: a Practice interview can mix in a coding question (a
+    # candidate's own), and it has no round to carry the flag. A simulation's coding round gets it from
+    # its generated questions' type too.
+    has_code_editor: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class RoundType(Base, TimestampMixin):
