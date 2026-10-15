@@ -512,8 +512,20 @@ class Question(Base, TimestampMixin):
     the BANK: they get no `question_roles` pairing, and every bank read (browse, default plan,
     `next_question`) joins through that table, so a generated question is invisible there without a
     single extra filter.
+
+    USER-AUTHORED QUESTIONS LIVE HERE TOO (slug "user-<hex>", `profile_id` = the author). Unlike
+    generated ones they DO get `question_roles` pairings, so the bank reads and the plan builder find
+    them; what keeps them private is the owner filter every bank read applies
+    (tools/questions._visible_to). Their brief is LLM-written at create, guided by `grading_notes`.
+    They're soft-deleted (`archived_at`), never hard-deleted: turns and scorecard entries keep FKs to
+    them, and an archived question vanishes from the bank and new plans while history still resolves.
     """
     __tablename__ = "questions"
+    __table_args__ = (
+        CheckConstraint(
+            "job_id IS NULL OR profile_id IS NULL", name="ck_question_job_or_author"
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     slug: Mapped[str] = mapped_column(String(64), unique=True, index=True)   # "be-1"
@@ -526,6 +538,17 @@ class Question(Base, TimestampMixin):
     job_id: Mapped[int | None] = mapped_column(
         ForeignKey("jobs.id", ondelete="CASCADE"), nullable=True, index=True
     )
+
+    # The author of a user-written question; NULL for bank and generated questions. CASCADE: the
+    # author's interviews cascade from the profile too, so no turn is left pointing at a deleted row.
+    profile_id: Mapped[uuid_pkg.UUID | None] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    # The author's optional "how should this be graded" note. NOT the brief: the brief is always
+    # LLM-written (guided by this), and kept so the edit form can show it and a regenerate reuses it.
+    grading_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Soft delete for user-written questions (see the docstring).
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Phase D fills this. Nullable until then so today's bank — which has no levels — seeds
     # cleanly and next_question can ignore the column. Stays on the QUESTION (not the

@@ -111,7 +111,8 @@ async def rubric_resource(role: str) -> dict:
 @mcp.resource("question://{question_id}")
 async def question_resource(question_id: str) -> dict:
     """ One interview question, addressable by id. Read-only context. """
-    return await questions.get_question(question_id)
+    # public_only: this door has no user, so a user-written question must not resolve through it
+    return await questions.get_question(question_id, public_only=True)
 
 
 # questions://{role} — ALL questions for a role (the whole list, not one by id). Added in
@@ -160,7 +161,7 @@ async def interview_resource(interview_id: str) -> dict:
 @mcp.resource("reference://{question_id}")
 async def reference_resource(question_id: str) -> dict:
     """The authored grading brief for a question — read-only context."""
-    return await questions.get_reference(question_id)
+    return await questions.get_reference(question_id, public_only=True)
 
 
 # ===========================================================================
