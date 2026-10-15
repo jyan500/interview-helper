@@ -109,11 +109,13 @@ export default function SessionPage() {
     // flashed. A single latch set-at-start / cleared-at-reveal has no such gap by construction.
     const [preparing, setPreparing] = useState(false);
 
-    // CODING ROUNDS — the coding panel beside the conversation. A fresh start knows from the producer
-    // (nav); a resume learns it from the resume payload. `problem` is the PLAN question on the table
-    // (never a probe), swapped when a turn advances. `code` rides along with the next answer whenever it
-    // differs from `lastSentCode`, so an unchanged editor isn't re-sent (and re-read) every turn.
-    const [hasCodeEditor, setHasCodeEditor] = useState(nav.hasCodeEditor ?? false);
+    // CODING QUESTIONS — the coding panel beside the conversation, while the question on the table has
+    // one (its TYPE decides, like the diagram canvas, so a Practice interview with a coding question in
+    // it shows the editor for that question only). A fresh start knows from the first question; a resume
+    // and each advance learn it from their payloads. `problem` is the PLAN question on the table (never a
+    // probe), swapped when a turn advances. `code` rides along with the next answer whenever it differs
+    // from `lastSentCode`, so an unchanged editor isn't re-sent (and re-read) every turn.
+    const [hasCodeEditor, setHasCodeEditor] = useState(nav.question?.has_code_editor ?? false);
     const [problem, setProblem] = useState<PlanQuestion | null>(nav.question ?? null);
     const [code, setCode] = useState("");
     const [lastSentCode, setLastSentCode] = useState("");
@@ -168,11 +170,11 @@ export default function SessionPage() {
     // still selectable; coding and system design are manual-only, since their long thinking pauses
     // would trip the silence countdown and submit a half-answer. A bank interview (no round, so
     // null/absent) keeps the free choice and opens in manual. A resume learns the rule from its payload.
-    // A system-design question is manual-only even in a bank interview: the canvas locks it per question
-    // (a Job system-design round is already locked by its round row).
+    // A system-design or coding question is manual-only even in a bank interview: the canvas / editor
+    // locks it per question (a Job round of either kind is already locked by its round row).
     const [allowsSmartVoice, setAllowsSmartVoice] = useState(nav.allowsSmartVoice);
     const [voiceMode, setVoiceMode] = useState<TurnMode>(() => defaultVoiceMode(nav.allowsSmartVoice));
-    const smartVoiceLocked = allowsSmartVoice === false || hasDiagramCanvas;
+    const smartVoiceLocked = allowsSmartVoice === false || hasDiagramCanvas || hasCodeEditor;
 
     // Which microphone to capture from (micDeviceId, from useInterviewSettings above). "" = system
     // default; a real deviceId pins that exact mic — the picker exists because a wrong default mic
@@ -283,7 +285,7 @@ export default function SessionPage() {
                 // when that speech ends (the edge effect) and a manual-only round's never does.
                 setAllowsSmartVoice(payload.allows_smart_voice);
                 setVoiceMode(defaultVoiceMode(payload.allows_smart_voice));
-                const coding = payload.has_code_editor;
+                const coding = payload.question?.has_code_editor ?? false;
                 const problemText = payload.question?.text;
                 const shown = (text: string) => (coding ? cueProblem(text, problemText, CODING_PROBLEM_CUE) : text);
                 setProblem(payload.question);
@@ -405,26 +407,28 @@ export default function SessionPage() {
             revealLine(pendingId, "Sorry, I couldn't record that. Try again.");
             return;
         }
-        // Advanced to the next plan question. The workspace follows it: a coding round swaps to the new
-        // problem with a fresh editor, and the canvas starts blank (or hides, if the next question in a
-        // mixed Practice interview isn't system design). The DiagramPanel is keyed by the question, so
-        // the new problem remounts it from the blank `diagram`.
+        // Advanced to the next plan question. The workspace follows ITS type flags, not the previous
+        // question's: a coding question opens the editor fresh on the new problem, a system-design one a
+        // blank canvas, and either hides when the next question in a mixed Practice interview doesn't
+        // have it. The DiagramPanel is keyed by the question, so the new problem remounts it from the
+        // blank `diagram`.
         let message = res.message;
         if (res.question) {
-            if (hasCodeEditor) message = cueProblem(message, res.question.text, CODING_PROBLEM_CUE);
+            // a coding problem isn't read aloud: the interviewer points at the panel instead
+            if (res.question.has_code_editor) message = cueProblem(message, res.question.text, CODING_PROBLEM_CUE);
             if (res.question.slug !== problem?.slug) {
                 setProblem(res.question);
                 setHasDiagramCanvas(res.question.has_diagram_canvas);
-                // a system-design question is manual-only: drop out of smart before it's spoken, so the
-                // mic doesn't auto-arm when the speech ends
-                if (res.question.has_diagram_canvas) setVoiceMode("manual");
+                setHasCodeEditor(res.question.has_code_editor);
+                // system-design and coding questions are manual-only: drop out of smart before it's
+                // spoken, so the mic doesn't auto-arm when the speech ends
+                if (res.question.has_diagram_canvas || res.question.has_code_editor) setVoiceMode("manual");
                 setDiagram(emptyDiagram());
                 setLastSentDiagram(emptyDiagram());
-                if (hasCodeEditor) {
-                    setCode("");
-                    setCodeDrafts({}); // every language starts blank on the new problem
-                    setLastSentCode("");
-                }
+                // every language starts blank on the new problem
+                setCode("");
+                setCodeDrafts({});
+                setLastSentCode("");
             }
         }
         // Reveal the pending bubble's text in sync with the voice via onReady.

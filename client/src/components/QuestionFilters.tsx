@@ -1,8 +1,9 @@
 /**
  * QuestionFilters — the filter row above ONE questions table (the Saved section or the Other section).
  * One react-hook-form form: a keyword box (case-insensitive substring match on the question TEXT, sent
- * as `q`), plus three async pickers — role, level, and question TYPE — and a single Search that applies
- * all four at once (the "filters apply on submit" rule). A Clear button resets the section.
+ * as `q`), plus three async pickers — role, level, and question TYPE — a "Created by me" checkbox (only
+ * the candidate's own questions), and a single Search that applies them all at once (the "filters apply
+ * on submit" rule). A Clear button resets the section.
  *
  * It's the questions-page counterpart of the Interviews-page filter row, generalised so the SAME
  * component drives both sections (the page mounts two, one per prefix). It knows nothing about the URL:
@@ -37,6 +38,7 @@ type FiltersForm = {
     role: SelectOption | null;
     level: SelectOption | null;
     questionType: SelectOption | null;
+    authored: boolean;
 };
 
 interface QuestionFiltersProps {
@@ -46,6 +48,7 @@ interface QuestionFiltersProps {
     levelSlug?: string;
     questionTypeSlug?: string;
     q?: string;
+    authored: boolean;
     // What Clear resets the role picker to (the profile default role as an Option) — since role can't
     // be "none". A label refresh from getRole still corrects it if this label is stale.
     defaultRole: SelectOption | null;
@@ -60,6 +63,7 @@ export default function QuestionFilters({
     levelSlug,
     questionTypeSlug,
     q,
+    authored,
     defaultRole,
     showClear,
     onApply,
@@ -78,6 +82,7 @@ export default function QuestionFilters({
             role: optionFromSlug(roleSlug),
             level: optionFromSlug(levelSlug ?? null),
             questionType: optionFromSlug(questionTypeSlug ?? null),
+            authored,
         },
     });
 
@@ -108,13 +113,14 @@ export default function QuestionFilters({
             role: values.role?.value ?? null,
             level: values.level?.value ?? null,
             questionType: values.questionType?.value ?? null,
+            authored: values.authored,
         });
     }
 
     function clear() {
         // role reverts to the default (the bank always needs a concrete role); the optional filters go
         // back to "all". The parent's onClear then wipes this section's URL params.
-        reset({ q: "", role: defaultRole, level: null, questionType: null });
+        reset({ q: "", role: defaultRole, level: null, questionType: null, authored: false });
         onClear();
     }
 
@@ -149,6 +155,10 @@ export default function QuestionFilters({
                     placeholder="All types"
                 />
             </div>
+            <label className="flex items-center gap-2 text-[13.5px] text-neutral-300">
+                <input type="checkbox" className="h-4 w-4 cursor-pointer accent-accent" {...register("authored")} />
+                Created by me
+            </label>
             <Button type="submit" variant="primary" className="text-[13px]">
                 Search
             </Button>

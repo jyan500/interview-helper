@@ -33,11 +33,13 @@ export interface InterviewResponse {
     question?: PlanQuestion;
 }
 // A plan question as the start/answer/resume responses carry it: its slug and full text, and whether
-// its question TYPE shows the diagram canvas (system design), so the SPA never checks type slugs.
+// its question TYPE shows the diagram canvas (system design) or the code editor (coding), so the SPA
+// never checks type slugs. Per question, so a mixed Practice interview switches workspace as it goes.
 export interface PlanQuestion {
     slug: string;
     text: string;
     has_diagram_canvas: boolean;
+    has_code_editor: boolean;
 }
 
 // The system-design canvas's wire/storage shape, mirroring DiagramDoc in server/diagram.py (our slim
@@ -126,6 +128,28 @@ export interface QuestionItem {
     level_name: string | null;
     tags: string[];
     selected: boolean;
+    is_custom: boolean; // the caller's own question (the only kind they can see), so it can be edited/deleted
+}
+// POST /api/questions and PUT /api/questions/{slug} body — the caller's own practice question. Mirrors
+// CustomQuestionBody in server/api.py. `grading_notes` "" = no guidance (the grading guide is written
+// from the question alone).
+export interface CustomQuestionRequest {
+    text: string;
+    type: string; // question type slug
+    level: string; // level slug
+    roles: string[]; // role slugs, at least one
+    grading_notes: string;
+}
+// GET /api/questions/{slug} — the edit form's detail. Slugs + names, so the pickers can show labels.
+export interface CustomQuestionDetail {
+    slug: string;
+    text: string;
+    type_slug: string;
+    type_name: string;
+    level_slug: string;
+    level_name: string;
+    roles: BasePageItem[];
+    grading_notes: string | null;
 }
 // PUT /api/profile/questions body — a staged "My questions" edit, committed in one batch (the SPA
 // stages checkbox toggles and sends the deltas on Save). Mirrors SaveQuestionsRequest in api.py.
@@ -269,9 +293,8 @@ export interface ResumePayload extends SimulationFields {
     level: string; // human-readable name ("Mid level")
     turns: ResumeTurn[];
     current_question: string | null;
-    has_code_editor: boolean; // a coding round — resume into the editor layout
     allows_smart_voice: boolean | null; // the round's voice-mode rule; null for a bank interview (no round)
-    question: PlanQuestion | null; // the PARENT plan question on the table, even mid-probe
+    question: PlanQuestion | null; // the PARENT plan question on the table, even mid-probe (its flags pick the workspace)
     diagram: DiagramDoc | null; // that question's latest diagram (reseeds the canvas), or null
 }
 
@@ -703,6 +726,26 @@ export const interviewApi = createApi({
             query: (body) => ({ url: "/profile/questions", method: "PUT", body }),
             invalidatesTags: ["Questions"],
         }),
+        // The caller's OWN questions. Create and update can make a paid LLM call (the grading guide), so
+        // they take a few seconds. All three writes invalidate "Questions", so both Questions-page tables
+        // and the edit form's detail re-read.
+        getCustomQuestion: builder.query<CustomQuestionDetail, string>({
+            query: (slug) => `/questions/${encodeURIComponent(slug)}`,
+            providesTags: ["Questions"],
+        }),
+        createCustomQuestion: builder.mutation<QuestionItem, CustomQuestionRequest>({
+            query: (body) => ({ url: "/questions", method: "POST", body }),
+            invalidatesTags: ["Questions"],
+        }),
+        updateCustomQuestion: builder.mutation<QuestionItem, { slug: string; body: CustomQuestionRequest }>({
+            query: ({ slug, body }) => ({ url: `/questions/${encodeURIComponent(slug)}`, method: "PUT", body }),
+            invalidatesTags: ["Questions"],
+        }),
+        // A soft delete server-side: past interviews that asked it still show it.
+        deleteCustomQuestion: builder.mutation<{ ok: boolean }, string>({
+            query: (slug) => ({ url: `/questions/${encodeURIComponent(slug)}`, method: "DELETE" }),
+            invalidatesTags: ["Questions"],
+        }),
         // INTERVIEW SIMULATION — the round formats (the Job page's round cards). Only a handful exist,
         // so one page covers them; the QueryParams bag leaves room for q/page if that ever changes.
         getRoundTypes: builder.query<Page<RoundTypeItem>, QueryParams | void>({
@@ -772,6 +815,10 @@ export const {
     useLazyGetSkillsQuery,
     useGetQuestionsQuery,
     useSaveQuestionsMutation,
+    useGetCustomQuestionQuery,
+    useCreateCustomQuestionMutation,
+    useUpdateCustomQuestionMutation,
+    useDeleteCustomQuestionMutation,
     useGetRoundTypesQuery,
     useLazyGetRoundTypesQuery,
     useGetJobsQuery,

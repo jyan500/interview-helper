@@ -584,7 +584,8 @@ async def start_interview(
         "default_selection": not created["from_saved"] and req.job is None,
         "plan_size": created["plan_size"],
         "question": {"slug": first_qid, "text": first_qtext,
-                     "has_diagram_canvas": created["first_has_diagram_canvas"]},
+                     "has_diagram_canvas": created["first_has_diagram_canvas"],
+                     "has_code_editor": created["first_has_code_editor"]},
     }
 
 
@@ -842,7 +843,8 @@ async def _finish_turn(req: AnswerRequest, state: dict, text: str, result) -> di
                 "done": False,
                 # the new plan question (the coding panel swaps its problem statement to this)
                 "question": {"slug": next_qid, "text": state["next_planned_qtext"],
-                             "has_diagram_canvas": state["next_planned_has_diagram_canvas"]}}
+                             "has_diagram_canvas": state["next_planned_has_diagram_canvas"],
+                             "has_code_editor": state["next_planned_has_code_editor"]}}
 
     #    (c) END — the plan is exhausted, so conclude.
     #    write back `done=True` and `message_history=new_history`. Leave `current_qid`
@@ -1278,12 +1280,11 @@ async def resume_interview(
         "level": payload["level"],
         "turns": payload["turns"],
         "current_question": payload["current_question"],
-        # INTERVIEW SIMULATION — resume into the right UI: header (company · round), the code editor
-        # flag, and the plan question on the table (the problem statement, even mid-probe).
+        # resume into the right UI: header (company · round), and the plan question on the table (the
+        # problem statement, even mid-probe), whose type flags pick the code editor / diagram canvas.
         "job_id": payload["job_id"],
         "company": payload["company"],
         "round": payload["round"],
-        "has_code_editor": payload["has_code_editor"],
         "allows_smart_voice": payload["allows_smart_voice"],
         "question": payload["question"],
         # the current question's latest diagram (reseeds the canvas), or None

@@ -206,6 +206,14 @@ export const MAX_PROJECTS = 15;
 export const MAX_SKILLS = 50;
 
 /**
+ * A candidate's own question's length caps — mirror CUSTOM_QUESTION_TEXT_MAX / CUSTOM_QUESTION_NOTES_MAX
+ * in server/api.py. Checked in the question form so the paid grading-guide call is never sent with input
+ * the server would reject.
+ */
+export const CUSTOM_QUESTION_TEXT_MAX_CHARS = 2000;
+export const CUSTOM_QUESTION_NOTES_MAX_CHARS = 2000;
+
+/**
  * The two KINDS of interview as the UI names them: a "Job" interview is a round written for a saved
  * job (the code/API call it a simulation — `job_id` is set), a "Practice" interview asks role + level
  * bank questions (`job_id` null). "all" is the list filters' no-filter value. The past-interview lists

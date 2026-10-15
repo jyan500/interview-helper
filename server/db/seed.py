@@ -83,6 +83,9 @@ _EXTRA_QUESTION_TYPES = [
 # Question types that show the diagram canvas (QuestionType.has_diagram_canvas). Only applied when a
 # type row is CREATED; existing rows got theirs from the c3e7a1d9f5b2 migration.
 _DIAGRAM_CANVAS_TYPES = {"system-design"}
+# Question types that show the code editor (QuestionType.has_code_editor). Same create-only rule; existing
+# rows got theirs from the a1c3e5f7b9d2 migration.
+_CODE_EDITOR_TYPES = {"coding"}
 
 
 def slugify(text: str) -> str:
@@ -166,7 +169,8 @@ async def seed() -> None:
         # question — only the interview simulation's GENERATOR assigns it — so it's authored here.
         for slug, name in _EXTRA_QUESTION_TYPES:
             _, was_new = await _get_or_create(db, QuestionType, slug=slug, name=name,
-                                              has_diagram_canvas=slug in _DIAGRAM_CANVAS_TYPES)
+                                              has_diagram_canvas=slug in _DIAGRAM_CANVAS_TYPES,
+                                              has_code_editor=slug in _CODE_EDITOR_TYPES)
             created["types"] += was_new
 
         for role_slug, role_data in bank["roles"].items():
@@ -196,6 +200,7 @@ async def seed() -> None:
                 qtype, was_new = await _get_or_create(
                     db, QuestionType, slug=q["type"], name=titleize(q["type"]),
                     has_diagram_canvas=q["type"] in _DIAGRAM_CANVAS_TYPES,
+                    has_code_editor=q["type"] in _CODE_EDITOR_TYPES,
                 )
                 created["types"] += was_new
 

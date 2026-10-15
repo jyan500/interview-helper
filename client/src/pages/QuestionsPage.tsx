@@ -19,19 +19,50 @@
  * ROLE is a required scope (the bank is per-role), so with no role filter a section falls back to the
  * profile's default role (else backend-engineer). The SelectionBar's running count is the UNFILTERED
  * saved total for the Saved section's role, so narrowing the Saved filters never skews it.
+ *
+ * YOUR OWN QUESTIONS: "Create question" opens QuestionModal; a new question lands in Saved. Your own rows
+ * carry a "Custom" tag plus Edit / Delete. Delete archives it server-side, so past interviews that asked
+ * it still show it.
  */
-import { useGetProfileQuery, useGetQuestionsQuery } from "../api";
+import { useState } from "react";
+import { Plus } from "@phosphor-icons/react";
+import {
+    useDeleteCustomQuestionMutation,
+    useGetProfileQuery,
+    useGetQuestionsQuery,
+    type QuestionItem,
+} from "../api";
 import { useQuestionSelection, useSectionFilters } from "../hooks";
 import { PAGE_SIZE } from "../constants";
+import { useToast } from "../toast/ToastProvider";
 import AppNav from "../components/AppNav";
 import BankKickoffCard from "../components/BankKickoffCard";
+import Button from "../components/Button";
+import ConfirmDeleteModal from "../components/ConfirmDeleteModal";
 import QuestionFilters from "../components/QuestionFilters";
 import QuestionsTable from "../components/QuestionsTable";
+import QuestionModal from "../components/questions/QuestionModal";
 import SelectionBar from "../components/SelectionBar";
 import Pagination from "../components/Pagination";
 
 export default function QuestionsPage() {
+    const { toast } = useToast();
     const { data: profile } = useGetProfileQuery();
+    // The question modal: "new" opens an empty Create form, a slug opens Edit, null closes it.
+    const [editing, setEditing] = useState<string | "new" | null>(null);
+    const [pendingDelete, setPendingDelete] = useState<QuestionItem | null>(null);
+    const [deleteQuestion, { isLoading: deleting }] = useDeleteCustomQuestionMutation();
+
+    async function confirmDelete() {
+        if (!pendingDelete) return;
+        try {
+            await deleteQuestion(pendingDelete.slug).unwrap();
+            toast("Question deleted", { variant: "success" });
+            setPendingDelete(null);
+        } catch {
+            toast("Couldn't delete this question. Try again.", { variant: "error" });
+        }
+    }
     // The fallback role when a section has no role filter — the profile default, else backend-engineer.
     const defaultRoleSlug = profile?.role?.slug ?? "backend-engineer";
     const defaultRoleName = profile?.role?.name ?? "Backend Engineer";
@@ -52,6 +83,7 @@ export default function QuestionsPage() {
         q: saved.q,
         level: saved.level,
         type: saved.questionType,
+        authored: saved.authored || undefined,
         exact_level: true,
         page: saved.page,
         size: PAGE_SIZE,
@@ -62,6 +94,7 @@ export default function QuestionsPage() {
         q: other.q,
         level: other.level,
         type: other.questionType,
+        authored: other.authored || undefined,
         exact_level: true,
         page: other.page,
         size: PAGE_SIZE,
@@ -84,14 +117,25 @@ export default function QuestionsPage() {
             <AppNav />
 
             <div className="mx-auto max-w-[1280px]">
-                <div className="px-7 pb-3 pt-[26px]">
-                    <h1 className="font-heading text-[30px] font-medium leading-[1.1] tracking-[-0.02em]">
-                        Questions
-                    </h1>
-                    <p className="mt-2 text-[13.5px] text-neutral-400">
-                        Tick the ones you want to practice, then Save. Your next interview asks your saved
-                        questions. If you don't save any, we'll choose 3 of increasing difficulty for you.
-                    </p>
+                <div className="flex items-start justify-between gap-4 px-7 pb-3 pt-[26px]">
+                    <div>
+                        <h1 className="font-heading text-[30px] font-medium leading-[1.1] tracking-[-0.02em]">
+                            Questions
+                        </h1>
+                        <p className="mt-2 text-[13.5px] text-neutral-400">
+                            Tick the ones you want to practice, then Save. Your next interview asks your saved
+                            questions. If you don't save any, we'll choose 3 of increasing difficulty for you.
+                            You can also write your own.
+                        </p>
+                    </div>
+                    <Button
+                        variant="secondary"
+                        onClick={() => setEditing("new")}
+                        className="flex shrink-0 items-center gap-1.5 text-[13.5px]"
+                    >
+                        <Plus size={15} weight="regular" />
+                        Create question
+                    </Button>
                 </div>
 
                 <div className="px-7 pb-[26px] pt-2">
@@ -109,6 +153,7 @@ export default function QuestionsPage() {
                         levelSlug={saved.level}
                         questionTypeSlug={saved.questionType}
                         q={saved.q}
+                        authored={saved.authored}
                         defaultRole={defaultRole}
                         showClear={saved.hasFilters}
                         onApply={saved.apply}
@@ -118,6 +163,8 @@ export default function QuestionsPage() {
                         questions={savedData?.items ?? []}
                         isChecked={selection.isChecked}
                         onToggle={selection.toggle}
+                        onEdit={(q) => setEditing(q.slug)}
+                        onDelete={setPendingDelete}
                         loading={savedFetching}
                         skeletonRows={3}
                         emptyMessage={
@@ -139,6 +186,7 @@ export default function QuestionsPage() {
                         levelSlug={other.level}
                         questionTypeSlug={other.questionType}
                         q={other.q}
+                        authored={other.authored}
                         defaultRole={defaultRole}
                         showClear={other.hasFilters}
                         onApply={other.apply}
@@ -148,6 +196,8 @@ export default function QuestionsPage() {
                         questions={restData?.items ?? []}
                         isChecked={selection.isChecked}
                         onToggle={selection.toggle}
+                        onEdit={(q) => setEditing(q.slug)}
+                        onDelete={setPendingDelete}
                         loading={restFetching}
                         skeletonRows={PAGE_SIZE}
                         emptyMessage={
@@ -169,6 +219,26 @@ export default function QuestionsPage() {
                         onSave={selection.save}
                         onReset={selection.reset}
                     />
+
+                    {editing && (
+                        <QuestionModal
+                            slug={editing === "new" ? undefined : editing}
+                            defaultRole={defaultRole}
+                            onClose={() => setEditing(null)}
+                        />
+                    )}
+
+                    <ConfirmDeleteModal
+                        open={pendingDelete !== null}
+                        title="Delete this question?"
+                        confirmLabel="Delete question"
+                        deleting={deleting}
+                        onClose={() => setPendingDelete(null)}
+                        onConfirm={confirmDelete}
+                    >
+                        <strong className="text-ink">"{pendingDelete?.text}"</strong> will be removed from your
+                        questions and won't be asked again. Past interviews that asked it keep their results.
+                    </ConfirmDeleteModal>
                 </div>
             </div>
         </div>

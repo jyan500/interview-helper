@@ -125,14 +125,11 @@ export function useClickOutside(
 }
 
 /**
- * What a producer knows about the start that /session needs: the header labels, plus whether the round
- * opens the coding panel and its voice-mode rule (everything in SessionNavState the POST response
- * doesn't supply).
+ * What a producer knows about the start that /session needs: the header labels, plus the round's
+ * voice-mode rule (everything in SessionNavState the POST response doesn't supply; the workspace comes
+ * from the first question's type flags, which the response does carry).
  */
-export type StartLabels = Pick<
-    SessionNavState,
-    "role" | "level" | "company" | "round" | "hasCodeEditor" | "allowsSmartVoice"
->;
+export type StartLabels = Pick<SessionNavState, "role" | "level" | "company" | "round" | "allowsSmartVoice">;
 
 /**
  * The interview KICKOFF sequence, shared by every producer (the Questions page's bank start, and the
@@ -200,7 +197,6 @@ export function useStartSequence() {
                     level: job.level_name,
                     company: job.company,
                     round: round.name,
-                    hasCodeEditor: round.has_code_editor,
                     allowsSmartVoice: round.allows_smart_voice,
                 },
             ),
@@ -277,13 +273,15 @@ export function useQuestionSelection(savedTotal: number) {
 
 /**
  * The applied slugs a caller hands `apply` — each nullable (null = no filter / "all"). `q` is the raw
- * search text; the three pickers carry the chosen slug or null.
+ * search text; the three pickers carry the chosen slug or null. `authored` = only the candidate's own
+ * questions (false = bank and own alike).
  */
 export interface AppliedSectionFilters {
     q: string;
     role: string | null;
     level: string | null;
     questionType: string | null;
+    authored: boolean;
 }
 
 /**
@@ -305,6 +303,7 @@ export interface SectionFilters {
     role?: string;
     level?: string;
     questionType?: string;
+    authored: boolean;
     page: number;
     hasFilters: boolean;
     apply: (values: AppliedSectionFilters) => void;
@@ -320,6 +319,7 @@ export function useSectionFilters(prefix: string): SectionFilters {
     const role = searchParams.get(key("role")) || undefined;
     const level = searchParams.get(key("level")) || undefined;
     const questionType = searchParams.get(key("type")) || undefined;
+    const authored = searchParams.get(key("mine")) === "1";
     const page = Number(searchParams.get(key("page"))) || 1;
 
     const apply = useCallback(
@@ -334,6 +334,7 @@ export function useSectionFilters(prefix: string): SectionFilters {
                 set("role", values.role);
                 set("level", values.level);
                 set("type", values.questionType);
+                set("mine", values.authored ? "1" : null);
                 next.delete(key("page")); // a changed filter resets THIS section to page 1
                 return next;
             });
@@ -344,7 +345,7 @@ export function useSectionFilters(prefix: string): SectionFilters {
     const clear = useCallback(() => {
         setSearchParams((prev) => {
             const next = new URLSearchParams(prev);
-            ["q", "role", "level", "type", "page"].forEach((k) => next.delete(key(k)));
+            ["q", "role", "level", "type", "mine", "page"].forEach((k) => next.delete(key(k)));
             return next;
         });
     }, [key, setSearchParams]);
@@ -365,8 +366,9 @@ export function useSectionFilters(prefix: string): SectionFilters {
         role,
         level,
         questionType,
+        authored,
         page,
-        hasFilters: Boolean(q || role || level || questionType),
+        hasFilters: Boolean(q || role || level || questionType || authored),
         apply,
         clear,
         goToPage,
