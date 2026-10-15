@@ -298,7 +298,7 @@ class QuestionType(Base, TimestampMixin):
     slug: Mapped[str] = mapped_column(String(32), unique=True, index=True)  # "system-design"
     name: Mapped[str] = mapped_column(String(64))                           # "System design"
     # whether the SPA shows the diagram canvas while a question of this kind is on the table. On the
-    # QUESTION's type (not RoundType, unlike has_code_editor) because Practice interviews mix kinds
+    # QUESTION's type (not RoundType) because Practice interviews mix kinds
     # question by question, and a simulation round's generated questions carry a type too, so one
     # flag covers both. A flag, so the client never branches on a slug.
     has_diagram_canvas: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -315,8 +315,8 @@ class RoundType(Base, TimestampMixin):
 
     DELIBERATELY NOT `question_types`, even though today's three rounds happen to share names with
     three question types. A round is a FORMAT — how many questions, what mix, how hard the
-    interviewer probes, whether the candidate gets a code editor — while a question type is what
-    ONE question is. They diverge the moment a round mixes kinds (a recruiter screen asks
+    interviewer probes — while a question type is what ONE question is (and so decides the
+    workspace: the code editor and the diagram canvas are question-type flags). They diverge the moment a round mixes kinds (a recruiter screen asks
     behavioral questions and a light technical one), so each generated question keeps its own
     `type_id` and the round lives here.
 
@@ -331,8 +331,6 @@ class RoundType(Base, TimestampMixin):
       max_followups    the probe budget copied onto each interview — a coding round needs many
                        more back-and-forths (approach → code → complexity → edge cases) than a
                        behavioral one.
-      has_code_editor  whether the SPA shows the code editor. A flag, so the client never branches
-                       on a slug.
       allows_smart_voice  whether the SPA offers "smart" voice turn-taking (VAD silence -> countdown
                        -> auto-submit) — and, when offered, opens in it. Off for coding and system
                        design: long thinking pauses there blow past the silence threshold and would
@@ -353,7 +351,6 @@ class RoundType(Base, TimestampMixin):
     interviewer_guidance: Mapped[str] = mapped_column(Text)
     plan_size: Mapped[int] = mapped_column(Integer)
     max_followups: Mapped[int] = mapped_column(Integer)
-    has_code_editor: Mapped[bool] = mapped_column(Boolean, default=False)
     allows_smart_voice: Mapped[bool] = mapped_column(Boolean, default=False)
     uses_candidate_background: Mapped[bool] = mapped_column(Boolean, default=False)
 

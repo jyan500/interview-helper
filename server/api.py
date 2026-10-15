@@ -356,14 +356,13 @@ class QuestionTypeOut(BaseModel):
 
 # INTERVIEW SIMULATION — the round cards on a Job page. Coerced off the RoundType ORM row. Only what
 # the client needs to render and branch: the generator/interviewer guidance prose and the budgets
-# stay server-side. `has_code_editor` is how the SPA knows to show the editor without a slug check;
-# `allows_smart_voice` likewise decides the voice turn-taking mode (smart default vs. manual-only).
+# stay server-side. `allows_smart_voice` decides the voice turn-taking mode (smart default vs.
+# manual-only) without a slug check. (The code editor isn't a round flag: each plan question's type says.)
 class RoundTypeOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     slug: str
     name: str
     description: str
-    has_code_editor: bool
     allows_smart_voice: bool
 
 

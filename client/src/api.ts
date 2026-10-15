@@ -174,11 +174,10 @@ export interface AnswerRequest {
 }
 
 // INTERVIEW SIMULATION — a round FORMAT a job can be simulated in (GET /api/round-types), mirroring
-// RoundTypeOut. `has_code_editor` is how the SPA knows a round needs the editor, without a slug check;
-// `allows_smart_voice` says whether smart voice turn-taking is offered (and is then the default).
+// RoundTypeOut. `allows_smart_voice` says whether smart voice turn-taking is offered (and is then the
+// default). The code editor isn't a round flag: each PlanQuestion's type flags pick the workspace.
 export interface RoundTypeItem extends BasePageItem {
     description: string;
-    has_code_editor: boolean;
     allows_smart_voice: boolean;
 }
 // A saved job as listed (GET /api/jobs), mirroring JobOut. role/level carry the SLUG (edit pickers)
