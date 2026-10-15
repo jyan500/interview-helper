@@ -13,6 +13,7 @@
       "questions": [
         {
           "id": "be-1",
+          "title": "Debugging production under pressure",
           "type": "behavioral",
           "level": "entry",
           "text": "Tell me about a time you had to debug a production issue under pressure. What was the problem and how did you approach it?",
@@ -20,6 +21,7 @@
         },
         {
           "id": "be-2",
+          "title": "Rate limiter for a public API",
           "type": "system-design",
           "level": "senior",
           "text": "How would you design a rate limiter for a public API? Walk me through your approach.",
@@ -27,6 +29,7 @@
         },
         {
           "id": "be-3",
+          "title": "Optimistic vs pessimistic locking",
           "type": "technical",
           "level": "mid",
           "text": "Explain the difference between optimistic and pessimistic locking, and when you'd choose each.",
@@ -34,6 +37,7 @@
         },
         {
           "id": "sd-bitly",
+          "title": "URL shortener (Bitly)",
           "type": "system-design",
           "level": "entry",
           "text": "How would you design a URL shortener like Bitly? Walk me through your approach.",
@@ -41,6 +45,7 @@
         },
         {
           "id": "sd-ticketmaster",
+          "title": "Ticket booking (Ticketmaster)",
           "type": "system-design",
           "level": "mid",
           "text": "How would you design a ticket-booking system like Ticketmaster? Walk me through your approach.",
@@ -48,6 +53,7 @@
         },
         {
           "id": "sd-fb-news-feed",
+          "title": "News feed (Facebook)",
           "type": "system-design",
           "level": "mid",
           "text": "How would you design a social media news feed like Facebook's? Walk me through your approach.",
@@ -55,6 +61,7 @@
         },
         {
           "id": "sd-whatsapp",
+          "title": "Real-time chat (WhatsApp)",
           "type": "system-design",
           "level": "mid",
           "text": "How would you design a real-time chat system like WhatsApp? Walk me through your approach.",
@@ -62,6 +69,7 @@
         },
         {
           "id": "sd-youtube",
+          "title": "Video streaming (YouTube)",
           "type": "system-design",
           "level": "mid",
           "text": "How would you design a video streaming platform like YouTube? Walk me through your approach.",
@@ -69,6 +77,7 @@
         },
         {
           "id": "sd-dropbox",
+          "title": "File storage and sync (Dropbox)",
           "type": "system-design",
           "level": "mid",
           "text": "How would you design a file storage and sync service like Dropbox? Walk me through your approach.",
@@ -76,6 +85,7 @@
         },
         {
           "id": "sd-gopuff",
+          "title": "Local delivery (Gopuff)",
           "type": "system-design",
           "level": "mid",
           "text": "How would you design a local delivery service like Gopuff? Walk me through your approach.",
@@ -83,6 +93,7 @@
         },
         {
           "id": "sd-tinder",
+          "title": "Dating app (Tinder)",
           "type": "system-design",
           "level": "mid",
           "text": "How would you design a dating app like Tinder? Walk me through your approach.",
@@ -90,6 +101,7 @@
         },
         {
           "id": "sd-leetcode",
+          "title": "Online coding judge (LeetCode)",
           "type": "system-design",
           "level": "mid",
           "text": "How would you design an online coding-judge platform like LeetCode? Walk me through your approach.",
@@ -97,6 +109,7 @@
         },
         {
           "id": "sd-fb-live-comments",
+          "title": "Live comments (Facebook Live)",
           "type": "system-design",
           "level": "mid",
           "text": "How would you design a real-time live-comments system for a live video like Facebook Live? Walk me through your approach.",
@@ -104,6 +117,7 @@
         },
         {
           "id": "sd-top-k",
+          "title": "Top-K most-viewed videos",
           "type": "system-design",
           "level": "senior",
           "text": "How would you design a service that returns the top-K most-viewed videos over a time window? Walk me through your approach.",
@@ -111,6 +125,7 @@
         },
         {
           "id": "sd-uber",
+          "title": "Ride hailing (Uber)",
           "type": "system-design",
           "level": "senior",
           "text": "How would you design a ride-hailing service like Uber? Walk me through your approach.",
@@ -118,6 +133,7 @@
         },
         {
           "id": "sd-web-crawler",
+          "title": "Large-scale web crawler",
           "type": "system-design",
           "level": "mid",
           "text": "How would you design a large-scale web crawler? Walk me through your approach.",
@@ -125,6 +141,7 @@
         },
         {
           "id": "sd-ad-click-aggregator",
+          "title": "Real-time ad click aggregator",
           "type": "system-design",
           "level": "senior",
           "text": "How would you design a real-time ad click aggregator? Walk me through your approach.",
@@ -132,6 +149,7 @@
         },
         {
           "id": "sd-fb-post-search",
+          "title": "Post search (Facebook)",
           "type": "system-design",
           "level": "mid",
           "text": "How would you design full-text search over social media posts like Facebook post search? Walk me through your approach.",
@@ -139,6 +157,7 @@
         },
         {
           "id": "ai-workflow",
+          "title": "AI-assisted development workflow",
           "type": "behavioral",
           "level": "mid",
           "text": "Beyond basic prompting, what does your AI-assisted development workflow look like? Walk me through how you actually ship with an AI agent.",
@@ -146,6 +165,7 @@
         },
         {
           "id": "ai-code-quality",
+          "title": "Code quality with AI-generated code",
           "type": "behavioral",
           "level": "mid",
           "text": "How do you keep code quality high when a lot of your code is AI-generated?",
@@ -153,6 +173,7 @@
         },
         {
           "id": "ai-testing",
+          "title": "Testing AI-generated code",
           "type": "technical",
           "level": "mid",
           "text": "How do you test AI-generated code?",
@@ -160,6 +181,7 @@
         },
         {
           "id": "ai-token-spend",
+          "title": "Keeping AI token spend low",
           "type": "behavioral",
           "level": "mid",
           "text": "How do you keep token spend low when working with AI coding agents?",
@@ -180,6 +202,7 @@
       "questions": [
         {
           "id": "be-2",
+          "title": "Rate limiter for a public API",
           "type": "system-design",
           "level": "senior",
           "text": "How would you design a rate limiter for a public API? Walk me through your approach.",
@@ -187,6 +210,7 @@
         },
         {
           "id": "sd-bitly",
+          "title": "URL shortener (Bitly)",
           "type": "system-design",
           "level": "entry",
           "text": "How would you design a URL shortener like Bitly? Walk me through your approach.",
@@ -194,6 +218,7 @@
         },
         {
           "id": "sd-ticketmaster",
+          "title": "Ticket booking (Ticketmaster)",
           "type": "system-design",
           "level": "mid",
           "text": "How would you design a ticket-booking system like Ticketmaster? Walk me through your approach.",
@@ -201,6 +226,7 @@
         },
         {
           "id": "sd-fb-news-feed",
+          "title": "News feed (Facebook)",
           "type": "system-design",
           "level": "mid",
           "text": "How would you design a social media news feed like Facebook's? Walk me through your approach.",
@@ -208,6 +234,7 @@
         },
         {
           "id": "sd-whatsapp",
+          "title": "Real-time chat (WhatsApp)",
           "type": "system-design",
           "level": "mid",
           "text": "How would you design a real-time chat system like WhatsApp? Walk me through your approach.",
@@ -215,6 +242,7 @@
         },
         {
           "id": "sd-youtube",
+          "title": "Video streaming (YouTube)",
           "type": "system-design",
           "level": "mid",
           "text": "How would you design a video streaming platform like YouTube? Walk me through your approach.",
@@ -222,6 +250,7 @@
         },
         {
           "id": "sd-dropbox",
+          "title": "File storage and sync (Dropbox)",
           "type": "system-design",
           "level": "mid",
           "text": "How would you design a file storage and sync service like Dropbox? Walk me through your approach.",
@@ -229,6 +258,7 @@
         },
         {
           "id": "sd-gopuff",
+          "title": "Local delivery (Gopuff)",
           "type": "system-design",
           "level": "mid",
           "text": "How would you design a local delivery service like Gopuff? Walk me through your approach.",
@@ -236,6 +266,7 @@
         },
         {
           "id": "sd-tinder",
+          "title": "Dating app (Tinder)",
           "type": "system-design",
           "level": "mid",
           "text": "How would you design a dating app like Tinder? Walk me through your approach.",
@@ -243,6 +274,7 @@
         },
         {
           "id": "sd-leetcode",
+          "title": "Online coding judge (LeetCode)",
           "type": "system-design",
           "level": "mid",
           "text": "How would you design an online coding-judge platform like LeetCode? Walk me through your approach.",
@@ -250,6 +282,7 @@
         },
         {
           "id": "sd-fb-live-comments",
+          "title": "Live comments (Facebook Live)",
           "type": "system-design",
           "level": "mid",
           "text": "How would you design a real-time live-comments system for a live video like Facebook Live? Walk me through your approach.",
@@ -257,6 +290,7 @@
         },
         {
           "id": "sd-top-k",
+          "title": "Top-K most-viewed videos",
           "type": "system-design",
           "level": "senior",
           "text": "How would you design a service that returns the top-K most-viewed videos over a time window? Walk me through your approach.",
@@ -264,6 +298,7 @@
         },
         {
           "id": "sd-uber",
+          "title": "Ride hailing (Uber)",
           "type": "system-design",
           "level": "senior",
           "text": "How would you design a ride-hailing service like Uber? Walk me through your approach.",
@@ -271,6 +306,7 @@
         },
         {
           "id": "sd-web-crawler",
+          "title": "Large-scale web crawler",
           "type": "system-design",
           "level": "mid",
           "text": "How would you design a large-scale web crawler? Walk me through your approach.",
@@ -278,6 +314,7 @@
         },
         {
           "id": "sd-ad-click-aggregator",
+          "title": "Real-time ad click aggregator",
           "type": "system-design",
           "level": "senior",
           "text": "How would you design a real-time ad click aggregator? Walk me through your approach.",
@@ -285,6 +322,7 @@
         },
         {
           "id": "sd-fb-post-search",
+          "title": "Post search (Facebook)",
           "type": "system-design",
           "level": "mid",
           "text": "How would you design full-text search over social media posts like Facebook post search? Walk me through your approach.",
@@ -292,6 +330,7 @@
         },
         {
           "id": "ai-workflow",
+          "title": "AI-assisted development workflow",
           "type": "behavioral",
           "level": "mid",
           "text": "Beyond basic prompting, what does your AI-assisted development workflow look like? Walk me through how you actually ship with an AI agent.",
@@ -299,6 +338,7 @@
         },
         {
           "id": "ai-code-quality",
+          "title": "Code quality with AI-generated code",
           "type": "behavioral",
           "level": "mid",
           "text": "How do you keep code quality high when a lot of your code is AI-generated?",
@@ -306,6 +346,7 @@
         },
         {
           "id": "ai-testing",
+          "title": "Testing AI-generated code",
           "type": "technical",
           "level": "mid",
           "text": "How do you test AI-generated code?",
@@ -313,6 +354,7 @@
         },
         {
           "id": "ai-token-spend",
+          "title": "Keeping AI token spend low",
           "type": "behavioral",
           "level": "mid",
           "text": "How do you keep token spend low when working with AI coding agents?",
@@ -333,6 +375,7 @@
       "questions": [
         {
           "id": "fe-hover-scale",
+          "title": "Efficient hover-scale button",
           "type": "technical",
           "level": "mid",
           "text": "Build a button that scales up on hover, efficiently. Why is your approach the efficient one, and what do the wrong approaches cost?",
@@ -340,6 +383,7 @@
         },
         {
           "id": "ai-workflow",
+          "title": "AI-assisted development workflow",
           "type": "behavioral",
           "level": "mid",
           "text": "Beyond basic prompting, what does your AI-assisted development workflow look like? Walk me through how you actually ship with an AI agent.",
@@ -347,6 +391,7 @@
         },
         {
           "id": "ai-code-quality",
+          "title": "Code quality with AI-generated code",
           "type": "behavioral",
           "level": "mid",
           "text": "How do you keep code quality high when a lot of your code is AI-generated?",
@@ -354,6 +399,7 @@
         },
         {
           "id": "ai-testing",
+          "title": "Testing AI-generated code",
           "type": "technical",
           "level": "mid",
           "text": "How do you test AI-generated code?",
@@ -361,6 +407,7 @@
         },
         {
           "id": "ai-token-spend",
+          "title": "Keeping AI token spend low",
           "type": "behavioral",
           "level": "mid",
           "text": "How do you keep token spend low when working with AI coding agents?",
@@ -368,6 +415,7 @@
         },
         {
           "id": "fe-design-system",
+          "title": "What makes a good design system",
           "type": "system-design",
           "level": "senior",
           "text": "What makes a good design system?",
@@ -375,6 +423,7 @@
         },
         {
           "id": "fe-box-model",
+          "title": "The CSS box model",
           "type": "technical",
           "level": "entry",
           "text": "Explain the CSS box model.",
@@ -382,6 +431,7 @@
         },
         {
           "id": "fe-css-specificity",
+          "title": "CSS specificity",
           "type": "technical",
           "level": "mid",
           "text": "How does CSS specificity work?",
@@ -389,6 +439,7 @@
         },
         {
           "id": "fe-responsive-design",
+          "title": "Responsive design principles",
           "type": "technical",
           "level": "mid",
           "text": "What are the core principles of responsive design?",
@@ -396,6 +447,7 @@
         },
         {
           "id": "fe-event-loop",
+          "title": "The JavaScript event loop",
           "type": "technical",
           "level": "mid",
           "text": "Give a high-level overview of the JavaScript event loop.",
@@ -403,6 +455,7 @@
         },
         {
           "id": "fe-debug-react",
+          "title": "Debugging a slow React app",
           "type": "technical",
           "level": "mid",
           "text": "How would you debug a slow React app?",
@@ -410,6 +463,7 @@
         },
         {
           "id": "fe-object-vs-map",
+          "title": "Object vs Map in JavaScript",
           "type": "technical",
           "level": "entry",
           "text": "What is the difference between an Object and a Map in JavaScript, and when would you choose each?",
@@ -417,6 +471,7 @@
         },
         {
           "id": "fe-weakmap-gc",
+          "title": "Map vs WeakMap and garbage collection",
           "type": "technical",
           "level": "senior",
           "text": "Explain the difference between Map and WeakMap, and how garbage collection fits in.",
@@ -424,6 +479,7 @@
         },
         {
           "id": "fe-scale-frontend",
+          "title": "Scaling a frontend to 100k users",
           "type": "system-design",
           "level": "senior",
           "text": "How would you scale a frontend application from 1,000 to 100,000 daily users?",
@@ -431,6 +487,7 @@
         },
         {
           "id": "fe-llm-chatbot-protocol",
+          "title": "Protocol for an LLM chatbot",
           "type": "system-design",
           "level": "mid",
           "text": "What protocol would you use to integrate an LLM-powered chatbot into a frontend application, and why?",
@@ -451,6 +508,7 @@
       "questions": [
         {
           "id": "pm-1",
+          "title": "A product decision that was wrong",
           "type": "behavioral",
           "level": "entry",
           "text": "Tell me about a product decision you made that turned out to be wrong. What did you learn?",
@@ -458,6 +516,7 @@
         },
         {
           "id": "pm-2",
+          "title": "Improving note-taking app onboarding",
           "type": "product-sense",
           "level": "mid",
           "text": "How would you improve the onboarding experience for a note-taking app?",

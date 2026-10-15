@@ -242,6 +242,7 @@ async def seed() -> None:
                     question = Question(
                         slug=q["id"],          # "be-1" — the bank's id becomes the slug
                         type_id=qtype.id,
+                        title=q["title"],
                         text=q["text"],
                         level_id=level_row.id if level_row else None,   # Phase D
                         tags=tags,             # writes the question_tags rows

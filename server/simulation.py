@@ -139,6 +139,8 @@ class _GeneratedQuestionBase(BaseModel):
     _round_output_type), constrained to the live question types like the JD extractor's role."""
     text: str = Field(description="the question exactly as the interviewer will present it to the "
                                   "candidate, in plain text (no markdown headings)")
+    title: str = Field(description="a short 2-6 word name for the question, shown in lists (e.g. "
+                                   "'Rate limiter for a public API'); plain text, no trailing period")
     brief: str = Field(description="the grading brief for this question, in the house style set out "
                                    "in the instructions. Hidden from the candidate — it's the answer key")
 
@@ -211,7 +213,7 @@ round_agent = Agent(
 
 
 async def generate_round(job: dict, round_type, candidate_background: str = "") -> list[dict]:
-    """Write one round's questions for a job. Returns `plan_size` dicts of {text, type_slug, brief},
+    """Write one round's questions for a job. Returns `plan_size` dicts of {text, title, type_slug, brief},
     in ask order — the shape create_interview(generated=...) takes (plain dicts, so the data layer
     never imports this module's model stack).
 

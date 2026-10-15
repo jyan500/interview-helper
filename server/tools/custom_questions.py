@@ -98,6 +98,7 @@ def _detail_dict(question: Question) -> dict:
     """The edit form's shape: everything the author set, by slug + name (the pickers show names)."""
     return {
         "slug": question.slug,
+        "title": question.title,
         "text": question.text,
         "type_slug": question.type.slug,
         "type_name": question.type.name,
@@ -141,6 +142,7 @@ async def _set_roles(db, question: Question, role_slugs: list[str]) -> None:
 async def create_custom_question(
     profile_id: str,
     *,
+    title: str,
     text: str,
     type_slug: str,
     level_slug: str,
@@ -163,6 +165,7 @@ async def create_custom_question(
             slug=f"user-{uuid.uuid4().hex[:12]}",
             type_id=type_id,
             level_id=level_id,
+            title=title,
             text=text,
             profile_id=profile_id,
             grading_notes=grading_notes,
@@ -195,6 +198,7 @@ async def update_custom_question(
     profile_id: str,
     slug: str,
     *,
+    title: str,
     text: str,
     type_slug: str,
     level_slug: str,
@@ -211,6 +215,7 @@ async def update_custom_question(
         if question is None:
             return {"ok": False, "error": "not_found"}
 
+        question.title = title
         question.text = text
         question.type_id = (await db.execute(
             select(QuestionType.id).where(QuestionType.slug == type_slug)

@@ -532,6 +532,10 @@ class Question(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     slug: Mapped[str] = mapped_column(String(64), unique=True, index=True)   # "be-1"
     type_id: Mapped[int] = mapped_column(ForeignKey("question_types.id"), index=True)
+    # A short display name ("Rate limiter for a public API") so a list can show the question without
+    # its full text. Authored in the bank JSON, written by the LLM for a generated question, typed by
+    # the author for a user-written one.
+    title: Mapped[str] = mapped_column(String(128))
     text: Mapped[str] = mapped_column(Text)
 
     # NULL for every authored bank question; set for a question generated for one job. CASCADE: the

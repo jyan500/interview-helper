@@ -405,6 +405,7 @@ class JobDetailOut(JobOut):
 # renders in the right state. `level_*` are nullable — an unleveled question has no band.
 class QuestionOut(BaseModel):
     slug: str
+    title: str
     text: str
     type_slug: str
     type_name: str
@@ -419,11 +420,15 @@ class QuestionOut(BaseModel):
 # tools/custom_questions.py). A full replace on PUT, like the background routes. Length caps are a 422
 # before anything runs, so bad input never reaches the paid brief call. `grading_notes` "" or omitted
 # both mean "no guidance": the brief is written from the question alone.
+CUSTOM_QUESTION_TITLE_MAX = 100
 CUSTOM_QUESTION_TEXT_MAX = 2000
 CUSTOM_QUESTION_NOTES_MAX = 2000
 
 
 class CustomQuestionBody(BaseModel):
+    title: Annotated[
+        str, StringConstraints(strip_whitespace=True, min_length=1, max_length=CUSTOM_QUESTION_TITLE_MAX)
+    ]
     text: Annotated[
         str, StringConstraints(strip_whitespace=True, min_length=1, max_length=CUSTOM_QUESTION_TEXT_MAX)
     ]
@@ -444,6 +449,7 @@ class NamedSlugOut(BaseModel):
 # GET /api/questions/{slug} — the edit form's detail of the caller's own question.
 class CustomQuestionOut(BaseModel):
     slug: str
+    title: str
     text: str
     type_slug: str
     type_name: str
@@ -1077,8 +1083,9 @@ async def scorecard(
 
     async def grade_question(question_id: str, exchanges: list[tuple[str, str]]) -> tuple[AnswerGrade, dict]:
         question = await get_question(question_id)
-        question_text = (question["question"]["text"] if question.get("status") == "ok"
-                         else "(unknown question)")
+        found = question.get("status") == "ok"
+        question_title = question["question"]["title"] if found else "(unknown question)"
+        question_text = question["question"]["text"] if found else "(unknown question)"
         # the first exchange answered the question itself; the rest answered probes on it
         first_answer, followups = exchanges[0][1], exchanges[1:]
         versions = diagram_versions.get(question_id, [])
@@ -1090,7 +1097,8 @@ async def scorecard(
             followups=followups,
             diagram=versions[-1] if versions else "", diagram_revisions=len(versions),
         )
-        return grade, {"question_id": question_id, "question_text": question_text, **grade.model_dump()}
+        return grade, {"question_id": question_id, "question_title": question_title,
+                       "question_text": question_text, **grade.model_dump()}
 
     # The questions are graded independently, so grade them CONCURRENTLY: the scorecard waits for
     # the slowest grade instead of the sum of all of them. gather keeps input order, so `answers`
@@ -1547,6 +1555,7 @@ async def add_custom_question(body: CustomQuestionBody, user_id: str = Depends(r
     # 3. insert the question, its roles, its brief, and the saved-set row
     result = await create_custom_question(
         user_id,
+        title=body.title,
         text=body.text,
         type_slug=body.question_type,
         level_slug=body.level,
@@ -1573,7 +1582,7 @@ async def replace_custom_question(
     ))
 
     # 2. rewrite the brief only when something it's written FROM changed. Roles are context, not
-    #    substance, so a roles-only edit costs no LLM call.
+    #    substance, and the title is only a display name, so a roles- or title-only edit costs no LLM call.
     notes = body.grading_notes or None
     brief_inputs_changed = (
         body.text != current["text"]
@@ -1591,6 +1600,7 @@ async def replace_custom_question(
     result = await update_custom_question(
         user_id,
         slug,
+        title=body.title,
         text=body.text,
         type_slug=body.question_type,
         level_slug=body.level,
