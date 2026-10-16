@@ -11,15 +11,22 @@
  *
  * An UNGRADED interview (scorecard === null) still shows its transcript — the scorecard column just
  * says so, no branching in the transcript itself.
+ *
+ * SAVING A QUESTION (job interviews only): each scorecard card gets a SaveQuestionButton, which claims
+ * the generated question as a read-only practice question in "My questions". A SaveQuestionsBanner points
+ * this out while at least one question is still unsaved (and until the user dismisses it).
  */
 import { useParams, Link } from "react-router";
 import AppNav from "../components/AppNav";
 import MessageRow from "../components/MessageRow";
+import ExpandableText from "../components/ExpandableText";
 import FormattedText from "../components/FormattedText";
 import Donut from "../components/Donut";
 import ScoreBar from "../components/ScoreBar";
 import InterviewDetailSkeleton from "../components/InterviewDetailSkeleton";
 import InterviewKindTag from "../components/InterviewKindTag";
+import SaveQuestionButton from "../components/SaveQuestionButton";
+import SaveQuestionsBanner from "../components/SaveQuestionsBanner";
 import { useGetInterviewDetailQuery, type AnswerGrade, type Scorecard } from "../api";
 import { formatScore, formatShortDate, formatTime, interviewTitle } from "../helpers";
 
@@ -58,9 +65,13 @@ export default function InterviewDetailPage() {
         );
     }
 
-    const { created_at, turns, scorecard, job_id } = data;
+    const { interview_id, created_at, turns, scorecard, job_id, saved_question_ids } = data;
     // company · round for a job simulation, role · level for a bank interview
     const [title, subtitle] = interviewTitle(data);
+    // the save banner only makes sense on a graded job interview with a question still unsaved
+    const hasUnsavedQuestion = Boolean(
+        job_id && scorecard?.answers.some((grade) => !saved_question_ids.includes(grade.question_id))
+    );
 
     return (
         <div className="min-h-screen bg-bg text-ink">
@@ -89,6 +100,8 @@ export default function InterviewDetailPage() {
                         <InterviewKindTag jobId={job_id} />
                     </div>
                 </div>
+
+                {hasUnsavedQuestion && <SaveQuestionsBanner className="mx-7 mt-5" />}
 
                 {/* Body */}
                 <div className="grid grid-cols-1 lg:grid-cols-[1fr_400px]">
@@ -121,7 +134,12 @@ export default function InterviewDetailPage() {
                     {/* Scorecard */}
                     <div className="flex flex-col gap-[22px] px-6 pb-8 pt-6">
                         {scorecard ? (
-                            <ScorecardPanel card={scorecard} />
+                            <ScorecardPanel
+                                card={scorecard}
+                                interviewId={interview_id}
+                                isJobInterview={Boolean(job_id)}
+                                savedQuestionIds={saved_question_ids}
+                            />
                         ) : (
                             <div>
                                 <div className="kicker">Scorecard</div>
@@ -139,7 +157,18 @@ export default function InterviewDetailPage() {
 
 // The graded panel — overall donut, per-dimension criteria bars, and one card per question. Split
 // out so the null (ungraded) case above stays a plain one-liner and this only renders with a grade.
-function ScorecardPanel({ card }: { card: Scorecard }) {
+// A job interview's cards also get a SaveQuestionButton.
+function ScorecardPanel({
+    card,
+    interviewId,
+    isJobInterview,
+    savedQuestionIds,
+}: {
+    card: Scorecard;
+    interviewId: string;
+    isJobInterview: boolean;
+    savedQuestionIds: string[];
+}) {
     return (
         <>
             {/* Overall + donut */}
@@ -184,9 +213,13 @@ function ScorecardPanel({ card }: { card: Scorecard }) {
                             </span>
                         </div>
                         <div className="mt-2 text-[15px] font-medium text-ink">{grade.question_title}</div>
-                        {/* a generated coding problem keeps its line breaks (and any example code block) */}
+                        {/* a generated coding problem keeps its line breaks (and any example code block).
+                            Clamped to ~3 lines (3 x 14px x 1.45) behind "Show more", so a long problem doesn't
+                            push the feedback and the Save button far down; the full text is in the transcript. */}
                         <div className="mt-1.5">
-                            <FormattedText text={grade.question_text} className="text-[14px] leading-[1.45] text-neutral-300" />
+                            <ExpandableText clampClass="max-h-[61px] overflow-hidden">
+                                <FormattedText text={grade.question_text} className="text-[14px] leading-[1.45] text-neutral-300" />
+                            </ExpandableText>
                         </div>
 
                         {/* Chip row — this question's score per dimension. Wraps, since a rubric can carry
@@ -220,6 +253,16 @@ function ScorecardPanel({ card }: { card: Scorecard }) {
                                 </div>
                             ))}
                         </div>
+
+                        {isJobInterview && (
+                            <div className="mt-3.5 flex justify-end border-t border-divider pt-3">
+                                <SaveQuestionButton
+                                    interviewId={interviewId}
+                                    slug={grade.question_id}
+                                    saved={savedQuestionIds.includes(grade.question_id)}
+                                />
+                            </div>
+                        )}
                     </div>
                 );
             })}

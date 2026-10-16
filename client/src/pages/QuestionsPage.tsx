@@ -22,7 +22,7 @@
  *
  * YOUR OWN QUESTIONS: "Create question" opens QuestionModal; a new question lands in Saved. Your own rows
  * carry a "Custom" tag plus Edit / Delete. Delete archives it server-side, so past interviews that asked
- * it still show it.
+ * it still show it. One saved from a job interview is read-only: View (QuestionViewModal) / Delete.
  */
 import { useState } from "react";
 import { Plus } from "@phosphor-icons/react";
@@ -42,6 +42,7 @@ import ConfirmDeleteModal from "../components/ConfirmDeleteModal";
 import QuestionFilters from "../components/QuestionFilters";
 import QuestionsTable from "../components/QuestionsTable";
 import QuestionModal from "../components/questions/QuestionModal";
+import QuestionViewModal from "../components/questions/QuestionViewModal";
 import SelectionBar from "../components/SelectionBar";
 import Pagination from "../components/Pagination";
 
@@ -50,6 +51,8 @@ export default function QuestionsPage() {
     const { data: profile } = useGetProfileQuery();
     // The question modal: "new" opens an empty Create form, a slug opens Edit, null closes it.
     const [editing, setEditing] = useState<string | "new" | null>(null);
+    // the read-only view of a question saved from a job interview (those can't be edited)
+    const [viewing, setViewing] = useState<QuestionItem | null>(null);
     const [pendingDelete, setPendingDelete] = useState<QuestionItem | null>(null);
     const [deleteQuestion, { isLoading: deleting }] = useDeleteCustomQuestionMutation();
 
@@ -164,6 +167,7 @@ export default function QuestionsPage() {
                         isChecked={selection.isChecked}
                         onToggle={selection.toggle}
                         onEdit={(q) => setEditing(q.slug)}
+                        onView={setViewing}
                         onDelete={setPendingDelete}
                         loading={savedFetching}
                         skeletonRows={3}
@@ -197,6 +201,7 @@ export default function QuestionsPage() {
                         isChecked={selection.isChecked}
                         onToggle={selection.toggle}
                         onEdit={(q) => setEditing(q.slug)}
+                        onView={setViewing}
                         onDelete={setPendingDelete}
                         loading={restFetching}
                         skeletonRows={PAGE_SIZE}
@@ -227,6 +232,8 @@ export default function QuestionsPage() {
                             onClose={() => setEditing(null)}
                         />
                     )}
+
+                    {viewing && <QuestionViewModal question={viewing} onClose={() => setViewing(null)} />}
 
                     <ConfirmDeleteModal
                         open={pendingDelete !== null}

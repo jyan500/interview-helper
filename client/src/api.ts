@@ -130,6 +130,7 @@ export interface QuestionItem {
     tags: string[];
     selected: boolean;
     is_custom: boolean; // the caller's own question (the only kind they can see), so it can be edited/deleted
+    is_claimed: boolean; // saved from a job interview: the caller's, but read-only (delete, no edit)
 }
 // POST /api/questions and PUT /api/questions/{slug} body — the caller's own practice question. Mirrors
 // CustomQuestionBody in server/api.py. `grading_notes` "" = no guidance (the grading guide is written
@@ -153,6 +154,7 @@ export interface CustomQuestionDetail {
     level_name: string;
     roles: BasePageItem[];
     grading_notes: string | null;
+    is_claimed: boolean; // saved from a job interview: read-only, the backend refuses an edit
 }
 // PUT /api/profile/questions body — a staged "My questions" edit, committed in one batch (the SPA
 // stages checkbox toggles and sends the deltas on Save). Mirrors SaveQuestionsRequest in api.py.
@@ -276,6 +278,8 @@ export interface InterviewDetail extends SimulationFields {
     turns: InterviewTurn[];
     summary: string | null;
     scorecard: Scorecard | null;
+    // a job interview's question slugs the caller has saved to "My questions"; [] for a practice one
+    saved_question_ids: string[];
 }
 
 // Resume — GET /api/interviews/{id}/resume (mirrors load_resume_payload in tools/interview.py).
@@ -580,6 +584,18 @@ export const interviewApi = createApi({
         }),
         getInterviewDetail: builder.query<InterviewDetail, string>({
             query: (interviewId) => `/interviews/${interviewId}`,
+            // so claimInterviewQuestion's invalidation re-reads `saved_question_ids`
+            providesTags: ["Interviews"],
+        }),
+        // "Save to My questions" for a question a job interview asked: the generated question MOVES to
+        // the caller as a read-only question of theirs (no LLM call; re-saving returns the same one).
+        // Invalidates the detail (its saved list) and "Questions" (the Questions page shows it).
+        claimInterviewQuestion: builder.mutation<QuestionItem, { interviewId: string; slug: string }>({
+            query: ({ interviewId, slug }) => ({
+                url: `/interviews/${interviewId}/questions/${encodeURIComponent(slug)}/claim`,
+                method: "POST",
+            }),
+            invalidatesTags: ["Interviews", "Questions"],
         }),
         // Resume — hydrate an in-progress interview: transcript so far + the question on the table.
         // A QUERY (cacheable GET, no side effect); the arg is the slug. LAZY-triggered from
@@ -791,6 +807,7 @@ export const {
     useTtsMutation,
     useGetMyInterviewsQuery,
     useGetInterviewDetailQuery,
+    useClaimInterviewQuestionMutation,
     useLazyGetResumeQuery,
     useLazyGetRolesQuery,
     useLazyGetLevelsQuery,

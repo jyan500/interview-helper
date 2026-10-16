@@ -18,6 +18,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router";
 import { useGetMyInterviewsQuery } from "../api";
 import { addIgnoredInterviewId, interviewTitle, loadIgnoredInterviewIds } from "../helpers";
+import Banner from "./Banner";
 import Button from "./Button";
 
 export default function ResumeBanner({ className = "" }: { className?: string }) {
@@ -55,12 +56,7 @@ export default function ResumeBanner({ className = "" }: { className?: string })
     }
 
     return (
-        <div
-            className={
-                "flex items-center justify-between gap-4 rounded-md border border-accent-600 bg-accent-900 px-[18px] py-4 " +
-                className
-            }
-        >
+        <Banner className={className}>
             <div>
                 <div className="kicker text-accent-300">Unfinished session</div>
                 <div className="mt-0.5 font-heading text-[20px]">
@@ -75,6 +71,6 @@ export default function ResumeBanner({ className = "" }: { className?: string })
                     Resume
                 </Button>
             </div>
-        </div>
+        </Banner>
     );
 }

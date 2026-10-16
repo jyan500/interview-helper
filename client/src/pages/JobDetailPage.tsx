@@ -166,7 +166,7 @@ export default function JobDetailPage() {
                         <section className="rounded-md border border-divider px-[22px] pb-[18px] pt-5">
                             <h2 className="font-heading text-[23px] font-medium">Job posting</h2>
                             <div className="mt-3 whitespace-pre-line text-[13.5px] leading-[1.5] text-neutral-300">
-                                <ExpandableText text={job.description} />
+                                <ExpandableText>{job.description}</ExpandableText>
                             </div>
                         </section>
                     </div>
