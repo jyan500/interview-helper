@@ -1,5 +1,6 @@
 /**
- * The coding round's workspace — shown beside the conversation when the round `has_code_editor`:
+ * A coding question's workspace — shown beside the conversation while the question on the table's type
+ * `has_code_editor` (a Job coding round, or a coding question in a Practice interview):
  * the problem statement on the table, a language picker and the CodeMirror editor.
  *
  * Purely presentational: SessionPage owns `code` / `language` because it attaches them to the next

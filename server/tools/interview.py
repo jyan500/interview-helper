@@ -101,6 +101,8 @@ async def _insert_generated_questions(
         question = Question(
             slug=f"gen-{uuid.uuid4().hex[:12]}",
             type_id=type_id,
+            # the prompt asks for 2-6 words; the slice only keeps a runaway title inside the column
+            title=item["title"][:128],
             text=item["text"],
             level_id=level_row.id,
             job_id=job_row.id,
@@ -1048,6 +1050,7 @@ async def get_scorecard(interview_id: str) -> dict:
             "overall": scorecard.overall,
             "answers": [ {                                   # one per ScorecardEntry
                 "question_id":   entry.question.slug,
+                "question_title": entry.question.title,
                 "question_text": entry.question.text,        # join to questions for the text
                 "strength": ..., "gap": ..., "improvement": ...,
                 "dimension_scores": [ {                      # one per ScorecardEntryScore
@@ -1100,6 +1103,7 @@ async def get_scorecard(interview_id: str) -> dict:
                 all_pairs.append((score.dimension.name, score.score))
             answers.append({
                 "question_id": entry.question.slug,
+                "question_title": entry.question.title,
                 "question_text": entry.question.text,
                 "strength": entry.strength,
                 "gap": entry.gap,

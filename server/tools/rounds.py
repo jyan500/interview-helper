@@ -46,7 +46,7 @@ if __name__ == "__main__":
     async def _smoke() -> None:
         page = await list_round_types(Params(page=1, size=50))
         for row in page.items:
-            print(row.slug, row.plan_size, row.max_followups, row.has_code_editor)
+            print(row.slug, row.plan_size, row.max_followups, row.allows_smart_voice)
         print("unknown ->", await get_round_type_by_slug("nope"))
 
     asyncio.run(_smoke())

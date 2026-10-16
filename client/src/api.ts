@@ -121,6 +121,7 @@ export type QueryParams = Record<string, string | number | boolean | undefined>;
 // drives the checkbox. `level_*` are null for an unleveled question.
 export interface QuestionItem {
     slug: string;
+    title: string; // the short display name a list row leads with
     text: string;
     type_slug: string;
     type_name: string;
@@ -134,6 +135,7 @@ export interface QuestionItem {
 // CustomQuestionBody in server/api.py. `grading_notes` "" = no guidance (the grading guide is written
 // from the question alone).
 export interface CustomQuestionRequest {
+    title: string;
     text: string;
     type: string; // question type slug
     level: string; // level slug
@@ -143,6 +145,7 @@ export interface CustomQuestionRequest {
 // GET /api/questions/{slug} — the edit form's detail. Slugs + names, so the pickers can show labels.
 export interface CustomQuestionDetail {
     slug: string;
+    title: string;
     text: string;
     type_slug: string;
     type_name: string;
@@ -174,11 +177,10 @@ export interface AnswerRequest {
 }
 
 // INTERVIEW SIMULATION — a round FORMAT a job can be simulated in (GET /api/round-types), mirroring
-// RoundTypeOut. `has_code_editor` is how the SPA knows a round needs the editor, without a slug check;
-// `allows_smart_voice` says whether smart voice turn-taking is offered (and is then the default).
+// RoundTypeOut. `allows_smart_voice` says whether smart voice turn-taking is offered (and is then the
+// default). The code editor isn't a round flag: each PlanQuestion's type flags pick the workspace.
 export interface RoundTypeItem extends BasePageItem {
     description: string;
-    has_code_editor: boolean;
     allows_smart_voice: boolean;
 }
 // A saved job as listed (GET /api/jobs), mirroring JobOut. role/level carry the SLUG (edit pickers)
@@ -221,6 +223,7 @@ export interface DimensionScore {
 }
 export interface AnswerGrade {
     question_id: string;
+    question_title: string;
     question_text: string;
     dimension_scores: DimensionScore[];
     strength: string;

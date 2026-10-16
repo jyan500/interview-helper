@@ -236,7 +236,7 @@ export default function QuestionsPage() {
                         onClose={() => setPendingDelete(null)}
                         onConfirm={confirmDelete}
                     >
-                        <strong className="text-ink">"{pendingDelete?.text}"</strong> will be removed from your
+                        <strong className="text-ink">"{pendingDelete?.title}"</strong> will be removed from your
                         questions and won't be asked again. Past interviews that asked it keep their results.
                     </ConfirmDeleteModal>
                 </div>

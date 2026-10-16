@@ -242,6 +242,7 @@ async def seed() -> None:
                     question = Question(
                         slug=q["id"],          # "be-1" — the bank's id becomes the slug
                         type_id=qtype.id,
+                        title=q["title"],
                         text=q["text"],
                         level_id=level_row.id if level_row else None,   # Phase D
                         tags=tags,             # writes the question_tags rows
@@ -339,7 +340,6 @@ async def seed() -> None:
                 "interviewer_guidance": round_data["interviewer_guidance"],
                 "plan_size": round_data["plan_size"],
                 "max_followups": round_data["max_followups"],
-                "has_code_editor": round_data["has_code_editor"],
                 "allows_smart_voice": round_data["allows_smart_voice"],
                 "uses_candidate_background": round_data["uses_candidate_background"],
             }

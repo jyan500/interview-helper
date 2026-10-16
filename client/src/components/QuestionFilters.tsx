@@ -129,7 +129,7 @@ export default function QuestionFilters({
             <input
                 {...register("q")}
                 className="input w-[240px] text-[13.5px]"
-                placeholder="Search question text…"
+                placeholder="Search questions…"
             />
             <div className="w-[180px]">
                 <ControlledAsyncPaginateSelect

@@ -77,6 +77,7 @@ def _question_dict(question: Question) -> dict:
     return {
         "id": question.slug,
         "type": question.type.slug,
+        "title": question.title,
         "text": question.text,
         "tags": [tag.slug for tag in question.tags],
     }
@@ -317,6 +318,7 @@ def _question_out(question: Question, selected: bool) -> dict:
     """
     return {
         "slug": question.slug,
+        "title": question.title,
         "text": question.text,
         "type_slug": question.type.slug,
         "type_name": question.type.name,
@@ -372,7 +374,7 @@ async def list_questions_page(
     """A PAGE of bank questions for the browse UI — backs GET /api/questions.
 
     Same server-side pagination as list_roles, over the role (+ level) filter. `search` matches
-    question text. `saved` is a TRI-STATE against the caller's saved set: True → only saved
+    the question's title or text. `saved` is a TRI-STATE against the caller's saved set: True → only saved
     ("My questions"), False → only NOT saved (the Questions page's "everything else" table), None →
     the whole bank (the Add-question modal). `type_slug` narrows to one question KIND. Every returned
     row carries a computed `selected` flag so the checkbox renders right. An unknown role/level/type
@@ -417,7 +419,9 @@ async def list_questions_page(
             stmt = stmt.where(Question.type.has(QuestionType.slug == type_slug))
 
         if search:
-            stmt = stmt.where(Question.text.ilike(f"%{search}%"))
+            stmt = stmt.where(or_(
+                Question.title.ilike(f"%{search}%"), Question.text.ilike(f"%{search}%")
+            ))
         if authored is True:
             # the visibility clause already limits authored rows to the caller's own
             stmt = stmt.where(Question.profile_id.is_not(None))
