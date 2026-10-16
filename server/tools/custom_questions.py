@@ -14,6 +14,12 @@ author's profile_id (a guard param), so a bank question or another user's slug s
 
 DELETE IS A SOFT DELETE (`archived_at`): turns and scorecard entries keep FKs to the question, so an
 interview that asked it still resolves; the bank and new plans stop seeing it.
+
+CLAIMING: "Save to My questions" after a job interview moves a GENERATED question to its user instead
+of copying it (claim_job_question): `job_id` -> NULL (so a job delete no longer cascades it),
+`profile_id` -> the user, a `question_roles` pairing for the job's role, and `claimed_at` stamped. Its
+generated brief comes along, so a claim costs no LLM call. A claimed question is READ-ONLY (the route
+refuses a PUT): the job interview it came from still reads this row, so an edit would rewrite history.
 """
 from __future__ import annotations
 
@@ -25,6 +31,7 @@ from sqlalchemy.orm import selectinload
 
 from db.engine import get_session
 from db.models import (
+    Job,
     Level,
     ProfileQuestion,
     Question,
@@ -35,8 +42,20 @@ from db.models import (
 )
 from tools.questions import QUESTION_LOADS, _question_out
 
-# Each create is a paid LLM call (the brief), so a profile's live questions are bounded.
+# Each create is a paid LLM call (the brief), so a profile's live questions are bounded. Claimed
+# questions count too: they're the user's live questions like any other.
 MAX_CUSTOM_QUESTIONS = 100
+CAP_ERROR = f"you can have at most {MAX_CUSTOM_QUESTIONS} questions"
+
+
+async def _at_question_cap(db, profile_id: str) -> bool:
+    """Whether the profile already has MAX_CUSTOM_QUESTIONS live (unarchived) questions."""
+    count = (await db.execute(
+        select(func.count()).select_from(Question).where(
+            Question.profile_id == profile_id, Question.archived_at.is_(None)
+        )
+    )).scalar_one()
+    return count >= MAX_CUSTOM_QUESTIONS
 
 
 async def check_custom_question_input(
@@ -64,14 +83,8 @@ async def check_custom_question_input(
         if unknown_roles:
             return {"ok": False, "error": f"unknown role(s): {', '.join(sorted(unknown_roles))}"}
 
-        if creating:
-            count = (await db.execute(
-                select(func.count()).select_from(Question).where(
-                    Question.profile_id == profile_id, Question.archived_at.is_(None)
-                )
-            )).scalar_one()
-            if count >= MAX_CUSTOM_QUESTIONS:
-                return {"ok": False, "error": f"you can have at most {MAX_CUSTOM_QUESTIONS} questions"}
+        if creating and await _at_question_cap(db, profile_id):
+            return {"ok": False, "error": CAP_ERROR}
 
         return {
             "ok": True,
@@ -106,6 +119,7 @@ def _detail_dict(question: Question) -> dict:
         "level_name": question.level.name,
         "roles": [{"slug": link.role.slug, "name": link.role.name} for link in question.role_links],
         "grading_notes": question.grading_notes,
+        "is_claimed": question.claimed_at is not None,
     }
 
 
@@ -263,3 +277,89 @@ async def archive_custom_question(profile_id: str, slug: str) -> dict:
         )
         await db.commit()
         return {"ok": True}
+
+
+async def _ensure_saved(db, profile_id: str, question_id: int) -> None:
+    """Add the question to the profile's saved set unless it's already there (the unique constraint
+    would reject a second row)."""
+    existing = (await db.execute(
+        select(ProfileQuestion.id).where(
+            ProfileQuestion.profile_id == profile_id,
+            ProfileQuestion.question_id == question_id,
+        )
+    )).scalar_one_or_none()
+    if existing is None:
+        db.add(ProfileQuestion(profile_id=profile_id, question_id=question_id))
+
+
+async def claim_job_question(profile_id: str, slug: str) -> dict:
+    """"Save to My questions" for a generated (job) question: move the row to the user (see the module
+    docstring). Idempotent: claiming a question this user already claimed returns it, and one they
+    claimed then deleted is restored. Returns {"ok": True, "question": <browse shape>},
+    {"ok": False, "error": "not_found"} (unknown, a bank or user question, or another user's job), or
+    the cap error."""
+    async with get_session() as db:
+        # 1. already claimed by this user: return it, restoring it first if they had deleted it
+        claimed = (await db.execute(
+            select(Question).where(
+                Question.slug == slug,
+                Question.profile_id == profile_id,
+                Question.claimed_at.is_not(None),
+            )
+        )).scalar_one_or_none()
+        if claimed is not None:
+            if claimed.archived_at is not None:
+                if await _at_question_cap(db, profile_id):
+                    return {"ok": False, "error": CAP_ERROR}
+                claimed.archived_at = None
+                await _ensure_saved(db, profile_id, claimed.id)
+                await db.commit()
+            restored = await _load_owned(db, profile_id, slug)
+            return {"ok": True, "question": _question_out(restored, selected=True)}
+
+        # 2. otherwise it must be a generated question of a job this user owns (the guard param: the
+        #    job's owner, not just the slug)
+        row = (await db.execute(
+            select(Question, Job)
+            .join(Job, Job.id == Question.job_id)
+            .where(Question.slug == slug, Job.profile_id == profile_id)
+            .options(selectinload(Question.role_links), selectinload(Job.role))
+        )).one_or_none()
+        if row is None:
+            return {"ok": False, "error": "not_found"}
+        question, job = row
+
+        # 3. a claimed question is a live question of the user's, so it counts toward the cap
+        if await _at_question_cap(db, profile_id):
+            return {"ok": False, "error": CAP_ERROR}
+
+        # 4. move it from the job to the user (job_id cleared: ck_question_job_or_author forbids both)
+        question.job_id = None
+        question.profile_id = profile_id
+        question.claimed_at = datetime.now(timezone.utc)
+
+        # 5. pair it with the job's role, so the Questions page and practice plans find it, and save it
+        await _set_roles(db, question, [job.role.slug])
+        await _ensure_saved(db, profile_id, question.id)
+        await db.commit()
+
+        # 6. reload with the relationships the browse shape reads
+        db.expire(question)
+        saved = await _load_owned(db, profile_id, slug)
+        return {"ok": True, "question": _question_out(saved, selected=True)}
+
+
+async def claimed_question_slugs(profile_id: str, slugs: list[str]) -> list[str]:
+    """The given slugs this user has claimed and not deleted: the interview detail page's "already
+    saved" set."""
+    if not slugs:
+        return []
+    async with get_session() as db:
+        return list((await db.execute(
+            select(Question.slug).where(
+                Question.slug.in_(slugs),
+                Question.profile_id == profile_id,
+                Question.claimed_at.is_not(None),
+                Question.archived_at.is_(None),
+            )
+        )).scalars().all())

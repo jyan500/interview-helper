@@ -155,6 +155,8 @@ from tools.background import (
 from tools.custom_questions import (
     archive_custom_question,
     check_custom_question_input,
+    claim_job_question,
+    claimed_question_slugs,
     create_custom_question,
     get_custom_question,
     update_custom_question,
@@ -414,6 +416,7 @@ class QuestionOut(BaseModel):
     tags: list[str]
     selected: bool
     is_custom: bool = False
+    is_claimed: bool = False   # saved from a job interview: the user's, but read-only
 
 
 # POST /api/questions and PUT /api/questions/{slug} body — a candidate's OWN practice question (see
@@ -457,6 +460,7 @@ class CustomQuestionOut(BaseModel):
     level_name: str
     roles: list[NamedSlugOut]
     grading_notes: str | None
+    is_claimed: bool = False
 
 
 # PUT /api/profile/questions body — a staged "My questions" edit committed in one batch. The SPA
@@ -1219,6 +1223,10 @@ async def interview_detail(
     require_ownership(interview["profile_id"], user_id)
 
     card = await get_scorecard(interview_id)
+    saved_question_ids = []
+    if interview["job_id"]:
+        asked = list({turn["question_id"] for turn in interview["turns"]})
+        saved_question_ids = await claimed_question_slugs(user_id, asked)
     return {
         "interview_id": interview["interview_id"],
         # display fields for the detail header (role · level, and the date). `level_name` is the
@@ -1235,7 +1243,37 @@ async def interview_detail(
         "summary": interview["summary"],
         # null until this interview has been graded (or until get_scorecard is implemented).
         "scorecard": card if card.get("status") == "ok" else None,
+        # a job interview's questions the caller has saved to "My questions" (claimed); [] for a bank
+        # interview, whose questions are saved from the Questions page instead
+        "saved_question_ids": saved_question_ids,
     }
+
+
+# ===========================================================================
+# POST /api/interviews/{interview_id}/questions/{slug}/claim : "Save to My questions" for a question a
+# job interview asked. The generated question MOVES to the caller (see claim_job_question): no copy, no
+# LLM call, and idempotent (re-saving returns the same question).
+#
+# GUARD ORDER: exists (404) -> owns (403) -> the slug was actually asked in THIS interview (404, a guard
+# param: you can only claim a question you were asked) -> claim_job_question, which re-checks the
+# job's owner and 404s anything that isn't a generated question.
+# ===========================================================================
+@app.post("/api/interviews/{interview_id}/questions/{slug}/claim", response_model=QuestionOut)
+async def claim_interview_question(
+    interview_id: str,
+    slug: str,
+    user_id: str = Depends(require_user),
+):
+    interview = await get_interview(interview_id)
+    if interview.get("status") != "ok":
+        raise HTTPException(status_code=404, detail="unknown interview")
+    require_ownership(interview["profile_id"], user_id)
+
+    asked = {turn["question_id"] for turn in interview["turns"]}
+    if slug not in asked:
+        raise HTTPException(status_code=404, detail="question not asked in this interview")
+
+    return _envelope_result(await claim_job_question(user_id, slug), "question")
 
 
 # ===========================================================================
@@ -1575,8 +1613,12 @@ async def custom_question_detail(slug: str, user_id: str = Depends(require_user)
 async def replace_custom_question(
     slug: str, body: CustomQuestionBody, user_id: str = Depends(require_user)
 ):
-    # 1. the current version (404 if it isn't the caller's), to tell whether the brief is stale
+    # 1. the current version (404 if it isn't the caller's), to tell whether the brief is stale. A
+    #    question claimed from a job interview is read-only (that interview still reads this row), so
+    #    it's refused here, before the paid brief call.
     current = _envelope_result(await get_custom_question(user_id, slug), "question")
+    if current["is_claimed"]:
+        raise HTTPException(status_code=400, detail="a question saved from a job interview can't be edited")
     check = _envelope_result(await check_custom_question_input(
         user_id, body.question_type, body.level, body.roles, creating=False
     ))

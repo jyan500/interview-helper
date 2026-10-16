@@ -521,6 +521,10 @@ class Question(Base, TimestampMixin):
     (tools/questions._visible_to). Their brief is LLM-written at create, guided by `grading_notes`.
     They're soft-deleted (`archived_at`), never hard-deleted: turns and scorecard entries keep FKs to
     them, and an archived question vanishes from the bank and new plans while history still resolves.
+
+    A GENERATED question can become a user question: "Save to My questions" after a job interview
+    CLAIMS the row (job_id -> NULL, profile_id -> the user, `claimed_at` stamped). A claimed question
+    is read-only, since the job interview it came from still reads its title, text, and brief.
     """
     __tablename__ = "questions"
     __table_args__ = (
@@ -555,6 +559,8 @@ class Question(Base, TimestampMixin):
     grading_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Soft delete for user-written questions (see the docstring).
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set when the user claimed a generated question (see the docstring); such a question is read-only.
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Phase D fills this. Nullable until then so today's bank — which has no levels — seeds
     # cleanly and next_question can ignore the column. Stays on the QUESTION (not the
