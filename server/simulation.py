@@ -136,7 +136,15 @@ async def extract_job(description: str) -> BaseModel:
 # the same house style as data/reference_briefs/*.md. The candidate never sees it.
 class _GeneratedQuestionBase(BaseModel):
     """The free-text half of one generated question. `type_slug` is added per run (see
-    _round_output_type), constrained to the live question types like the JD extractor's role."""
+    _round_output_type), constrained to the live question types like the JD extractor's role.
+
+    `technique` comes FIRST so the model commits to what the question exercises before writing it,
+    instead of writing the first problem that comes to mind and naming it after. It isn't stored:
+    the plan insert reads only the keys it needs."""
+    technique: str = Field(description="what this question fundamentally exercises, in a few words "
+                                       "(for a coding question, its core data structure or algorithmic "
+                                       "technique). Must differ from the other questions' and from "
+                                       "every recently asked question's")
     text: str = Field(description="the question exactly as the interviewer will present it to the "
                                   "candidate, in plain text (no markdown headings)")
     title: str = Field(description="a short 2-6 word name for the question, shown in lists (e.g. "
@@ -212,7 +220,9 @@ round_agent = Agent(
 )
 
 
-async def generate_round(job: dict, round_type, candidate_background: str = "") -> list[dict]:
+async def generate_round(
+    job: dict, round_type, candidate_background: str = "", recent_questions: list[dict] | None = None
+) -> list[dict]:
     """Write one round's questions for a job. Returns `plan_size` dicts of {text, title, type_slug, brief},
     in ask order — the shape create_interview(generated=...) takes (plain dicts, so the data layer
     never imports this module's model stack).
@@ -223,7 +233,12 @@ async def generate_round(job: dict, round_type, candidate_background: str = "") 
 
     `candidate_background` (optional, "" = leave it out) is the candidate's Profile background
     (tools/background.format_candidate_background). The caller passes it only for a round that opts in
-    (RoundType.uses_candidate_background); the agent's instructions say how to use it."""
+    (RoundType.uses_candidate_background); the agent's instructions say how to use it.
+
+    `recent_questions` (optional) is what this candidate was asked in their last rounds of this type
+    (tools/interview.list_recent_round_questions). Without it every generation is the same prompt
+    and the model keeps returning its single likeliest pair of problems; with it, the model steers
+    away from techniques already used, with no topic list hard-coded anywhere."""
     types = (await list_question_types(Params(page=1, size=100))).items
     output_type = _round_output_type([t.slug for t in types], round_type.plan_size)
 
@@ -235,6 +250,14 @@ async def generate_round(job: dict, round_type, candidate_background: str = "") 
         "background.\n\n"
         if candidate_background else ""
     )
+    recent_section = ""
+    if recent_questions:
+        recent_lines = "\n".join(f"- {q['title']}: {q['text_excerpt']}" for q in recent_questions)
+        recent_section = (
+            f"\n\nRECENTLY ASKED (this candidate's last {round_type.name} rounds):\n{recent_lines}\n"
+            "Identify the underlying technique of each. Write questions whose core technique differs "
+            "from all of them, not the same technique re-skinned in a new domain."
+        )
     prompt = (
         f"Allowed question types (slug: name): {'; '.join(f'{t.slug}: {t.name}' for t in types)}\n\n"
         f"COMPANY: {job['company']}\n"
@@ -243,7 +266,7 @@ async def generate_round(job: dict, round_type, candidate_background: str = "") 
         f"JOB SUMMARY: {job['summary']}\n\n"
         f"{background_section}"
         f"ROUND: {round_type.name}\n"
-        f"ROUND GUIDANCE: {round_type.question_guidance}\n\n"
+        f"ROUND GUIDANCE: {round_type.question_guidance}{recent_section}\n\n"
         f"Write exactly {round_type.plan_size} question(s), each with its brief."
     )
     started = time.perf_counter()
@@ -253,6 +276,8 @@ async def generate_round(job: dict, round_type, candidate_background: str = "") 
         usage_limits=UsageLimits(request_limit=3),
     )
     log_run(f"round_generate[{round_type.slug}]", result, started)
+    log_perf("round_generate[%s] techniques: %s", round_type.slug,
+             " | ".join(q.technique for q in result.output.questions))
     return [q.model_dump() for q in result.output.questions]
 
 

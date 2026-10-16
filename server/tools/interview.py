@@ -48,7 +48,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi_pagination import Params
 from fastapi_pagination.ext.sqlalchemy import apaginate
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.orm import selectinload
 
 from db.engine import get_session
@@ -116,6 +116,31 @@ async def _insert_generated_questions(
     for question, item in zip(questions, generated):
         db.add(ReferenceBrief(question_id=question.id, brief=item["brief"]))
     return questions
+
+
+async def list_recent_round_questions(
+    profile_id: str, round_type_id: int, limit: int = 10
+) -> list[dict]:
+    """The questions this candidate was asked in their most recent interviews of one round type,
+    newest first, as {title, text_excerpt} dicts. The round generator reads them as "already asked"
+    so a new round steers away from the same techniques instead of re-skinning them.
+
+    Spans EVERY job (the repetition is cross-JD) and reads through the frozen plan, so a question the
+    candidate later claimed into My questions still counts. The excerpt is there because a title
+    dressed in the company's domain can hide the underlying technique."""
+    async with get_session() as db:
+        rows = (await db.execute(
+            select(Question.title, Question.text)
+            .join(InterviewQuestion, InterviewQuestion.question_id == Question.id)
+            .join(Interview, Interview.id == InterviewQuestion.interview_id)
+            .where(and_(Interview.profile_id == profile_id, Interview.round_type_id == round_type_id))
+            .order_by(Interview.created_at.desc(), InterviewQuestion.position)
+            .limit(limit)
+        )).all()
+    recent = []
+    for title, text in rows:
+        recent.append({"title": title, "text_excerpt": text[:200]})
+    return recent
 
 
 async def create_interview(
