@@ -1997,3 +1997,26 @@ NOT yet verified: interviewer follow-ups in a real behavioral interview, through
 
 **Next:** run a behavioral Job interview and a Practice interview with a filled-in profile, then commit Phases 2
 and 3.
+
+### 2026-10-15 — Save a job-interview question to "My questions", Phase 1: backend (branch `save-question-from-interview-detail`)
+
+Design: saving **claims** the generated row instead of copying it. `job_id` goes to NULL, because the
+CASCADE would otherwise delete the question with its job and `ck_question_job_or_author` forbids both
+owners. `profile_id` becomes the user, `claimed_at` is stamped, a `question_roles` pairing for the job's
+role is added, and so is a `profile_questions` row. The generated brief comes along, so there's no LLM call.
+**A claimed question is read-only**: the job interview's scorecard still reads its title, text and brief
+live, so an edit would rewrite history.
+
+Done (migration `d5f7a9b1c3e4` applied, `alembic check` clean apart from the known `profiles → auth.users` FK):
+- `questions.claimed_at`, and `is_claimed` on `QuestionOut` and `CustomQuestionOut`.
+- `tools/custom_questions.py`: `claim_job_question` (idempotent; re-saving a deleted claim restores it,
+  under the cap), `claimed_question_slugs`, and the shared `_at_question_cap` / `_ensure_saved` helpers.
+- `POST /api/interviews/{id}/questions/{slug}/claim`: 404 → 403 → slug asked in this interview (404) → claim.
+- `GET /api/interviews/{id}` gains `saved_question_ids`. `PUT /api/questions/{slug}` returns 400 for a
+  claimed question, before the brief call.
+- Verified on throwaway rows (created and then deleted): stranger 403, unasked slug 404, claim and re-claim
+  give the same slug, edit 400, archive then re-claim restores it, the row's fields are right, and the
+  question survives a job delete.
+
+**Next:** Phase 2 UI: a per-card Save button and a dismissible banner on the interview detail page, and
+hide Edit for claimed rows on the Questions page.

@@ -329,6 +329,8 @@ def _question_out(question: Question, selected: bool) -> dict:
         # a user-written question (only ever the caller's own: see _visible_to), so the UI can badge
         # it and offer edit/delete
         "is_custom": question.profile_id is not None,
+        # claimed from a job interview: the user's, but read-only (no edit), see Question's docstring
+        "is_claimed": question.claimed_at is not None,
     }
 
 
