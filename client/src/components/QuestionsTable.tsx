@@ -12,9 +12,11 @@
  * saves immediately or stages until a Save button is the caller's business.
  *
  * The candidate's OWN questions (`is_custom`) carry a "Custom" tag. Pass `onEdit`/`onDelete` and those
- * rows also get Edit / Delete icon buttons in a trailing actions column (bank rows leave it blank).
+ * rows also get Edit / Delete icon buttons in a trailing actions column (bank rows leave it blank). A
+ * question saved from a job interview (`is_claimed`) is tagged "From interview" and gets View (`onView`)
+ * instead of Edit: its interview still reads it, so editing it would rewrite that interview's history.
  */
-import { PencilSimple, Trash } from "@phosphor-icons/react";
+import { Eye, PencilSimple, Trash } from "@phosphor-icons/react";
 import type { QuestionItem } from "../api";
 import Button from "./Button";
 import { Skeleton } from "./Skeleton";
@@ -24,6 +26,7 @@ export default function QuestionsTable({
     isChecked,
     onToggle,
     onEdit,
+    onView,
     onDelete,
     loading = false,
     skeletonRows = 8,
@@ -33,6 +36,7 @@ export default function QuestionsTable({
     isChecked?: (slug: string, serverSelected: boolean) => boolean;
     onToggle?: (slug: string, serverSelected: boolean) => void;
     onEdit?: (question: QuestionItem) => void;
+    onView?: (question: QuestionItem) => void;
     onDelete?: (question: QuestionItem) => void;
     loading?: boolean;
     skeletonRows?: number;
@@ -91,7 +95,7 @@ export default function QuestionsTable({
                             return (
                                 <tr key={q.slug}>
                                     {selectable && (
-                                        <td>
+                                        <td className="align-middle">
                                             <input
                                                 type="checkbox"
                                                 className="h-4 w-4 cursor-pointer accent-accent"
@@ -106,30 +110,42 @@ export default function QuestionsTable({
                                         hover. When selectable, clicking anywhere on it also toggles the row,
                                         so the whole cell is a target, not just the 16px box. */}
                                     <td
-                                        className={selectable ? "cursor-pointer align-top" : "align-top"}
+                                        className={selectable ? "cursor-pointer align-middle" : "align-middle"}
                                         onClick={selectable ? toggle : undefined}
                                     >
                                         <div className="truncate font-medium text-ink" title={q.title}>
-                                            {q.is_custom && <span className="tag tag-accent mr-2 align-middle">Custom</span>}
+                                            {q.is_custom && (
+                                                <span className="tag tag-accent mr-2 align-middle">
+                                                    {q.is_claimed ? "From interview" : "Custom"}
+                                                </span>
+                                            )}
                                             {q.title}
                                         </div>
                                         <div className="mt-0.5 truncate text-[12.5px] text-neutral-400" title={q.text}>
                                             {q.text}
                                         </div>
                                     </td>
-                                    <td className="truncate align-top text-neutral-300" title={q.type_name}>
+                                    <td className="truncate align-middle text-neutral-300" title={q.type_name}>
                                         {q.type_name}
                                     </td>
-                                    <td className="truncate align-top text-neutral-400" title={q.level_name ?? undefined}>
+                                    <td className="truncate align-middle text-neutral-400" title={q.level_name ?? undefined}>
                                         {q.level_name ?? "—"}
                                     </td>
                                     {editable && (
-                                        <td className="align-top">
+                                        <td className="align-middle">
                                             {q.is_custom && (
                                                 <div className="flex justify-end gap-1">
-                                                    <Button variant="ghost" icon aria-label={`Edit "${q.title}"`} title="Edit" onClick={() => onEdit!(q)}>
-                                                        <PencilSimple size={17} weight="regular" />
-                                                    </Button>
+                                                    {q.is_claimed ? (
+                                                        onView && (
+                                                            <Button variant="ghost" icon aria-label={`View "${q.title}"`} title="View" onClick={() => onView(q)}>
+                                                                <Eye size={17} weight="regular" />
+                                                            </Button>
+                                                        )
+                                                    ) : (
+                                                        <Button variant="ghost" icon aria-label={`Edit "${q.title}"`} title="Edit" onClick={() => onEdit!(q)}>
+                                                            <PencilSimple size={17} weight="regular" />
+                                                        </Button>
+                                                    )}
                                                     <Button variant="ghost" icon aria-label={`Delete "${q.title}"`} title="Delete" onClick={() => onDelete!(q)}>
                                                         <Trash size={17} weight="regular" />
                                                     </Button>

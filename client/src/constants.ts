@@ -149,6 +149,12 @@ export const DEFAULT_MIC_OPTION: MicOption = { value: "", label: "System default
 export const IGNORED_INTERVIEWS_STORAGE_KEY = "ih.ignoredInterviewIds";
 
 /**
+ * The interview detail page's "save a question to practice" banner can be dismissed for good (every
+ * interview, not one). "1" once dismissed; absent until then.
+ */
+export const SAVE_QUESTIONS_BANNER_DISMISSED_KEY = "ih.saveQuestionsBannerDismissed";
+
+/**
  * Tunables for the Settings modal's live mic-test meter (useMicLevel). The meter is driven by `hark`
  * (the same loudness library useSpeaking uses), whose volume_change reports the input level in dBFS
  * (~-100 silent .. 0 loud). We map that dB range onto the bar's 0..1 width, so it sits left when you're

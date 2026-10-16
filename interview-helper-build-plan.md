@@ -2018,5 +2018,15 @@ Done (migration `d5f7a9b1c3e4` applied, `alembic check` clean apart from the kno
   give the same slug, edit 400, archive then re-claim restores it, the row's fields are right, and the
   question survives a job delete.
 
-**Next:** Phase 2 UI: a per-card Save button and a dismissible banner on the interview detail page, and
-hide Edit for claimed rows on the Questions page.
+**Phase 2: UI** (type-checked with `npx tsc`; browser pass pending):
+- `api.ts`: `claimInterviewQuestion` mutation (invalidates `Interviews` and `Questions`).
+  `getInterviewDetail` now provides `Interviews`, so its `saved_question_ids` re-reads after a save.
+  `QuestionItem.is_claimed` added.
+- `SaveQuestionButton`: on each scorecard card of a job interview. Save shows a toast and flips the button
+  to a "Saved" link to `/questions`; an error (for example the cap) shows an error toast.
+- `SaveQuestionsBanner`: under the detail header while a graded job interview has an unsaved question.
+  Its X dismisses it on every interview (`SAVE_QUESTIONS_BANNER_DISMISSED_KEY`).
+- `QuestionsTable`: claimed rows are tagged "From interview" and are delete-only (no Edit).
+
+**Next:** in the browser, open a graded job interview, save a question, check it on the Questions page,
+dismiss the banner, and confirm a practice interview shows neither. Then commit.
