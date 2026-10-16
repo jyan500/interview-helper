@@ -19,7 +19,11 @@ import {
     type CustomQuestionDetail,
     type CustomQuestionRequest,
 } from "../../api";
-import { CUSTOM_QUESTION_NOTES_MAX_CHARS, CUSTOM_QUESTION_TEXT_MAX_CHARS } from "../../constants";
+import {
+    CUSTOM_QUESTION_NOTES_MAX_CHARS,
+    CUSTOM_QUESTION_TEXT_MAX_CHARS,
+    CUSTOM_QUESTION_TITLE_MAX_CHARS,
+} from "../../constants";
 import { errorDetail } from "../../helpers";
 import { useToast } from "../../toast/ToastProvider";
 import type { SelectOption } from "../AsyncPaginateSelect";
@@ -28,6 +32,7 @@ import { ControlledAsyncPaginateMultiSelect } from "../ControlledAsyncPaginateMu
 import Button from "../Button";
 
 type QuestionFields = {
+    title: string;
     text: string;
     questionType: SelectOption | null;
     level: SelectOption | null;
@@ -38,6 +43,7 @@ type QuestionFields = {
 // The request body from the form values. The validation rules guarantee both pickers are set.
 function toRequest(fields: QuestionFields): CustomQuestionRequest {
     return {
+        title: fields.title.trim(),
         text: fields.text.trim(),
         type: fields.questionType!.value,
         level: fields.level!.value,
@@ -47,7 +53,8 @@ function toRequest(fields: QuestionFields): CustomQuestionRequest {
 }
 
 // Whether saving `body` rewrites the grading guide: the same comparison the server's PUT makes (text,
-// type, level and notes against the stored values; "" notes and no notes are the same). Always on create.
+// type, level and notes against the stored values; "" notes and no notes are the same). The title is only
+// a display name, so it never rewrites the guide. Always on create.
 function rewritesGuide(body: CustomQuestionRequest, question?: CustomQuestionDetail): boolean {
     if (!question) return true;
     return (
@@ -83,6 +90,7 @@ export default function QuestionForm({
         formState: { errors, isSubmitting },
     } = useForm<QuestionFields>({
         defaultValues: {
+            title: question?.title ?? "",
             text: question?.text ?? "",
             questionType: question ? { value: question.type_slug, label: question.type_name } : null,
             level: question ? { value: question.level_slug, label: question.level_name } : null,
@@ -96,6 +104,7 @@ export default function QuestionForm({
     });
 
     const values = watch();
+    const titleLength = values.title.trim().length;
     const textLength = values.text.trim().length;
     const notesLength = values.gradingNotes.trim().length;
     // only meaningful once the pickers are set, which they are by the time a save is in flight
@@ -120,6 +129,29 @@ export default function QuestionForm({
 
     return (
         <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
+            <div className="field">
+                <label>Title</label>
+                <input
+                    className="input"
+                    placeholder="Disagreeing with a technical decision"
+                    {...register("title", {
+                        validate: (value) => {
+                            const length = value.trim().length;
+                            if (length === 0) return "Title is required.";
+                            if (length > CUSTOM_QUESTION_TITLE_MAX_CHARS)
+                                return `Keep it under ${CUSTOM_QUESTION_TITLE_MAX_CHARS} characters.`;
+                            return true;
+                        },
+                    })}
+                />
+                <div className="mt-1 flex justify-between text-[12.5px]">
+                    <span className="text-gap">{errors.title?.message}</span>
+                    <span className={titleLength > CUSTOM_QUESTION_TITLE_MAX_CHARS ? "text-gap" : "text-neutral-500"}>
+                        {titleLength} / {CUSTOM_QUESTION_TITLE_MAX_CHARS}
+                    </span>
+                </div>
+            </div>
+
             <div className="field">
                 <label>Question</label>
                 <textarea

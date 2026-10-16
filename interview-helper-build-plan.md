@@ -411,6 +411,12 @@ get different questions and level-calibrated feedback).
 
 ## CURRENT STATUS (resume point)
 
+*2026-10-15: **Question titles** (branch `question-title-and-unused-column-cleanup`). `questions.title`
+(NOT NULL, migration `c4e6a8b0d2f3`, backfilled: authored titles for the bank, cut-down text for
+generated/user-written rows). Generated rounds write a title; the custom-question form requires one.
+The Questions table shows title + a one-line text preview; the delete modal and scorecard cards show
+the title. Next action: browser pass, and one live round generation to check LLM-written titles.*
+
 *2026-10-12: **Candidate background** (Profile page roles, projects and skills, fed into behavioral interviews).
 Phases 1 (schema + API), 2 (client) and 3 (background in behavioral interviews) are done on branch `profile-page`; a browser pass is pending. See the 2026-10-12 section at
 the end.*

@@ -121,6 +121,7 @@ export type QueryParams = Record<string, string | number | boolean | undefined>;
 // drives the checkbox. `level_*` are null for an unleveled question.
 export interface QuestionItem {
     slug: string;
+    title: string; // the short display name a list row leads with
     text: string;
     type_slug: string;
     type_name: string;
@@ -134,6 +135,7 @@ export interface QuestionItem {
 // CustomQuestionBody in server/api.py. `grading_notes` "" = no guidance (the grading guide is written
 // from the question alone).
 export interface CustomQuestionRequest {
+    title: string;
     text: string;
     type: string; // question type slug
     level: string; // level slug
@@ -143,6 +145,7 @@ export interface CustomQuestionRequest {
 // GET /api/questions/{slug} — the edit form's detail. Slugs + names, so the pickers can show labels.
 export interface CustomQuestionDetail {
     slug: string;
+    title: string;
     text: string;
     type_slug: string;
     type_name: string;
@@ -220,6 +223,7 @@ export interface DimensionScore {
 }
 export interface AnswerGrade {
     question_id: string;
+    question_title: string;
     question_text: string;
     dimension_scores: DimensionScore[];
     strength: string;

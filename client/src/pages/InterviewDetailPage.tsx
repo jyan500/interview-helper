@@ -183,9 +183,10 @@ function ScorecardPanel({ card }: { card: Scorecard }) {
                                 {grade.dimension_scores.length === 0 ? "Skipped" : formatScore(questionRating(grade))}
                             </span>
                         </div>
+                        <div className="mt-2 text-[15px] font-medium text-ink">{grade.question_title}</div>
                         {/* a generated coding problem keeps its line breaks (and any example code block) */}
-                        <div className="mt-2">
-                            <FormattedText text={grade.question_text} className="text-[14px] leading-[1.45]" />
+                        <div className="mt-1.5">
+                            <FormattedText text={grade.question_text} className="text-[14px] leading-[1.45] text-neutral-300" />
                         </div>
 
                         {/* Chip row — this question's score per dimension. Wraps, since a rubric can carry

@@ -75,7 +75,11 @@ export default function QuestionsTable({
                         Array.from({ length: skeletonRows }).map((_, i) => (
                             <tr key={i}>
                                 {selectable && <td><Skeleton inline className="h-3.5 w-3.5" /></td>}
-                                <td><Skeleton inline className="h-3.5 w-72" /></td>
+                                {/* two bars: the title, then the shorter-looking text preview line */}
+                                <td>
+                                    <Skeleton className="h-3.5 w-48" />
+                                    <Skeleton className="mt-1.5 h-3 w-72" />
+                                </td>
                                 <td><Skeleton inline className="h-3.5 w-24" /></td>
                                 <td><Skeleton inline className="h-3.5 w-16" /></td>
                                 {editable && <td></td>}
@@ -93,21 +97,23 @@ export default function QuestionsTable({
                                                 className="h-4 w-4 cursor-pointer accent-accent"
                                                 checked={isChecked!(q.slug, q.selected)}
                                                 onChange={toggle}
-                                                aria-label={`Select "${q.text}"`}
+                                                aria-label={`Select "${q.title}"`}
                                             />
                                         </td>
                                     )}
-                                    {/* the question is the row's substance, but questions get long — so
-                                        clamp to 2 lines for a uniform, scannable row height and expose the
-                                        full text on hover (title). When selectable, clicking anywhere on it
-                                        also toggles the row, so the whole line is a target, not just the
-                                        16px box. */}
+                                    {/* the row leads with the question's short title; the full text (which
+                                        gets long) follows as a muted one-line preview, with all of it on
+                                        hover. When selectable, clicking anywhere on it also toggles the row,
+                                        so the whole cell is a target, not just the 16px box. */}
                                     <td
                                         className={selectable ? "cursor-pointer align-top" : "align-top"}
                                         onClick={selectable ? toggle : undefined}
                                     >
-                                        <div className="line-clamp-2" title={q.text}>
+                                        <div className="truncate font-medium text-ink" title={q.title}>
                                             {q.is_custom && <span className="tag tag-accent mr-2 align-middle">Custom</span>}
+                                            {q.title}
+                                        </div>
+                                        <div className="mt-0.5 truncate text-[12.5px] text-neutral-400" title={q.text}>
                                             {q.text}
                                         </div>
                                     </td>
@@ -121,10 +127,10 @@ export default function QuestionsTable({
                                         <td className="align-top">
                                             {q.is_custom && (
                                                 <div className="flex justify-end gap-1">
-                                                    <Button variant="ghost" icon aria-label={`Edit "${q.text}"`} title="Edit" onClick={() => onEdit!(q)}>
+                                                    <Button variant="ghost" icon aria-label={`Edit "${q.title}"`} title="Edit" onClick={() => onEdit!(q)}>
                                                         <PencilSimple size={17} weight="regular" />
                                                     </Button>
-                                                    <Button variant="ghost" icon aria-label={`Delete "${q.text}"`} title="Delete" onClick={() => onDelete!(q)}>
+                                                    <Button variant="ghost" icon aria-label={`Delete "${q.title}"`} title="Delete" onClick={() => onDelete!(q)}>
                                                         <Trash size={17} weight="regular" />
                                                     </Button>
                                                 </div>
