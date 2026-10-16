@@ -19,6 +19,7 @@
 import { useParams, Link } from "react-router";
 import AppNav from "../components/AppNav";
 import MessageRow from "../components/MessageRow";
+import ExpandableText from "../components/ExpandableText";
 import FormattedText from "../components/FormattedText";
 import Donut from "../components/Donut";
 import ScoreBar from "../components/ScoreBar";
@@ -212,9 +213,13 @@ function ScorecardPanel({
                             </span>
                         </div>
                         <div className="mt-2 text-[15px] font-medium text-ink">{grade.question_title}</div>
-                        {/* a generated coding problem keeps its line breaks (and any example code block) */}
+                        {/* a generated coding problem keeps its line breaks (and any example code block).
+                            Clamped to ~3 lines (3 x 14px x 1.45) behind "Show more", so a long problem doesn't
+                            push the feedback and the Save button far down; the full text is in the transcript. */}
                         <div className="mt-1.5">
-                            <FormattedText text={grade.question_text} className="text-[14px] leading-[1.45] text-neutral-300" />
+                            <ExpandableText clampClass="max-h-[61px] overflow-hidden">
+                                <FormattedText text={grade.question_text} className="text-[14px] leading-[1.45] text-neutral-300" />
+                            </ExpandableText>
                         </div>
 
                         {/* Chip row — this question's score per dimension. Wraps, since a rubric can carry
