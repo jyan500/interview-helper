@@ -127,6 +127,7 @@ from tools.interview import (
     get_scorecard,
     get_resumable_interview,
     list_interviews,
+    list_recent_round_questions,
     load_grading_context,
     load_interview_state,
     load_resume_payload,
@@ -540,8 +541,16 @@ async def start_interview(
             seniority=seniority,
             candidate_background=round_background,
         )
+        # what this candidate was already asked in this kind of round, so the generator varies the
+        # techniques instead of returning the same likeliest problems for every job. Only a round that
+        # opts in: behavioral's fixed structure is meant to repeat.
+        recent_questions = []
+        if round_row.avoids_recent_questions:
+            recent_questions = await list_recent_round_questions(user_id, round_row.id)
         try:
-            generated = await generate_round(job, round_row, candidate_background=round_background)
+            generated = await generate_round(
+                job, round_row, candidate_background=round_background, recent_questions=recent_questions
+            )
         except AgentRunError as exc:
             # the model couldn't produce a valid round within its retries/limits — nothing was
             # written, so the candidate can simply try again.

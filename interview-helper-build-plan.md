@@ -411,6 +411,18 @@ get different questions and level-calibrated feedback).
 
 ## CURRENT STATUS (resume point)
 
+*2026-10-16: **Coding-round variety** (branch `increase-coding-question-variety`). Job coding rounds kept
+producing an intervals problem, then a graph problem. Causes: the coding `question_guidance` used
+`mergeIntervals(...)` as its example signature, and every generation was stateless. Fixes: neutral
+signature placeholder + a generic "different techniques, less obvious than the domain suggests" rule
+(re-seeded); `list_recent_round_questions` (tools/interview.py) feeds the candidate's last 10 plan
+questions of that round type into `generate_round` as RECENTLY ASKED; a `technique` field generated
+first (not stored, PERF_LOG-logged). 4 live runs: no intervals/graph repeats, but run 4 reused run
+1's exact problem and monotonic stack appeared twice in a row. The history feed is gated by
+`round_types.avoids_recent_questions` (migration `f3a5c7e9b1d2`): on for coding + system design, off
+for behavioral, whose fixed structure should repeat. Next action: decide whether to tighten
+the history instruction or store `technique` on the question.*
+
 *2026-10-15: **Question titles** (branch `question-title-and-unused-column-cleanup`). `questions.title`
 (NOT NULL, migration `c4e6a8b0d2f3`, backfilled: authored titles for the bank, cut-down text for
 generated/user-written rows). Generated rounds write a title; the custom-question form requires one.
