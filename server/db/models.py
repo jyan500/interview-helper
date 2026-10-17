@@ -339,6 +339,10 @@ class RoundType(Base, TimestampMixin):
                        projects, skills): the generator grounds its questions in it and the persona's
                        follow-ups may reference it. On for behavioral only; a coding problem or a design
                        prompt has no use for a résumé.
+      avoids_recent_questions  whether the generator is shown the candidate's recent questions of this
+                       round type and told to vary away from them. On for coding and system design,
+                       where a stateless generator kept returning the same likeliest problems. Off for
+                       behavioral: its fixed structure (intro, project, why this company) SHOULD repeat.
     Its grading rubric hangs off it too (Rubric.round_type_id) — see Rubric.
     """
     __tablename__ = "round_types"
@@ -353,6 +357,7 @@ class RoundType(Base, TimestampMixin):
     max_followups: Mapped[int] = mapped_column(Integer)
     allows_smart_voice: Mapped[bool] = mapped_column(Boolean, default=False)
     uses_candidate_background: Mapped[bool] = mapped_column(Boolean, default=False)
+    avoids_recent_questions: Mapped[bool] = mapped_column(Boolean, default=False)
 
     rubric: Mapped[Rubric | None] = relationship(back_populates="round_type", lazy="raise")
 

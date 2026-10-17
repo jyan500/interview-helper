@@ -542,8 +542,11 @@ async def start_interview(
             candidate_background=round_background,
         )
         # what this candidate was already asked in this kind of round, so the generator varies the
-        # techniques instead of returning the same likeliest problems for every job
-        recent_questions = await list_recent_round_questions(user_id, round_row.id)
+        # techniques instead of returning the same likeliest problems for every job. Only a round that
+        # opts in: behavioral's fixed structure is meant to repeat.
+        recent_questions = []
+        if round_row.avoids_recent_questions:
+            recent_questions = await list_recent_round_questions(user_id, round_row.id)
         try:
             generated = await generate_round(
                 job, round_row, candidate_background=round_background, recent_questions=recent_questions

@@ -418,7 +418,9 @@ signature placeholder + a generic "different techniques, less obvious than the d
 (re-seeded); `list_recent_round_questions` (tools/interview.py) feeds the candidate's last 10 plan
 questions of that round type into `generate_round` as RECENTLY ASKED; a `technique` field generated
 first (not stored, PERF_LOG-logged). 4 live runs: no intervals/graph repeats, but run 4 reused run
-1's exact problem and monotonic stack appeared twice in a row. Next action: decide whether to tighten
+1's exact problem and monotonic stack appeared twice in a row. The history feed is gated by
+`round_types.avoids_recent_questions` (migration `f3a5c7e9b1d2`): on for coding + system design, off
+for behavioral, whose fixed structure should repeat. Next action: decide whether to tighten
 the history instruction or store `technique` on the question.*
 
 *2026-10-15: **Question titles** (branch `question-title-and-unused-column-cleanup`). `questions.title`

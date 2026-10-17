@@ -342,6 +342,7 @@ async def seed() -> None:
                 "max_followups": round_data["max_followups"],
                 "allows_smart_voice": round_data["allows_smart_voice"],
                 "uses_candidate_background": round_data["uses_candidate_background"],
+                "avoids_recent_questions": round_data["avoids_recent_questions"],
             }
             round_type, was_new = await _get_or_create(db, RoundType, slug=round_slug, **fields)
             created["rounds"] += was_new
