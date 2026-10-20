@@ -86,6 +86,10 @@ _DIAGRAM_CANVAS_TYPES = {"system-design"}
 # Question types that show the code editor (QuestionType.has_code_editor). Same create-only rule; existing
 # rows got theirs from the a1c3e5f7b9d2 migration.
 _CODE_EDITOR_TYPES = {"coding"}
+# Question types whose presence in a Practice plan gives the persona the candidate's Profile background
+# (QuestionType.uses_candidate_background). Same create-only rule; existing rows got theirs from the
+# b4d6f8a0c2e3 migration.
+_CANDIDATE_BACKGROUND_TYPES = {"behavioral"}
 
 
 def slugify(text: str) -> str:
@@ -170,7 +174,8 @@ async def seed() -> None:
         for slug, name in _EXTRA_QUESTION_TYPES:
             _, was_new = await _get_or_create(db, QuestionType, slug=slug, name=name,
                                               has_diagram_canvas=slug in _DIAGRAM_CANVAS_TYPES,
-                                              has_code_editor=slug in _CODE_EDITOR_TYPES)
+                                              has_code_editor=slug in _CODE_EDITOR_TYPES,
+                                              uses_candidate_background=slug in _CANDIDATE_BACKGROUND_TYPES)
             created["types"] += was_new
 
         for role_slug, role_data in bank["roles"].items():
@@ -201,6 +206,7 @@ async def seed() -> None:
                     db, QuestionType, slug=q["type"], name=titleize(q["type"]),
                     has_diagram_canvas=q["type"] in _DIAGRAM_CANVAS_TYPES,
                     has_code_editor=q["type"] in _CODE_EDITOR_TYPES,
+                    uses_candidate_background=q["type"] in _CANDIDATE_BACKGROUND_TYPES,
                 )
                 created["types"] += was_new
 

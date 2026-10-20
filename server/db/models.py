@@ -307,6 +307,11 @@ class QuestionType(Base, TimestampMixin):
     # candidate's own), and it has no round to carry the flag. A simulation's coding round gets it from
     # its generated questions' type too.
     has_code_editor: Mapped[bool] = mapped_column(Boolean, default=False)
+    # whether a Practice interview's persona carries the candidate's Profile background when its plan
+    # includes a question of this kind (behavioral). The Practice counterpart to
+    # RoundType.uses_candidate_background: a Practice interview has no round, so the flag lives on the
+    # type, and a plan of only coding or design questions starts without the background at all.
+    uses_candidate_background: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class RoundType(Base, TimestampMixin):

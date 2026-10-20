@@ -152,6 +152,7 @@ async def create_interview(
     job: str | None = None,
     round_type: str | None = None,
     generated: list[dict] | None = None,
+    background_persona: str | None = None,
 ) -> dict:
     """Start an interview: mint its id and INSERT the row. Called by POST /api/interview.
 
@@ -180,6 +181,12 @@ async def create_interview(
     `reference_briefs` row, and THOSE are the frozen plan instead of build_interview_plan's pick.
     The probe budget comes from the round. From here the turn loop and the grader can't tell a
     simulation from a bank interview. The caller checks job ownership before spending on generation.
+
+    PRACTICE BACKGROUND: `background_persona` (optional) is the same persona WITH the candidate's
+    Profile background. It's stored instead of `persona` only when the materialized plan has a question
+    whose type opts in (QuestionType.uses_candidate_background, i.e. behavioral). The choice is made
+    here because the plan doesn't exist until here. A simulation never passes it: its round already
+    decided (RoundType.uses_candidate_background) when the caller built `persona`.
     """
     if (job is None) != (round_type is None) or (job is not None and not generated):
         return {"ok": False, "error": "a simulation needs a job, a round, and generated questions"}
@@ -254,6 +261,17 @@ async def create_interview(
             # when they've saved none. Frozen here so re-curating later can't move an in-flight
             # interview.
             plan, from_saved = await build_interview_plan(db, role_row, level_row, profile_id)
+
+        # PICK THE PERSONA — the background goes in only if some planned question's type uses it, so a
+        # coding-only plan's interviewer never sees the candidate's projects.
+        if background_persona is not None and plan:
+            plan_type_ids = {question.type_id for question in plan}
+            type_flags = (await db.execute(
+                select(QuestionType.uses_candidate_background).where(QuestionType.id.in_(plan_type_ids))
+            )).scalars().all()
+            if True in type_flags:
+                interview.persona = background_persona
+
         for position, question in enumerate(plan):
             db.add(InterviewQuestion(
                 interview_id=interview.id, question_id=question.id, position=position,
