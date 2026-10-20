@@ -86,6 +86,10 @@ export interface BasePageItem {
     slug: string;
     name: string;
 }
+// A picker row with a short secondary label shown beside its name (e.g. a question's type).
+export interface BadgedPageItem extends BasePageItem {
+    badge: string;
+}
 export type RolePageItem = BasePageItem;
 export interface LevelPageItem extends BasePageItem {
     rank: number; // entry(1) < mid(2) < senior(3) — the picker renders in this order
@@ -752,6 +756,20 @@ export const interviewApi = createApi({
             query: (slug) => `/questions/${encodeURIComponent(slug)}`,
             providesTags: ["Questions"],
         }),
+        // The create form's "start from one of your questions" picker: the caller's own questions across
+        // EVERY role (no `role` param), reshaped into picker rows: the title as the label, the type as a badge.
+        getOwnQuestionOptions: builder.query<Page<BadgedPageItem>, OptionPageQuery>({
+            query: ({ q = "", page = 1 }) => ({ url: "/questions", params: { q, page, authored: true } }),
+            transformResponse: (res: Page<QuestionItem>) => ({
+                ...res,
+                items: res.items.map((question) => ({
+                    slug: question.slug,
+                    name: question.title,
+                    badge: question.type_name,
+                })),
+            }),
+            providesTags: ["Questions"],
+        }),
         createCustomQuestion: builder.mutation<QuestionItem, CustomQuestionRequest>({
             query: (body) => ({ url: "/questions", method: "POST", body }),
             invalidatesTags: ["Questions"],
@@ -836,6 +854,8 @@ export const {
     useGetQuestionsQuery,
     useSaveQuestionsMutation,
     useGetCustomQuestionQuery,
+    useLazyGetCustomQuestionQuery,
+    useLazyGetOwnQuestionOptionsQuery,
     useCreateCustomQuestionMutation,
     useUpdateCustomQuestionMutation,
     useDeleteCustomQuestionMutation,

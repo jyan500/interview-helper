@@ -1555,7 +1555,8 @@ async def remove_job(job_id: str, user_id: str = Depends(require_user)) -> dict:
 @app.get("/api/questions", response_model=Page[QuestionOut])
 async def questions(
     params: Params = Depends(),
-    role: str = "backend-engineer",
+    # omitted = every role (the create form's prefill search); the browse tables always pass one
+    role: str | None = None,
     level: str | None = None,
     q: str | None = None,
     saved: bool | None = None,

@@ -74,7 +74,7 @@ export default function ProjectModal({ project, onClose }: { project?: Project; 
                             validate: (value) => value.trim().length > 0 || "Name is required.",
                             maxLength: {
                                 value: BACKGROUND_NAME_MAX_CHARS,
-                                message: `Keep it under ${BACKGROUND_NAME_MAX_CHARS} characters.`,
+                                message: `Must be under ${BACKGROUND_NAME_MAX_CHARS} characters.`,
                             },
                         })}
                     />
@@ -107,7 +107,7 @@ export default function ProjectModal({ project, onClose }: { project?: Project; 
                         {...register("description", {
                             validate: (value) =>
                                 value.trim().length <= BACKGROUND_DESCRIPTION_MAX_CHARS ||
-                                `Keep it under ${BACKGROUND_DESCRIPTION_MAX_CHARS.toLocaleString()} characters.`,
+                                `Must be under ${BACKGROUND_DESCRIPTION_MAX_CHARS.toLocaleString()} characters.`,
                         })}
                     />
                     <div className="mt-1 flex justify-between text-[12.5px]">

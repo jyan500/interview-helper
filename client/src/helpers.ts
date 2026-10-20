@@ -65,7 +65,7 @@ export function validateAvatarFile(file: File): string | null {
         return "Please choose a JPEG, PNG, WebP, or GIF image.";
     }
     if (file.size > AVATAR_MAX_BYTES) {
-        return `That image is too large. Keep it under ${Math.round(AVATAR_MAX_BYTES / (1024 * 1024))} MB.`;
+        return `Image must be under ${Math.round(AVATAR_MAX_BYTES / (1024 * 1024))} MB.`;
     }
     return null;
 }
@@ -491,7 +491,7 @@ export function pagedLoadOptions(
         try {
             const res = await fetchPage({ q: search, page }).unwrap();
             return {
-                options: res.items.map((row) => ({ value: row.slug, label: row.name })),
+                options: res.items.map((row) => ({ value: row.slug, label: row.name, badge: row.badge })),
                 hasMore: res.page * res.size < res.total,
                 additional: { page: page + 1 },
             };

@@ -9,6 +9,7 @@
  * The one domain assumption it does make: every paginated row exposes a `slug` (the value we send
  * back) and a `name` (the label we show), which is the shape both option endpoints already return.
  */
+import type { ReactNode } from "react";
 import { AsyncPaginate } from "react-select-async-paginate";
 import type { GroupBase } from "react-select";
 import type { OptionPageQuery, Page } from "../api";
@@ -22,6 +23,8 @@ import { nocturneSelectStyles } from "../selectStyles";
 export interface SelectOption {
     value: string;
     label: string;
+    // a short secondary label (e.g. a question's type) a custom `formatOptionLabel` can show beside it
+    badge?: string;
 }
 
 // The pagination cursor threaded through AsyncPaginate's `additional`. We page by number; each
@@ -35,6 +38,7 @@ export interface PageAdditional {
 interface SelectRow {
     slug: string;
     name: string;
+    badge?: string; // carried onto the Option as-is (see SelectOption.badge)
 }
 
 // THE ONE INJECTION POINT: the endpoint that pulls a page of rows. This is a lazy RTK Query trigger
@@ -64,6 +68,8 @@ export interface AsyncPaginateSelectProps {
     // Bust AsyncPaginate's per-search-term option cache when an external input changes (e.g. a
     // dependent filter). Rarely needed for the independent role/level lists, exposed for reuse.
     cacheUniqs?: ReadonlyArray<unknown>;
+    // Render an option (in the menu and as the picked value) instead of the plain label text.
+    formatOptionLabel?: (option: SelectOption) => ReactNode;
 }
 
 export function AsyncPaginateSelect({
@@ -76,6 +82,7 @@ export function AsyncPaginateSelect({
     isClearable,
     isLoading,
     cacheUniqs,
+    formatOptionLabel,
 }: AsyncPaginateSelectProps) {
     // The pagination dance (cursor threading, row→Option mapping, hasMore), shared with the multi
     // variant; see pagedLoadOptions in helpers.ts.
@@ -100,6 +107,7 @@ export function AsyncPaginateSelect({
             // drive it, so we pass a boolean only when true and undefined the rest of the time.
             isLoading={isLoading || undefined}
             cacheUniqs={cacheUniqs}
+            formatOptionLabel={formatOptionLabel}
             // Nocturne dark-theme styling (shared) — without it react-select's white menu + inherited
             // near-white option text render the dropdown unreadable. See selectStyles.ts.
             styles={nocturneSelectStyles}
