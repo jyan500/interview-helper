@@ -202,7 +202,7 @@ def _visible_to(profile_id):
     return and_(Question.archived_at.is_(None), owner_clause)
 
 
-def _filtered_questions_stmt(role_id: int, level_rank: int | None, profile_id=None):
+def _filtered_questions_stmt(role_id: int | None, level_rank: int | None, profile_id=None):
     """The bank query shared by next_question and the interview-plan builder: every question for a
     role, at or below a seniority, in that role's bank order, that `profile_id` may see (see
     _visible_to: the public bank plus their own questions; None = public only).
@@ -214,15 +214,27 @@ def _filtered_questions_stmt(role_id: int, level_rank: int | None, profile_id=No
     compare and is excluded once a level is given — same as before. Pass `level_rank=None` for no
     level filter.
 
+    `role_id=None` means ANY role (the create form's "start from one of your questions" search): no
+    join, so a multi-role question appears once, newest first. Without the join, generated (job)
+    questions need excluding explicitly, since the missing pairing is what normally keeps them out.
+
     Loads QUESTION_LOADS, since every caller builds dicts or the plan from the rows.
     """
-    stmt = (
-        select(Question)
-        .join(QuestionRole, QuestionRole.question_id == Question.id)
-        .where(QuestionRole.role_id == role_id, _visible_to(profile_id))
-        .order_by(QuestionRole.sort_order)
-        .options(*QUESTION_LOADS)
-    )
+    if role_id is None:
+        stmt = (
+            select(Question)
+            .where(_visible_to(profile_id), Question.job_id.is_(None))
+            .order_by(Question.created_at.desc())
+            .options(*QUESTION_LOADS)
+        )
+    else:
+        stmt = (
+            select(Question)
+            .join(QuestionRole, QuestionRole.question_id == Question.id)
+            .where(QuestionRole.role_id == role_id, _visible_to(profile_id))
+            .order_by(QuestionRole.sort_order)
+            .options(*QUESTION_LOADS)
+        )
     if level_rank is not None:
         allowed_level_ids = select(Level.id).where(Level.rank <= level_rank)
         stmt = stmt.where(Question.level_id.in_(allowed_level_ids))
@@ -364,7 +376,7 @@ async def get_question_type_by_slug(slug: str) -> QuestionType | None:
 
 async def list_questions_page(
     params: Params,
-    role: str,
+    role: str | None,
     level: str | None = None,
     profile_id=None,
     search: str | None = None,
@@ -389,11 +401,16 @@ async def list_questions_page(
 
     `authored` is another TRI-STATE: True → only the caller's own questions, False → only bank
     questions, None → both (the bank always includes the caller's own, see _visible_to).
+
+    `role=None` searches across EVERY role (newest first): with `authored=True` that's the create
+    form's "start from one of your questions" picker.
     """
     async with get_session() as db:
-        role_row = (
-            await db.execute(select(Role).where(Role.slug == role))
-        ).scalar_one_or_none()
+        role_row = None
+        if role is not None:
+            role_row = (
+                await db.execute(select(Role).where(Role.slug == role))
+            ).scalar_one_or_none()
         level_row = None
         if level is not None:
             level_row = (
@@ -406,10 +423,11 @@ async def list_questions_page(
         if level is not None and not exact_level:
             # unknown level -> a rank nothing can be at-or-below, i.e. an empty result.
             at_or_below_rank = level_row.rank if level_row is not None else -1
-        # unknown role -> a role_id nothing pairs with, again an empty page.
-        stmt = _filtered_questions_stmt(
-            role_row.id if role_row else -1, at_or_below_rank, profile_id
-        )
+        # no role -> every role; unknown role -> a role_id nothing pairs with, again an empty page.
+        role_id: int | None = None
+        if role is not None:
+            role_id = role_row.id if role_row else -1
+        stmt = _filtered_questions_stmt(role_id, at_or_below_rank, profile_id)
 
         if level is not None and exact_level:
             # exact seniority: only this level's questions. Unknown level -> -1, matching nothing.

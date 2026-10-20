@@ -1,7 +1,8 @@
 /**
  * The fields of the create / edit question form (QuestionModal mounts it once any edit detail has loaded,
  * so `question` seeds the defaults directly). With `question` it edits that question (a full-replace PUT);
- * without, it creates one (POST), pre-filling the role with `defaultRole`.
+ * without, it creates one (POST), pre-filling the role with `defaultRole`. A create can also start from one
+ * of the candidate's own questions (PrefillQuestionPicker), which copies every field but the title.
  *
  * Saving can take a few seconds: the server writes a grading guide for the question with an LLM, guided by
  * the optional "How should this be graded?" notes. On create it always does; on edit the SERVER decides,
@@ -30,6 +31,7 @@ import type { SelectOption } from "../AsyncPaginateSelect";
 import { ControlledAsyncPaginateSelect } from "../ControlledAsyncPaginateSelect";
 import { ControlledAsyncPaginateMultiSelect } from "../ControlledAsyncPaginateMultiSelect";
 import Button from "../Button";
+import PrefillQuestionPicker from "./PrefillQuestionPicker";
 
 type QuestionFields = {
     title: string;
@@ -49,6 +51,18 @@ function toRequest(fields: QuestionFields): CustomQuestionRequest {
         level: fields.level!.value,
         roles: fields.roles.map((role) => role.value),
         grading_notes: fields.gradingNotes.trim(),
+    };
+}
+
+// The form values for a stored question: the edit form's defaults, and what a create-form prefill copies.
+function fieldsFromQuestion(question: CustomQuestionDetail): QuestionFields {
+    return {
+        title: question.title,
+        text: question.text,
+        questionType: { value: question.type_slug, label: question.type_name },
+        level: { value: question.level_slug, label: question.level_name },
+        roles: question.roles.map((role) => ({ value: role.slug, label: role.name })),
+        gradingNotes: question.grading_notes ?? "",
     };
 }
 
@@ -87,21 +101,27 @@ export default function QuestionForm({
         handleSubmit,
         setError,
         watch,
+        reset,
+        getValues,
         formState: { errors, isSubmitting },
     } = useForm<QuestionFields>({
-        defaultValues: {
-            title: question?.title ?? "",
-            text: question?.text ?? "",
-            questionType: question ? { value: question.type_slug, label: question.type_name } : null,
-            level: question ? { value: question.level_slug, label: question.level_name } : null,
-            roles: question
-                ? question.roles.map((role) => ({ value: role.slug, label: role.name }))
-                : defaultRole
-                  ? [defaultRole]
-                  : [],
-            gradingNotes: question?.grading_notes ?? "",
-        },
+        defaultValues: question
+            ? fieldsFromQuestion(question)
+            : {
+                  title: "",
+                  text: "",
+                  questionType: null,
+                  level: null,
+                  roles: defaultRole ? [defaultRole] : [],
+                  gradingNotes: "",
+              },
     });
+
+    // Create only: copy a picked question into the form, keeping whatever title is already typed. reset()
+    // also clears any validation errors from an earlier submit.
+    function prefill(source: CustomQuestionDetail) {
+        reset({ ...fieldsFromQuestion(source), title: getValues("title") });
+    }
 
     const values = watch();
     const titleLength = values.title.trim().length;
@@ -129,6 +149,8 @@ export default function QuestionForm({
 
     return (
         <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
+            {!question && <PrefillQuestionPicker onPrefill={prefill} isDisabled={isSubmitting} />}
+
             <div className="field">
                 <label>Title</label>
                 <input

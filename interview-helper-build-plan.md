@@ -2042,3 +2042,20 @@ Done (migration `d5f7a9b1c3e4` applied, `alembic check` clean apart from the kno
 
 **Next:** in the browser, open a graded job interview, save a question, check it on the Questions page,
 dismiss the banner, and confirm a practice interview shows neither. Then commit.
+
+### 2026-10-19 — Prefill a new custom question from one of your own (branch `custom-question-prefill`)
+
+On **Create question**, an optional "Start from one of your questions" picker searches the user's own
+questions (written or claimed, across every role). Picking one copies everything except the title
+(text, type, level, roles, grading notes) into the form. Edit mode doesn't show the picker.
+
+- Backend: `GET /api/questions` `role` is now optional (it used to default to `backend-engineer`; every
+  client call already passes one). `_filtered_questions_stmt(role_id=None)` means any role: no
+  `question_roles` join (so no duplicates), `job_id IS NULL` (keeps generated questions out), newest first.
+- Client: `getOwnQuestionOptions` (`authored=true`, title used as the label), `PrefillQuestionPicker`
+  (fetches the detail via the lazy `getCustomQuestion`), and `QuestionForm.fieldsFromQuestion` shared by
+  the edit defaults and the prefill (`reset`, keeping the typed title).
+- Verified: `npx tsc` clean. A read-only DB check of `role=None, authored=True` returned only the user's
+  7 questions with no duplicates; the role-scoped path is unchanged.
+
+**Next:** browser pass (pick → fields fill, title kept, create works, no picker on edit), then commit.

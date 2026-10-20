@@ -491,7 +491,7 @@ export function pagedLoadOptions(
         try {
             const res = await fetchPage({ q: search, page }).unwrap();
             return {
-                options: res.items.map((row) => ({ value: row.slug, label: row.name })),
+                options: res.items.map((row) => ({ value: row.slug, label: row.name, badge: row.badge })),
                 hasMore: res.page * res.size < res.total,
                 additional: { page: page + 1 },
             };

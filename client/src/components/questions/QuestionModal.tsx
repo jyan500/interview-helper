@@ -1,7 +1,7 @@
 /**
  * Create / edit one of the candidate's own questions. With `slug` it loads that question's detail
- * (GET /api/questions/{slug}) and edits it; without, it creates a new one. Mounted only while open, so
- * closing discards the draft.
+ * (GET /api/questions/{slug}) and edits it; without, it creates a new one (optionally prefilled from one of
+ * the candidate's own questions, see QuestionForm). Mounted only while open, so closing discards the draft.
  *
  * The form mounts only once the detail is in hand, so its defaults are the real values (no re-seeding an
  * already-mounted form); a skeleton matching the form's shape stands in meanwhile.
