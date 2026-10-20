@@ -139,7 +139,7 @@ export default function QuestionForm({
                             const length = value.trim().length;
                             if (length === 0) return "Title is required.";
                             if (length > CUSTOM_QUESTION_TITLE_MAX_CHARS)
-                                return `Keep it under ${CUSTOM_QUESTION_TITLE_MAX_CHARS} characters.`;
+                                return `Must be under ${CUSTOM_QUESTION_TITLE_MAX_CHARS} characters.`;
                             return true;
                         },
                     })}
@@ -162,7 +162,7 @@ export default function QuestionForm({
                             const length = value.trim().length;
                             if (length === 0) return "Question is required.";
                             if (length > CUSTOM_QUESTION_TEXT_MAX_CHARS)
-                                return `Keep it under ${CUSTOM_QUESTION_TEXT_MAX_CHARS.toLocaleString()} characters.`;
+                                return `Must be under ${CUSTOM_QUESTION_TEXT_MAX_CHARS.toLocaleString()} characters.`;
                             return true;
                         },
                     })}
@@ -226,7 +226,7 @@ export default function QuestionForm({
                     {...register("gradingNotes", {
                         validate: (value) =>
                             value.trim().length <= CUSTOM_QUESTION_NOTES_MAX_CHARS ||
-                            `Keep it under ${CUSTOM_QUESTION_NOTES_MAX_CHARS.toLocaleString()} characters.`,
+                            `Must be under ${CUSTOM_QUESTION_NOTES_MAX_CHARS.toLocaleString()} characters.`,
                     })}
                 />
                 <div className="mt-1 flex justify-between text-[12.5px]">

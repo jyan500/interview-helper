@@ -78,7 +78,7 @@ export default function ExperienceModal({
 
     const requiredText = (label: string) => ({
         validate: (value: string) => value.trim().length > 0 || `${label} is required.`,
-        maxLength: { value: BACKGROUND_NAME_MAX_CHARS, message: `Keep it under ${BACKGROUND_NAME_MAX_CHARS} characters.` },
+        maxLength: { value: BACKGROUND_NAME_MAX_CHARS, message: `Must be under ${BACKGROUND_NAME_MAX_CHARS} characters.` },
     });
 
     return (
@@ -140,7 +140,7 @@ export default function ExperienceModal({
                         {...register("description", {
                             validate: (value) =>
                                 value.trim().length <= BACKGROUND_DESCRIPTION_MAX_CHARS ||
-                                `Keep it under ${BACKGROUND_DESCRIPTION_MAX_CHARS.toLocaleString()} characters.`,
+                                `Must be under ${BACKGROUND_DESCRIPTION_MAX_CHARS.toLocaleString()} characters.`,
                         })}
                     />
                     <div className="mt-1 flex justify-between text-[12.5px]">

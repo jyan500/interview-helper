@@ -65,7 +65,7 @@ export function validateAvatarFile(file: File): string | null {
         return "Please choose a JPEG, PNG, WebP, or GIF image.";
     }
     if (file.size > AVATAR_MAX_BYTES) {
-        return `That image is too large. Keep it under ${Math.round(AVATAR_MAX_BYTES / (1024 * 1024))} MB.`;
+        return `Image must be under ${Math.round(AVATAR_MAX_BYTES / (1024 * 1024))} MB.`;
     }
     return null;
 }
