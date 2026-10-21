@@ -23,49 +23,31 @@
  * YOUR OWN QUESTIONS: "Create question" opens QuestionModal; a new question lands in Saved. Your own rows
  * carry a "Custom" tag plus Edit / Delete. Delete archives it server-side, so past interviews that asked
  * it still show it. One saved from a job interview is read-only: View (QuestionViewModal) / Delete.
+ * Bank questions get View only.
  */
 import { useState } from "react";
 import { Plus } from "@phosphor-icons/react";
-import {
-    useDeleteCustomQuestionMutation,
-    useGetProfileQuery,
-    useGetQuestionsQuery,
-    type QuestionItem,
-} from "../api";
+import { useGetProfileQuery, useGetQuestionsQuery, type QuestionItem } from "../api";
 import { useQuestionSelection, useSectionFilters } from "../hooks";
 import { PAGE_SIZE } from "../constants";
-import { useToast } from "../toast/ToastProvider";
 import AppNav from "../components/AppNav";
 import BankKickoffCard from "../components/BankKickoffCard";
 import Button from "../components/Button";
-import ConfirmDeleteModal from "../components/ConfirmDeleteModal";
 import QuestionFilters from "../components/QuestionFilters";
 import QuestionsTable from "../components/QuestionsTable";
+import DeleteQuestionModal from "../components/questions/DeleteQuestionModal";
 import QuestionModal from "../components/questions/QuestionModal";
 import QuestionViewModal from "../components/questions/QuestionViewModal";
 import SelectionBar from "../components/SelectionBar";
 import Pagination from "../components/Pagination";
 
 export default function QuestionsPage() {
-    const { toast } = useToast();
     const { data: profile } = useGetProfileQuery();
     // The question modal: "new" opens an empty Create form, a slug opens Edit, null closes it.
     const [editing, setEditing] = useState<string | "new" | null>(null);
-    // the read-only view of a question saved from a job interview (those can't be edited)
+    // the read-only view of a question you can't edit (a bank one, or one saved from a job interview)
     const [viewing, setViewing] = useState<QuestionItem | null>(null);
     const [pendingDelete, setPendingDelete] = useState<QuestionItem | null>(null);
-    const [deleteQuestion, { isLoading: deleting }] = useDeleteCustomQuestionMutation();
-
-    async function confirmDelete() {
-        if (!pendingDelete) return;
-        try {
-            await deleteQuestion(pendingDelete.slug).unwrap();
-            toast("Question deleted", { variant: "success" });
-            setPendingDelete(null);
-        } catch {
-            toast("Couldn't delete this question. Try again.", { variant: "error" });
-        }
-    }
     // The fallback role when a section has no role filter — the profile default, else backend-engineer.
     const defaultRoleSlug = profile?.role?.slug ?? "backend-engineer";
     const defaultRoleName = profile?.role?.name ?? "Backend Engineer";
@@ -235,17 +217,7 @@ export default function QuestionsPage() {
 
                     {viewing && <QuestionViewModal question={viewing} onClose={() => setViewing(null)} />}
 
-                    <ConfirmDeleteModal
-                        open={pendingDelete !== null}
-                        title="Delete this question?"
-                        confirmLabel="Delete question"
-                        deleting={deleting}
-                        onClose={() => setPendingDelete(null)}
-                        onConfirm={confirmDelete}
-                    >
-                        <strong className="text-ink">"{pendingDelete?.title}"</strong> will be removed from your
-                        questions and won't be asked again. Past interviews that asked it keep their results.
-                    </ConfirmDeleteModal>
+                    <DeleteQuestionModal question={pendingDelete} onClose={() => setPendingDelete(null)} />
                 </div>
             </div>
         </div>

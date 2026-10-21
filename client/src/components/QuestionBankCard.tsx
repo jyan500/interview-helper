@@ -8,14 +8,19 @@
  * questions a bank interview at that level would actually ask. The first PREVIEW_ROWS are shown with
  * a "+N more" count from the page `total`. No saved questions → the interview's fallback is spelled
  * out (3 of increasing difficulty). No default role/level → a prompt to set one, since there's no
- * scope to preview.
+ * scope to preview. Row actions match the Questions page: your own questions get Edit / Delete, bank
+ * and from-interview ones get View (the read-only QuestionViewModal for the full text).
  *
  * Self-contained (fetches its own data), like SignalPanel and SimulationKickoff.
  */
+import { useState } from "react";
 import { Link } from "react-router";
 import { skipToken } from "@reduxjs/toolkit/query/react";
-import { useGetProfileQuery, useGetQuestionsQuery } from "../api";
+import { useGetProfileQuery, useGetQuestionsQuery, type QuestionItem } from "../api";
 import QuestionsTable from "./QuestionsTable";
+import DeleteQuestionModal from "./questions/DeleteQuestionModal";
+import QuestionModal from "./questions/QuestionModal";
+import QuestionViewModal from "./questions/QuestionViewModal";
 import { Skeleton } from "./Skeleton";
 
 // How many saved questions the preview lists before the "+N more" line takes over.
@@ -25,6 +30,11 @@ export default function QuestionBankCard() {
     const { data: profile, isLoading: profileLoading } = useGetProfileQuery();
     const role = profile?.role;
     const level = profile?.level;
+    // the row actions, as on the Questions page: Edit (by slug) / Delete for your own questions, and
+    // the read-only View for bank and from-interview ones (the preview truncates the text)
+    const [editing, setEditing] = useState<string | null>(null);
+    const [viewing, setViewing] = useState<QuestionItem | null>(null);
+    const [pendingDelete, setPendingDelete] = useState<QuestionItem | null>(null);
 
     const { data: saved, isFetching } = useGetQuestionsQuery(
         role && level ? { role: role.slug, level: level.slug, saved: true, page: 1, size: PREVIEW_ROWS } : skipToken,
@@ -57,6 +67,9 @@ export default function QuestionBankCard() {
                     </p>
                     <QuestionsTable
                         questions={saved?.items ?? []}
+                        onEdit={(q) => setEditing(q.slug)}
+                        onView={setViewing}
+                        onDelete={setPendingDelete}
                         loading={isFetching}
                         skeletonRows={PREVIEW_ROWS}
                         emptyMessage="No saved questions yet. A practice interview will pick 3 of increasing difficulty for you."
@@ -68,6 +81,16 @@ export default function QuestionBankCard() {
                     )}
                 </>
             )}
+
+            {editing && role && (
+                <QuestionModal
+                    slug={editing}
+                    defaultRole={{ value: role.slug, label: role.name }}
+                    onClose={() => setEditing(null)}
+                />
+            )}
+            {viewing && <QuestionViewModal question={viewing} onClose={() => setViewing(null)} />}
+            <DeleteQuestionModal question={pendingDelete} onClose={() => setPendingDelete(null)} />
         </section>
     );
 }

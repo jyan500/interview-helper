@@ -26,7 +26,10 @@ export default function SkillBreakdownCard({
     const weakest = skills.length ? Math.min(...skills.map((s) => s.average)) : null;
 
     return (
-        <SignalCard title="Skill breakdown">
+        <SignalCard
+            title="Skill breakdown"
+            help="Your average score on each skill this question type is graded on, out of 5, across every answer in the selected period. Your weakest skill is highlighted."
+        >
             {loading ? (
                 <div className="mt-3 flex flex-col gap-[11px]">
                     {Array.from({ length: SKELETON_ROWS }).map((_, i) => (

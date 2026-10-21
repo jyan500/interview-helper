@@ -329,6 +329,7 @@ export type DashboardPeriod = "week" | "month" | "year";
 export interface Readiness {
     series: number[]; // per graded interview in the window, its answers of this kind, oldest -> newest
     latest: number | null; // the newest point, or null with no graded interviews in the window
+    average: number | null; // mean of the series across the window; null when it's empty
     delta: number | null; // latest - earliest across the window; null with < 2 points
     count: number; // how many graded interviews back this
 }
