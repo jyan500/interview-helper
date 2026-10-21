@@ -11,11 +11,12 @@ statement of how the old shape maps to the new one:
       .questions[]                      -> a questions row + a question_roles row pairing it to
                                           this role (the array index becomes that pairing's
                                           sort_order — per-role bank order)
-        .type                           -> a question_types row, deduped across the bank
+        .type                           -> the question's type_id (must name a question_types entry)
         .level                          -> the question's level_id, via the levels map (Phase D)
         .tags[]                         -> tags rows + question_tags pairings
-    bank["rounds"][slug]                -> a round_types row (interview simulation) + a round-owned
-                                          rubrics row + its rubric_dimensions
+    bank["question_types"][slug]        -> a question_types row (how a question of that kind is
+                                          interviewed) + a type-owned rubrics row + its dimensions
+    bank["rounds"][slug]                -> a round_types row (the Job-interview generator recipe)
     data/skills.json[]                  -> a skills row each (the Profile page's skill picker)
 
 Two things about LEVELS and SLUGS the raw bank doesn't spell out:
@@ -74,22 +75,6 @@ _LEVELS = [
     ("senior", "Senior", 3),
 ]
 
-# Question types the BANK never names but the interview-simulation generator assigns. Authored
-# here for the same reason as the levels: nothing in questions.json would otherwise create them.
-_EXTRA_QUESTION_TYPES = [
-    ("coding", "Coding"),
-]
-
-# Question types that show the diagram canvas (QuestionType.has_diagram_canvas). Only applied when a
-# type row is CREATED; existing rows got theirs from the c3e7a1d9f5b2 migration.
-_DIAGRAM_CANVAS_TYPES = {"system-design"}
-# Question types that show the code editor (QuestionType.has_code_editor). Same create-only rule; existing
-# rows got theirs from the a1c3e5f7b9d2 migration.
-_CODE_EDITOR_TYPES = {"coding"}
-# Question types whose presence in a Practice plan gives the persona the candidate's Profile background
-# (QuestionType.uses_candidate_background). Same create-only rule; existing rows got theirs from the
-# b4d6f8a0c2e3 migration.
-_CANDIDATE_BACKGROUND_TYPES = {"behavioral"}
 
 
 def slugify(text: str) -> str:
@@ -168,15 +153,38 @@ async def seed() -> None:
             levels_by_slug[slug] = level_row
             created["levels"] += was_new
 
-        # --- question types no bank question uses (yet) ------------------------------------
-        # Types are otherwise born from the bank's `type` strings below. `coding` has no authored
-        # question — only the interview simulation's GENERATOR assigns it — so it's authored here.
-        for slug, name in _EXTRA_QUESTION_TYPES:
-            _, was_new = await _get_or_create(db, QuestionType, slug=slug, name=name,
-                                              has_diagram_canvas=slug in _DIAGRAM_CANVAS_TYPES,
-                                              has_code_editor=slug in _CODE_EDITOR_TYPES,
-                                              uses_candidate_background=slug in _CANDIDATE_BACKGROUND_TYPES)
+        # --- question types + their rubrics ----------------------------------------------------
+        # bank["question_types"][slug] -> a question_types row + a type-owned rubric + its dimensions.
+        # The type says how a question of its kind is interviewed and graded, in Practice and Job
+        # interviews alike. UPDATED IN PLACE like the rounds: the guidance and budgets get TUNED, and
+        # re-seeding must pick that up. Dimensions stay get-or-create (see _seed_dimensions).
+        types_by_slug: dict[str, QuestionType] = {}
+        for type_slug, type_data in bank["question_types"].items():
+            fields = {
+                "name": type_data["name"],
+                "has_diagram_canvas": type_data["has_diagram_canvas"],
+                "has_code_editor": type_data["has_code_editor"],
+                "uses_candidate_background": type_data["uses_candidate_background"],
+                "max_followups": type_data["max_followups"],
+                "allows_smart_voice": type_data["allows_smart_voice"],
+                "interviewer_guidance": type_data["interviewer_guidance"],
+            }
+            qtype, was_new = await _get_or_create(db, QuestionType, slug=type_slug, **fields)
             created["types"] += was_new
+            if not was_new:
+                for field, value in fields.items():
+                    setattr(qtype, field, value)
+            types_by_slug[type_slug] = qtype
+
+            rubric_data = type_data["rubric"]
+            rubric = (
+                await db.execute(select(Rubric).where(Rubric.question_type_id == qtype.id))
+            ).scalar_one_or_none()
+            if rubric is None:
+                rubric = Rubric(question_type_id=qtype.id, scale=rubric_data["scale"])
+                db.add(rubric)
+                await db.flush()
+            created["dimensions"] += await _seed_dimensions(db, rubric, rubric_data["dimensions"])
 
         for role_slug, role_data in bank["roles"].items():
             # --- role ------------------------------------------------------------------
@@ -201,14 +209,11 @@ async def seed() -> None:
 
             # --- questions --------------------------------------------------------------
             for i, q in enumerate(role_data["questions"]):
-                # the type is shared across the whole bank, so it dedupes naturally
-                qtype, was_new = await _get_or_create(
-                    db, QuestionType, slug=q["type"], name=titleize(q["type"]),
-                    has_diagram_canvas=q["type"] in _DIAGRAM_CANVAS_TYPES,
-                    has_code_editor=q["type"] in _CODE_EDITOR_TYPES,
-                    uses_candidate_background=q["type"] in _CANDIDATE_BACKGROUND_TYPES,
-                )
-                created["types"] += was_new
+                # the type must be one authored above (a typo fails loudly, like an unknown level):
+                # a type born from a bank string would have no guidance or rubric to interview by.
+                qtype = types_by_slug.get(q["type"])
+                if qtype is None:
+                    raise ValueError(f"question {q['id']!r} names unknown type {q['type']!r}")
 
                 # --- tags, resolved BEFORE the question ---------------------------------
                 # Order matters here, and it's the one real async-ORM trap in this file.
@@ -333,11 +338,11 @@ async def seed() -> None:
             elif existing.brief != brief_text:
                 existing.brief = brief_text          # tuned edit — the deliberate in-place update
 
-        # --- round types (interview simulation) + their rubrics ---------------------------
-        # bank["rounds"][slug] -> a round_types row + a round-owned rubric + its dimensions.
-        # UPDATED IN PLACE like briefs, not get-or-create-only: a round's guidance and budgets get
-        # TUNED (they steer the generator and the interviewer), and re-seeding must pick that up.
-        # Dimensions stay get-or-create — rewording one is a new slug by design (see RubricDimension).
+        # --- round types (interview simulation) -------------------------------------------
+        # bank["rounds"][slug] -> a round_types row: the recipe for GENERATING a Job interview. How
+        # each question is interviewed and graded comes from its question type, not the round.
+        # UPDATED IN PLACE like briefs, not get-or-create-only: a round's guidance gets TUNED (it
+        # steers the generator and the interviewer), and re-seeding must pick that up.
         for round_slug, round_data in bank.get("rounds", {}).items():
             fields = {
                 "name": round_data["name"],
@@ -345,8 +350,6 @@ async def seed() -> None:
                 "question_guidance": round_data["question_guidance"],
                 "interviewer_guidance": round_data["interviewer_guidance"],
                 "plan_size": round_data["plan_size"],
-                "max_followups": round_data["max_followups"],
-                "allows_smart_voice": round_data["allows_smart_voice"],
                 "uses_candidate_background": round_data["uses_candidate_background"],
                 "avoids_recent_questions": round_data["avoids_recent_questions"],
             }
@@ -355,16 +358,6 @@ async def seed() -> None:
             if not was_new:
                 for field, value in fields.items():
                     setattr(round_type, field, value)
-
-            rubric_data = round_data["rubric"]
-            rubric = (
-                await db.execute(select(Rubric).where(Rubric.round_type_id == round_type.id))
-            ).scalar_one_or_none()
-            if rubric is None:
-                rubric = Rubric(round_type_id=round_type.id, scale=rubric_data["scale"])
-                db.add(rubric)
-                await db.flush()
-            created["dimensions"] += await _seed_dimensions(db, rubric, rubric_data["dimensions"])
 
         # --- skills: the curated vocabulary the Profile page picks from ----------------------
         # Users can only PICK skills, never add one, so this list is the whole vocabulary. The
