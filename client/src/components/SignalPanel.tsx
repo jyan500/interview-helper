@@ -1,25 +1,25 @@
 /**
- * SignalPanel — the dashboard's right column: the "how am I doing" signal over the user's interview
- * SIMULATIONS, scoped to ONE round type (optionally one job) over a chosen time window. It owns the
- * scope controls and feeds the three cards (Readiness, Skill breakdown, Work on next) from
- * GET /api/dashboard. Self-contained: DashboardPage just drops it in.
+ * SignalPanel — the dashboard's right column: the "how am I doing" signal over the user's graded
+ * interviews, Practice and Job alike, scoped to ONE question kind (optionally one job) over a chosen
+ * time window. It owns the scope controls and feeds the three cards (Readiness, Skill breakdown, Work
+ * on next) from GET /api/dashboard. Self-contained: DashboardPage just drops it in.
  *
- * WHY A ROUND, NOT A JOB, IS THE REQUIRED SCOPE: a simulation is graded on its ROUND's rubric, so a
- * coding round's dimensions don't line up with a behavioral round's — averaging across rounds would
- * blend two different bars. The job is an optional narrowing (one company's rounds); cleared = every job.
+ * WHY A KIND, NOT A JOB, IS THE REQUIRED SCOPE: every answer is graded on its QUESTION TYPE's rubric,
+ * so coding's dimensions don't line up with behavioral's — averaging across kinds would blend two
+ * different bars. The job is an optional narrowing (one company's interviews); cleared = every interview.
  *
  * THE SCOPE IS A FORM, APPLIED ON SUBMIT — the same react-hook-form + submit pattern as the
- * Interviews page filters, not auto-apply. The user picks a round, a job and a window and clicks
+ * Interviews page filters, not auto-apply. The user picks a kind, a job and a window and clicks
  * Apply; only then does the query re-run. `applied` holds what's actually in effect (what the query
  * reads); the form is a plain draft until submit.
  *
- * PICKERS: round and job are async-paginate selects — round fed /api/round-types, job fed the
+ * PICKERS: kind and job are async-paginate selects — kind fed /api/question-types, job fed the
  * graded-jobs options (/api/jobs?graded=true, so a job with nothing graded is never a dead option).
  * PERIOD is a plain react-select.
  *
- * WHICH ROUND IS QUERIED FIRST: `applied.round` starts undefined, so the backend resolves the
- * effective round (the most-recently-graded simulation's) and we seed the form's picker LABEL from
- * what it chose — so the draft shows the round actually on screen before the first Apply.
+ * WHICH KIND IS QUERIED FIRST: `applied.questionType` starts undefined, so the backend resolves the
+ * effective kind (the most-recently-graded answer's) and we seed the form's picker LABEL from what it
+ * chose — so the draft shows the kind actually on screen before the first Apply.
  */
 import { useState } from "react";
 import { useForm, Controller } from "react-hook-form";
@@ -35,7 +35,7 @@ import { nocturneSelectStyles } from "../selectStyles";
 import {
     useGetDashboardQuery,
     useLazyGetGradedJobOptionsQuery,
-    useLazyGetRoundTypesQuery,
+    useLazyGetQuestionTypesQuery,
 } from "../api";
 import type { DashboardPeriod, Readiness } from "../api";
 import { useSeededSelectFields } from "../hooks";
@@ -49,9 +49,9 @@ const PERIOD_OPTIONS: SelectOption[] = [
 ];
 const DEFAULT_PERIOD_OPTION = PERIOD_OPTIONS[1];
 
-// The scope form: the picked round (null = "my most recent"), the job (null = every job), the window.
+// The scope form: the picked kind (null = "my most recent"), the job (null = every interview), the window.
 type SignalFilters = {
-    round: SelectOption | null;
+    questionType: SelectOption | null;
     job: SelectOption | null;
     period: SelectOption;
 };
@@ -61,46 +61,49 @@ type SignalFilters = {
 const EMPTY_READINESS: Readiness = { series: [], latest: null, delta: null, count: 0 };
 
 export default function SignalPanel() {
-    // what's actually in effect (drives the query). round undefined => let the backend pick the most
-    // recent; job undefined => across every job.
-    const [applied, setApplied] = useState<{ round?: string; job?: string; period: DashboardPeriod }>({
+    // what's actually in effect (drives the query). questionType undefined => let the backend pick the
+    // most recent; job undefined => every interview.
+    const [applied, setApplied] = useState<{ questionType?: string; job?: string; period: DashboardPeriod }>({
         period: "month",
     });
 
-    const [triggerRounds] = useLazyGetRoundTypesQuery();
+    const [triggerQuestionTypes] = useLazyGetQuestionTypesQuery();
     const [triggerJobs] = useLazyGetGradedJobOptionsQuery();
     const { data, isFetching } = useGetDashboardQuery({
-        round: applied.round,
+        question_type: applied.questionType,
         job: applied.job,
         period: applied.period,
     });
 
-    // the draft form — applied only on submit. Seeded to the default window; the round label is
-    // filled once the backend tells us the effective round (below).
+    // the draft form — applied only on submit. Seeded to the default window; the kind label is
+    // filled once the backend tells us the effective kind (below).
     const { control, handleSubmit, setValue } = useForm<SignalFilters>({
-        defaultValues: { round: null, job: null, period: DEFAULT_PERIOD_OPTION },
+        defaultValues: { questionType: null, job: null, period: DEFAULT_PERIOD_OPTION },
     });
 
-    // seed the round picker's label from the round the backend actually used (so the draft shows
-    // what's on screen). Keyed on the effective round SLUG, so a refetch that resolves to the same
-    // round never clobbers an un-applied draft pick. See useSeededSelectFields. The job needs no
+    // seed the kind picker's label from the kind the backend actually used (so the draft shows
+    // what's on screen). Keyed on the effective kind SLUG, so a refetch that resolves to the same
+    // kind never clobbers an un-applied draft pick. See useSeededSelectFields. The job needs no
     // seeding: it's only ever set by the user's own pick.
-    useSeededSelectFields(setValue, data?.round ?? null, [
+    useSeededSelectFields(setValue, data?.question_type ?? null, [
         {
-            name: "round",
-            option: data?.round && data.round_name ? { value: data.round, label: data.round_name } : null,
+            name: "questionType",
+            option:
+                data?.question_type && data.question_type_name
+                    ? { value: data.question_type, label: data.question_type_name }
+                    : null,
         },
     ]);
 
-    // Show the round picker's loading spinner while the query is (re)fetching AND no explicit round
-    // is applied — that's exactly when the picker's value is the backend-RESOLVED one (cold load, or a
+    // Show the kind picker's loading spinner while the query is (re)fetching AND no explicit kind is
+    // applied — that's exactly when the picker's value is the backend-RESOLVED one (cold load, or a
     // refetch after a new grade), so it would otherwise sit empty/stale with no indication. Once the
-    // user has APPLIED a round, its value is their own pick and won't change on a refetch.
-    const roundLoading = isFetching && applied.round === undefined;
+    // user has APPLIED a kind, its value is their own pick and won't change on a refetch.
+    const questionTypeLoading = isFetching && applied.questionType === undefined;
 
     function onApply(values: SignalFilters) {
         setApplied({
-            round: values.round?.value,
+            questionType: values.questionType?.value,
             job: values.job?.value,
             period: values.period.value as DashboardPeriod,
         });
@@ -108,15 +111,15 @@ export default function SignalPanel() {
 
     return (
         <div className="flex flex-col gap-5">
-            {/* Scope controls — which round, which job, over what window; applied together on submit */}
+            {/* Scope controls — which kind, which job, over what window; applied together on submit */}
             <SignalCard title="Signal">
                 <form onSubmit={handleSubmit(onApply)} className="mt-3 flex flex-col gap-2.5">
                     <ControlledAsyncPaginateSelect
                         control={control}
-                        name="round"
-                        fetchPage={triggerRounds}
-                        placeholder="Select a round…"
-                        isLoading={roundLoading}
+                        name="questionType"
+                        fetchPage={triggerQuestionTypes}
+                        placeholder="Select a question type…"
+                        isLoading={questionTypeLoading}
                     />
                     <ControlledAsyncPaginateSelect
                         control={control}

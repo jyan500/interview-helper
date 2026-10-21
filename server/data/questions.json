@@ -1,15 +1,6 @@
 {
   "roles": {
     "backend-engineer": {
-      "rubric": {
-        "dimensions": [
-          "Clarity of communication",
-          "Technical depth / correctness",
-          "Tradeoff reasoning",
-          "Concrete examples over generalities"
-        ],
-        "scale": "1 (poor) to 5 (excellent) per dimension"
-      },
       "questions": [
         {
           "id": "be-1",
@@ -174,15 +165,6 @@
       ]
     },
     "fullstack-engineer": {
-      "rubric": {
-        "dimensions": [
-          "Requirements & scoping",
-          "Technical depth / correctness",
-          "Tradeoff reasoning",
-          "Communication & structure"
-        ],
-        "scale": "1 (poor) to 5 (excellent) per dimension"
-      },
       "questions": [
         {
           "id": "be-2",
@@ -339,15 +321,6 @@
       ]
     },
     "frontend-engineer": {
-      "rubric": {
-        "dimensions": [
-          "Clarity of communication",
-          "Technical depth / correctness",
-          "Tradeoff reasoning",
-          "User experience & accessibility awareness"
-        ],
-        "scale": "1 (poor) to 5 (excellent) per dimension"
-      },
       "questions": [
         {
           "id": "ai-workflow",
@@ -414,8 +387,7 @@
           "Structure (situation, action, result)",
           "Specificity and ownership",
           "Impact and results",
-          "Communication",
-          "Company and role fit"
+          "Communication"
         ],
         "scale": "1 (poor) to 5 (excellent) per dimension"
       }

@@ -54,7 +54,7 @@ from tools.questions import get_reference
 # The shared score arithmetic (Phase C). Pure — no LLM, no DB — which is exactly why it moved
 # OUT of here: the data layer (get_scorecard) needed the same averaging without importing this
 # module's model stack. See tools/scoring.py.
-from tools.scoring import aggregate_scores
+from tools.scoring import aggregate_by_kind
 
 
 # --- THE GRADER'S OWN MODEL (Phase E) --------------------------------------------------
@@ -323,23 +323,22 @@ async def grade_one(
 
 
 # aggregate many grades into scorecard numbers -------------------------------
-# The scorecard's headline: an average score PER DIMENSION across every answered question,
-# plus one overall number. Deterministic arithmetic — the LLM already judged in grade_one;
-# Python just averages.
+# The scorecard's headline: an average score PER DIMENSION, grouped by question KIND (each kind is
+# graded on its own question type's rubric), plus one overall number. Deterministic arithmetic —
+# the LLM already judged in grade_one; Python just averages.
 #
-# THE MATH ITSELF now lives in tools/scoring.py, shared with the data layer's get_scorecard so
-# a persisted scorecard averages EXACTLY the way a live one does — one implementation, not two
-# that can drift. This function is the thin ADAPTER for the grader's side: flatten AnswerGrade
-# objects into the (name, score) pairs the shared core takes, passing `dimensions` as the
-# whitelist so a model that drifts on wording is filtered (the old `if ds.dimension in sums`
-# guard, now expressed once in aggregate_scores).
-def aggregate(grades: list[AnswerGrade], dimensions: list[str]) -> dict:
-    pairs = (
-        (ds.dimension, ds.score)
-        for grade in grades
-        for ds in grade.dimension_scores
-    )
-    return aggregate_scores(pairs, dimensions)
+# THE MATH ITSELF lives in tools/scoring.py, shared with the data layer's get_scorecard so a
+# persisted scorecard averages EXACTLY the way a live one does — one implementation, not two that
+# can drift. This function is the thin ADAPTER for the grader's side: flatten each AnswerGrade into
+# the (dimension_name, score) tuples the shared core takes, tagged with its kind, and pass each
+# kind's rubric dimensions as the whitelist so a model that drifts on wording is filtered.
+def aggregate(graded: list[tuple[str, AnswerGrade]], kind_dimensions: dict[str, list[str]]) -> dict:
+    """`graded` is one (kind name, AnswerGrade) per question, in interview order."""
+    answers = [
+        (kind, [(ds.dimension, ds.score) for ds in grade.dimension_scores])
+        for kind, grade in graded
+    ]
+    return aggregate_by_kind(answers, kind_dimensions)
 
 
 if __name__ == "__main__":
@@ -388,8 +387,8 @@ if __name__ == "__main__":
             print("strength:   ", grade.strength)
             print("gap:        ", grade.gap)
             print("improvement:", grade.improvement)
-            grades.append(grade)
-        res = aggregate(grades, DIMENSIONS)
+            grades.append(("Smoke", grade))
+        res = aggregate(grades, {"Smoke": DIMENSIONS})
         print("aggregated results: ", res)
 
     asyncio.run(_smoke())

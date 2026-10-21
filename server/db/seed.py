@@ -7,7 +7,6 @@ flat tables. Seeding is where that reshaping actually happens, so this file is t
 statement of how the old shape maps to the new one:
 
     bank["roles"][slug]                 -> a roles row
-      .rubric.dimensions[]              -> a rubrics row + one rubric_dimensions row each
       .questions[]                      -> a questions row + a question_roles row pairing it to
                                           this role (the array index becomes that pairing's
                                           sort_order — per-role bank order)
@@ -108,7 +107,7 @@ async def _get_or_create(db: AsyncSession, model, *, slug: str, **fields):
 async def _seed_dimensions(db: AsyncSession, rubric: Rubric, names: list[str]) -> int:
     """Get-or-create a rubric's dimensions in authored order. Returns how many were new.
 
-    Shared by role rubrics and round rubrics. A dimension slug is unique WITHIN its rubric, not
+    Used for each question type's rubric. A dimension slug is unique WITHIN its rubric, not
     globally, so the lookup is scoped to this rubric rather than going through _get_or_create.
     """
     new = 0
@@ -192,20 +191,6 @@ async def seed() -> None:
                 db, Role, slug=role_slug, name=titleize(role_slug)
             )
             created["roles"] += was_new
-
-            # --- rubric + its dimensions ------------------------------------------------
-            # The rubric has no slug of its own (it's one-per-role), so it's looked up by
-            # role_id rather than through _get_or_create.
-            rubric_data = role_data["rubric"]
-            rubric = (
-                await db.execute(select(Rubric).where(Rubric.role_id == role.id))
-            ).scalar_one_or_none()
-            if rubric is None:
-                rubric = Rubric(role_id=role.id, scale=rubric_data["scale"])
-                db.add(rubric)
-                await db.flush()
-
-            created["dimensions"] += await _seed_dimensions(db, rubric, rubric_data["dimensions"])
 
             # --- questions --------------------------------------------------------------
             for i, q in enumerate(role_data["questions"]):

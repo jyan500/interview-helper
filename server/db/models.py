@@ -263,7 +263,6 @@ class Role(Base, TimestampMixin):
         order_by="QuestionRole.sort_order", cascade="all, delete-orphan",
     )
     questions: AssociationProxy[list[Question]] = association_proxy("question_links", "question")
-    rubric: Mapped[Rubric | None] = relationship(back_populates="role", lazy="raise")
 
 
 class Level(Base, TimestampMixin):
@@ -349,27 +348,18 @@ class RoundType(Base, TimestampMixin):
                        questions, in this order" as an order to ask them itself, and pasted the next
                        planned question into its reaction. Both stay server-side.
       plan_size        how many questions the generator writes (the frozen plan's length).
-      max_followups    the probe budget copied onto each interview — a coding round needs many
-                       more back-and-forths (approach → code → complexity → edge cases) than a
-                       behavioral one.
-      allows_smart_voice  whether the SPA offers "smart" voice turn-taking (VAD silence -> countdown
-                       -> auto-submit) — and, when offered, opens in it. Off for coding and system
-                       design: long thinking pauses there blow past the silence threshold and would
-                       submit a half-answer, so those rounds are manual-only.
-      uses_candidate_background  whether the round reads the candidate's Profile background (roles,
-                       projects, skills): the generator grounds its questions in it and the persona's
-                       follow-ups may reference it. On for behavioral only; a coding problem or a design
-                       prompt has no use for a résumé.
+      uses_candidate_background  whether the GENERATOR grounds the round's questions in the
+                       candidate's Profile background (roles, projects, skills). On for behavioral
+                       only. (Whether the persona sees it is the question type's flag.)
       avoids_recent_questions  whether the generator is shown the candidate's recent questions of this
                        round type and told to vary away from them. On for coding and system design,
                        where a stateless generator kept returning the same likeliest problems. Off for
                        behavioral: its fixed structure (intro, project, why this company) SHOULD repeat.
-    Its grading rubric hangs off it too (Rubric.round_type_id) — see Rubric.
 
-    MOVING TO QuestionType: max_followups, allows_smart_voice and the rubric describe a KIND of
-    question, not a round, and Practice interviews (no round) need them too. They now also live on
-    question_types and go from here once the turn loop and the grader read them there. The round keeps
-    what only a generated Job interview has: the generator recipe and its format framing.
+    WHAT IT DOESN'T OWN: the follow-up budget, the voice mode, the per-kind probing guidance and the
+    grading rubric describe a KIND of question, not a round, and Practice interviews (no round) need
+    them too, so they live on QuestionType. A coding answer is run and graded the same way in both
+    modes. The round keeps what only a generated Job interview has: the recipe and its format framing.
     """
     __tablename__ = "round_types"
 
@@ -380,14 +370,8 @@ class RoundType(Base, TimestampMixin):
     question_guidance: Mapped[str] = mapped_column(Text)
     interviewer_guidance: Mapped[str] = mapped_column(Text)
     plan_size: Mapped[int] = mapped_column(Integer)
-    # LEGACY (moving to QuestionType, dropped once the turn loop reads the type's). Nullable so the
-    # seed no longer has to supply them.
-    max_followups: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    allows_smart_voice: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     uses_candidate_background: Mapped[bool] = mapped_column(Boolean, default=False)
     avoids_recent_questions: Mapped[bool] = mapped_column(Boolean, default=False)
-
-    rubric: Mapped[Rubric | None] = relationship(back_populates="round_type", lazy="raise")
 
 
 class Tag(Base, TimestampMixin):
@@ -472,44 +456,26 @@ class QuestionRole(Base, TimestampMixin):
 # THE BANK — seeded from data/questions.json, read constantly, written rarely.
 # ===========================================================================
 class Rubric(Base, TimestampMixin):
-    """A scoring rubric — owned by EITHER a role (legacy bank-interview grading) OR a question type
-    (a behavioral answer is graded on STAR structure and ownership, a coding answer on correctness and
-    complexity, in Practice and Job interviews alike). One per owner.
+    """A scoring rubric — owned by a QUESTION TYPE, one each. Every answer is graded on its question
+    type's rubric (a behavioral answer on STAR structure and ownership, a coding answer on correctness
+    and complexity), in Practice and Job interviews alike.
 
-    Separate table rather than columns on `roles` because grading reads it independently of
-    the bank, and Phase D may hang level-specific expectations off its dimensions.
+    Separate table rather than columns on `question_types` because grading reads it independently,
+    and its dimensions are rows of their own (RubricDimension) that scores point at.
 
-    TWO POSSIBLE OWNERS, EXACTLY ONE SET (the CHECK below). Two nullable FKs + a CHECK rather than
-    a polymorphic owner column, so both stay real foreign keys. Each is UNIQUE, so an owner still has
-    at most one rubric (Postgres unique ignores NULLs). Role rubrics are on their way out: once grading
-    reads the question type's rubric, they're dropped along with `role_id`.
-
-    `round_type_id` is LEGACY: the round rubrics were re-pointed to the question type of the same kind
-    (same rows, so old Job-interview scorecards keep their dimensions). It stays set, and still read
-    via RoundType.rubric, until grading moves to the question type; then it's dropped.
+    HISTORY: rubrics used to belong to a role (bank interviews) or a round type (Job interviews). The
+    round rubrics were re-pointed to the question type of the same kind, so old Job scorecards keep
+    their dimensions; the role rubrics, and the Practice scorecards graded on them, were dropped.
     """
     __tablename__ = "rubrics"
-    __table_args__ = (
-        CheckConstraint(
-            "(role_id IS NULL) <> (question_type_id IS NULL)", name="ck_rubric_one_owner"
-        ),
-    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    role_id: Mapped[int | None] = mapped_column(
-        ForeignKey("roles.id", ondelete="CASCADE"), unique=True, nullable=True
-    )
-    question_type_id: Mapped[int | None] = mapped_column(
-        ForeignKey("question_types.id", ondelete="CASCADE"), unique=True, nullable=True
-    )
-    round_type_id: Mapped[int | None] = mapped_column(
-        ForeignKey("round_types.id", ondelete="CASCADE"), unique=True, nullable=True
+    question_type_id: Mapped[int] = mapped_column(
+        ForeignKey("question_types.id", ondelete="CASCADE"), unique=True
     )
     scale: Mapped[str] = mapped_column(Text)   # "1 (poor) to 5 (excellent) per dimension"
 
-    role: Mapped[Role | None] = relationship(back_populates="rubric", lazy="raise")
-    question_type: Mapped[QuestionType | None] = relationship(back_populates="rubric", lazy="raise")
-    round_type: Mapped[RoundType | None] = relationship(back_populates="rubric", lazy="raise")
+    question_type: Mapped[QuestionType] = relationship(back_populates="rubric", lazy="raise")
     dimensions: Mapped[list[RubricDimension]] = relationship(
         back_populates="rubric", lazy="raise", order_by="RubricDimension.sort_order",
         cascade="all, delete-orphan",
@@ -685,8 +651,9 @@ class Interview(Base, TimestampMixin):
     current_question_id: Mapped[int | None] = mapped_column(
         ForeignKey("questions.id"), nullable=True
     )
+    # probes spent on the current question; reset on every advance. Its cap is the current
+    # question's QuestionType.max_followups (read per turn, not copied here).
     followups_used: Mapped[int] = mapped_column(Integer, default=0)
-    max_followups: Mapped[int] = mapped_column(Integer, default=3)
 
     # The agent's replay buffer — pydantic-ai's own serialized message list. Dump with
     # ModelMessagesTypeAdapter.dump_python(msgs, mode="json"), load with

@@ -9,7 +9,7 @@ the pattern transfers).
 Primitive picks (the core judgment, same as helpdesk Phase 2):
   tools     = ACTIONS      -> next_question (read helper exposed as a call),
                               record_answer, save_interview_summary
-  resources = read CONTEXT -> rubric://{role}, question://{id}, interview://{id}
+  resources = read CONTEXT -> rubric://{question_type}, question://{id}, interview://{id}
   prompts   = TEMPLATES    -> behavioral_interview, evaluate_answer
 
 Phase A note — WHO THIS SERVER IS FOR, now that the backend isn't a client of it. In the
@@ -96,11 +96,12 @@ async def save_interview_summary(interview_id: str, feedback: str) -> dict:
 # WORKED EXAMPLE — a templated resource. {role} in the URI binds to the parameter;
 # FastMCP serializes the returned dict as the resource contents. Same as the
 # helpdesk's ticket://{ticket_id}.
-@mcp.resource("rubric://{role}")
-async def rubric_resource(role: str) -> dict:
-    """The scoring rubric for a role — read-only context the client can attach so the
-    interviewer/grader stays consistent. No side effect, just loads the rubric in."""
-    return await questions.get_rubric(role)
+@mcp.resource("rubric://{question_type}")
+async def rubric_resource(question_type: str) -> dict:
+    """The scoring rubric for a question type (behavioral, coding, system-design) — read-only
+    context the client can attach so the interviewer/grader stays consistent. No side effect,
+    just loads the rubric in."""
+    return await questions.get_rubric(question_type)
 
 
 # question://{question_id} resource — a single question by id.

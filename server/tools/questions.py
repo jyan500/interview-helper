@@ -107,31 +107,32 @@ async def list_roles(params: Params, search: str | None = None):
         return await apaginate(db, stmt, params)
 
 
-async def get_rubric(role: str) -> dict:
-    """Return the scoring rubric for a role (backs the rubric:// resource).
+async def get_rubric(question_type: str) -> dict:
+    """Return the scoring rubric for a question type (backs the rubric:// resource). Every answer is
+    graded on its question type's rubric, in Practice and Job interviews alike.
 
     WORKED EXAMPLE — the slug-resolution + relationship-traversal pattern, which the TODOs
     below all reuse. Note what it does NOT do: no join is written by hand. The query loads
-    `Role.rubric` and its `Rubric.dimensions` (selectinload), so walking them below is free.
+    `QuestionType.rubric` and its `Rubric.dimensions` (selectinload), so walking them is free.
 
-    Returns {"status": "ok", "role": role, "rubric": {...}}, or
-    {"status": "not_found", "role": role} for an unknown role.
+    Returns {"status": "ok", "question_type": slug, "rubric": {...}}, or
+    {"status": "not_found", "question_type": slug} for an unknown type.
     """
     async with get_session() as db:
         # slug -> row. scalar_one_or_none(): exactly one row or None, never an exception on
         # "no match" — which is what lets us return the not_found envelope instead of raising.
         result = await db.execute(
-            select(Role).where(Role.slug == role)
-            .options(selectinload(Role.rubric).selectinload(Rubric.dimensions))
+            select(QuestionType).where(QuestionType.slug == question_type)
+            .options(selectinload(QuestionType.rubric).selectinload(Rubric.dimensions))
         )
-        role_row = result.scalar_one_or_none()
-        if role_row is None or role_row.rubric is None:
-            return {"status": "not_found", "role": role}
+        type_row = result.scalar_one_or_none()
+        if type_row is None or type_row.rubric is None:
+            return {"status": "not_found", "question_type": question_type}
 
-        rubric: Rubric = role_row.rubric
+        rubric: Rubric = type_row.rubric
         return {
             "status": "ok",
-            "role": role,
+            "question_type": question_type,
             "rubric": {
                 # dimensions are ROWS now, but the grader still wants a list of names —
                 # the wire shape is unchanged from the JSON days.
@@ -702,8 +703,8 @@ if __name__ == "__main__":
         # result is a Page(items, total, page, size, pages) — .items holds the ORM rows.
         print("roles:", (await list_roles(Params(page=1, size=50))).items)
         print("levels:", (await list_levels(Params(page=1, size=50))).items)
-        print("rubric:", await get_rubric("backend-engineer"))
-        print("unknown role:", await get_rubric("no-such-role"))
+        print("rubric:", await get_rubric("coding"))
+        print("unknown type:", await get_rubric("no-such-type"))
         # no level filter (pre-Phase-D behaviour): every question for the role
         print("next (any level):", await next_question("backend-engineer", asked_ids=["be-1"]))
         # Phase D — once the level TODO is filled, these two should differ: an entry interview

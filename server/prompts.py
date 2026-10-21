@@ -300,8 +300,12 @@ def evaluate_answer(
         "\n\nnote on code: the answer contains fenced code blocks (```), which the candidate TYPED "
         "into a code editor rather than spoke. Grade that code as code (correctness, edge cases, "
         "complexity, readability); the speech allowances above apply only to the spoken prose "
-        "around it. The candidate may use any programming language: never penalize the choice "
-        "of language, even if the job's tech stack or the question's wording uses another one."
+        "around it. Before scoring correctness, trace the question's own example(s) through the "
+        "candidate's FINAL code and compare the result with the expected output. If it doesn't match, "
+        "or the code wouldn't run as written (a syntax error, an unhandled empty input), say exactly "
+        "where in the gap; never blame a line that is actually correct. The candidate may use any "
+        "programming language: never penalize the choice of language, even if the job's tech stack "
+        "or the question's wording uses another one."
         if "```" in answer or any("```" in reply for _, reply in followups) else ""
     )
     # The system-design canvas. Like code it was not spoken, so the speech framing above doesn't
