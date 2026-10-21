@@ -714,7 +714,7 @@ if __name__ == "__main__":
         print("next be-1 asked (senior):", await next_question("backend-engineer", level="senior", asked_ids=["be-1"]))
         print("next be-1, be-2 asked (senior):", await next_question("backend-engineer", level="senior", asked_ids=["be-1", "be-2"]))
         print("q:", await get_question("be-2"))
-        print("all:", await list_questions("product-manager"))
+        print("all:", await list_questions("frontend-engineer"))
         # Phase E — once get_reference is filled AND `python -m db.seed` has loaded the briefs:
         # be-2 has an authored brief; be-1 does not yet (should come back not_found, gracefully).
         print("reference be-2:", await get_reference("be-2"))

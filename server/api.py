@@ -512,10 +512,18 @@ async def start_interview(
     # THE CANDIDATE'S BACKGROUND (Profile page roles/projects/skills), read once, as prompt text ("" when
     # they've filled in nothing, and every template then leaves its paragraph out). FROZEN with the
     # persona: it's baked into the stored string, so editing the profile mid-interview changes nothing
-    # until the next interview. A Practice persona always gets it (scoped to behavioral questions, since
-    # a plan can mix kinds); a simulation only when its round opts in, below.
+    # until the next interview. A simulation gets it only when its round opts in, below. A Practice
+    # interview gets it only when its plan has a behavioral question (QuestionType.uses_candidate_background),
+    # which isn't known until create_interview materializes the plan, so both personas are built here and
+    # create_interview stores the right one. Even then it's scoped to behavioral questions, since a plan
+    # can mix kinds.
     candidate_background = await format_candidate_background(user_id)
-    persona = behavioral_interview(role=role, seniority=seniority, candidate_background=candidate_background)
+    persona = behavioral_interview(role=role, seniority=seniority)
+    background_persona = None
+    if candidate_background:
+        background_persona = behavioral_interview(
+            role=role, seniority=seniority, candidate_background=candidate_background
+        )
     simulation: dict = {}
 
     # INTERVIEW SIMULATION — `{job, round}`. The job supplies role + level, the round its guidance,
@@ -555,7 +563,10 @@ async def start_interview(
             # the model couldn't produce a valid round within its retries/limits — nothing was
             # written, so the candidate can simply try again.
             raise HTTPException(status_code=502, detail="could not generate this round, please try again") from exc
+        # the round already decided whether the persona carries the background, so there's no
+        # plan-dependent alternative for create_interview to pick.
         simulation = {"job": req.job, "round_type": req.round, "generated": generated}
+        background_persona = None
 
     # INSERT the row. create_interview mints the slug (the id the client holds) and resolves
     # the role/level slugs — an unknown one comes back as an envelope, not an exception.
@@ -570,7 +581,8 @@ async def start_interview(
     # (the model never picks), exactly as it used to take it from next_question. What changed is the
     # SOURCE: a frozen, finite plan instead of "the first at-or-below-level bank question", which is
     # what stops the interview from walking the entire bank.
-    created = await create_interview(role, seniority, persona, profile_id=user_id, **simulation)
+    created = await create_interview(role, seniority, persona, profile_id=user_id,
+                                     background_persona=background_persona, **simulation)
     if not created["ok"]:
         raise HTTPException(status_code=400, detail=created["error"])
     interview_id = created["interview_id"]
@@ -723,10 +735,14 @@ async def submit_answer(
     #    store as an answer. We say "message" (not "answer") so we don't pre-bias the model.
     #    output_type=TurnReply is set on turn_agent.
     #    On the LAST planned question, say so: otherwise a skip or a closing reaction says "let's move
-    #    on to another topic" right before the client's "That's the end of the interview".
+    #    on to another topic" right before the client's "That's the end of the interview". It also pins the
+    #    closing to this conversation: a Practice persona carries the profile background, and a closing
+    #    after a coding question otherwise "recaps" profile projects that were never discussed.
     last_question_note = (
         "\n\nThis is the LAST question of the interview: nothing comes after it. If you aren't "
-        "probing further, close warmly and never mention moving on, another question, or another topic."
+        "probing further, close warmly and never mention moving on, another question, or another topic. "
+        "Refer only to what the candidate actually said in this conversation: never mention a project, "
+        "role, or experience from their profile that didn't come up."
         if state["next_planned_qid"] is None else ""
     )
     prompt = (f"The current interview question is: {state['current_qtext']}{last_question_note}\n\n"

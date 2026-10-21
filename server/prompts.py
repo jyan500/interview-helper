@@ -99,7 +99,7 @@ def _candidate_background_paragraph(candidate_background: str, *, behavioral_onl
     """
     scope = (
         "Use it only while the question on the table is a behavioral one; ignore it for technical, "
-        "coding, or system-design questions. "
+        "coding, or system-design questions, including in any reaction or closing remark on them. "
         if behavioral_only else ""
     )
     return (

@@ -2059,3 +2059,28 @@ questions (written or claimed, across every role). Picking one copies everything
   7 questions with no duplicates; the role-scoped path is unchanged.
 
 **Next:** browser pass (pick → fields fill, title kept, create works, no picker on edit), then commit.
+
+### 2026-10-20 — Question type owns interview + grading behavior, Phase 1: cleanup + additive schema
+
+Why: Practice and Job interviews ran and graded the same kind of question differently (a Practice
+coding answer got the generic persona, the role rubric, 3 follow-ups). Decision: the QUESTION TYPE
+(behavioral / coding / system-design) defines how a question is interviewed and graded in both modes;
+`round_types` becomes the Job-interview generator recipe + format framing. Full plan:
+`~/.claude/plans/i-think-with-the-linear-beacon.md`.
+
+- **Cleanup migration `c5e7a9b1d3f4` (APPLIED):** dropped the `technical` and `product-sense` types,
+  the `product-manager` role (+ rubric, `pm-1`), and the 28 interviews that used them (6 real Practice
+  interviews on technical questions, 22 fake `seed-*` PM rows). `questions.json` and 9 reference briefs
+  trimmed to match; `python -m db.seed` is a no-op against it. Interviews: 101 -> 73.
+- **Phase 1 migration `d7f9b1c3e5a6` (written, NOT applied):** `question_types` gains
+  `interviewer_guidance`, `max_followups`, `allows_smart_voice` (copied from the same-kind round);
+  `rubrics.question_type_id` with the 3 round rubrics re-pointed (same rows, so Job scorecard history
+  survives); `ck_rubric_one_owner` = role XOR question type; round `max_followups` / `allows_smart_voice`
+  nullable (legacy). Additive: no reader changed yet.
+- `questions.json` has a new `question_types` section (flags, kind-specific guidance, rubric); rounds lost
+  their caps/voice/rubric. `seed.py` seeds types from it (updated in place) and fails on a bank question
+  naming an unknown type; the hard-coded type constants are gone.
+
+**Next:** apply `d7f9b1c3e5a6`, run `python -m db.seed`, then Phase 2 (persona from the plan's types,
+per-question follow-up cap and smart voice). Open for Phase 3: the behavioral rubric's "Company and role
+fit" dimension has no meaning in Practice.

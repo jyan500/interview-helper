@@ -241,7 +241,7 @@ class Profile(Base, TimestampMixin):
 # THE VOCABULARIES — tiny, slow-changing lookup tables everything else points at.
 # ===========================================================================
 class Role(Base, TimestampMixin):
-    """An interview track: "backend-engineer", "product-manager".
+    """An interview track: "backend-engineer", "frontend-engineer".
 
     Callers arrive with the SLUG (`req.role`, `rubric://{role}`), so tool bodies resolve
     slug -> row once and then work in ids.
@@ -284,8 +284,8 @@ class Level(Base, TimestampMixin):
 
 
 class QuestionType(Base, TimestampMixin):
-    """What KIND of question this is: behavioral · system-design · technical ·
-    product-sense. Was a free-text `type` field in the JSON bank.
+    """What KIND of question this is: behavioral · coding · system-design. Was a free-text `type`
+    field in the JSON bank.
 
     A table for the same reasons as the two above — and one specific to it: grading and
     question selection will eventually want to branch on kind (a system-design answer isn't
@@ -307,6 +307,25 @@ class QuestionType(Base, TimestampMixin):
     # candidate's own), and it has no round to carry the flag. A simulation's coding round gets it from
     # its generated questions' type too.
     has_code_editor: Mapped[bool] = mapped_column(Boolean, default=False)
+    # whether a Practice interview's persona carries the candidate's Profile background when its plan
+    # includes a question of this kind (behavioral). The Practice counterpart to
+    # RoundType.uses_candidate_background: a Practice interview has no round, so the flag lives on the
+    # type, and a plan of only coding or design questions starts without the background at all.
+    uses_candidate_background: Mapped[bool] = mapped_column(Boolean, default=False)
+    # HOW A QUESTION OF THIS KIND IS INTERVIEWED, the same in a Practice and a Job interview (a coding
+    # answer is probed and graded the same way wherever it's asked). Seeded from questions.json's
+    # `question_types` section, updated in place like the rounds:
+    #   interviewer_guidance  prose for the persona: what to probe on an answer of this kind.
+    #   max_followups         the probe budget while a question of this kind is on the table (coding
+    #                         needs approach -> code -> complexity -> edge cases; behavioral far fewer).
+    #   allows_smart_voice    whether the SPA offers "smart" voice turn-taking on it. Off for coding and
+    #                         system design: long thinking pauses would auto-submit a half-answer.
+    # Its grading rubric hangs off it too (Rubric.question_type_id).
+    interviewer_guidance: Mapped[str] = mapped_column(Text)
+    max_followups: Mapped[int] = mapped_column(Integer)
+    allows_smart_voice: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    rubric: Mapped[Rubric | None] = relationship(back_populates="question_type", lazy="raise")
 
 
 class RoundType(Base, TimestampMixin):
@@ -344,6 +363,11 @@ class RoundType(Base, TimestampMixin):
                        where a stateless generator kept returning the same likeliest problems. Off for
                        behavioral: its fixed structure (intro, project, why this company) SHOULD repeat.
     Its grading rubric hangs off it too (Rubric.round_type_id) — see Rubric.
+
+    MOVING TO QuestionType: max_followups, allows_smart_voice and the rubric describe a KIND of
+    question, not a round, and Practice interviews (no round) need them too. They now also live on
+    question_types and go from here once the turn loop and the grader read them there. The round keeps
+    what only a generated Job interview has: the generator recipe and its format framing.
     """
     __tablename__ = "round_types"
 
@@ -354,8 +378,10 @@ class RoundType(Base, TimestampMixin):
     question_guidance: Mapped[str] = mapped_column(Text)
     interviewer_guidance: Mapped[str] = mapped_column(Text)
     plan_size: Mapped[int] = mapped_column(Integer)
-    max_followups: Mapped[int] = mapped_column(Integer)
-    allows_smart_voice: Mapped[bool] = mapped_column(Boolean, default=False)
+    # LEGACY (moving to QuestionType, dropped once the turn loop reads the type's). Nullable so the
+    # seed no longer has to supply them.
+    max_followups: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    allows_smart_voice: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     uses_candidate_background: Mapped[bool] = mapped_column(Boolean, default=False)
     avoids_recent_questions: Mapped[bool] = mapped_column(Boolean, default=False)
 
@@ -444,23 +470,26 @@ class QuestionRole(Base, TimestampMixin):
 # THE BANK — seeded from data/questions.json, read constantly, written rarely.
 # ===========================================================================
 class Rubric(Base, TimestampMixin):
-    """A scoring rubric — owned by EITHER a role (bank interviews) OR a round type (interview
-    simulations). One per owner (the JSON had it nested).
+    """A scoring rubric — owned by EITHER a role (legacy bank-interview grading) OR a question type
+    (a behavioral answer is graded on STAR structure and ownership, a coding answer on correctness and
+    complexity, in Practice and Job interviews alike). One per owner.
 
     Separate table rather than columns on `roles` because grading reads it independently of
     the bank, and Phase D may hang level-specific expectations off its dimensions.
 
-    TWO POSSIBLE OWNERS, EXACTLY ONE SET (the CHECK below). A simulation round is graded on its
-    round's dimensions — a behavioral round on STAR structure and ownership, not on the role's
-    "Technical depth" — so the round type owns a rubric of its own. Two nullable FKs + a CHECK
-    rather than a polymorphic owner column, so both stay real foreign keys. Each is UNIQUE, so an
-    owner still has at most one rubric (Postgres unique ignores NULLs, so the many rows with a
-    NULL `round_type_id` don't collide).
+    TWO POSSIBLE OWNERS, EXACTLY ONE SET (the CHECK below). Two nullable FKs + a CHECK rather than
+    a polymorphic owner column, so both stay real foreign keys. Each is UNIQUE, so an owner still has
+    at most one rubric (Postgres unique ignores NULLs). Role rubrics are on their way out: once grading
+    reads the question type's rubric, they're dropped along with `role_id`.
+
+    `round_type_id` is LEGACY: the round rubrics were re-pointed to the question type of the same kind
+    (same rows, so old Job-interview scorecards keep their dimensions). It stays set, and still read
+    via RoundType.rubric, until grading moves to the question type; then it's dropped.
     """
     __tablename__ = "rubrics"
     __table_args__ = (
         CheckConstraint(
-            "(role_id IS NULL) <> (round_type_id IS NULL)", name="ck_rubric_one_owner"
+            "(role_id IS NULL) <> (question_type_id IS NULL)", name="ck_rubric_one_owner"
         ),
     )
 
@@ -468,12 +497,16 @@ class Rubric(Base, TimestampMixin):
     role_id: Mapped[int | None] = mapped_column(
         ForeignKey("roles.id", ondelete="CASCADE"), unique=True, nullable=True
     )
+    question_type_id: Mapped[int | None] = mapped_column(
+        ForeignKey("question_types.id", ondelete="CASCADE"), unique=True, nullable=True
+    )
     round_type_id: Mapped[int | None] = mapped_column(
         ForeignKey("round_types.id", ondelete="CASCADE"), unique=True, nullable=True
     )
     scale: Mapped[str] = mapped_column(Text)   # "1 (poor) to 5 (excellent) per dimension"
 
     role: Mapped[Role | None] = relationship(back_populates="rubric", lazy="raise")
+    question_type: Mapped[QuestionType | None] = relationship(back_populates="rubric", lazy="raise")
     round_type: Mapped[RoundType | None] = relationship(back_populates="rubric", lazy="raise")
     dimensions: Mapped[list[RubricDimension]] = relationship(
         back_populates="rubric", lazy="raise", order_by="RubricDimension.sort_order",
