@@ -125,11 +125,11 @@ export function useClickOutside(
 }
 
 /**
- * What a producer knows about the start that /session needs: the header labels, plus the round's
- * voice-mode rule (everything in SessionNavState the POST response doesn't supply; the workspace comes
- * from the first question's type flags, which the response does carry).
+ * What a producer knows about the start that /session needs: the header labels (everything in
+ * SessionNavState the POST response doesn't supply; the workspace and the voice mode come from the
+ * first question's type flags, which the response does carry).
  */
-export type StartLabels = Pick<SessionNavState, "role" | "level" | "company" | "round" | "allowsSmartVoice">;
+export type StartLabels = Pick<SessionNavState, "role" | "level" | "company" | "round">;
 
 /**
  * The interview KICKOFF sequence, shared by every producer (the Questions page's bank start, and the
@@ -197,7 +197,6 @@ export function useStartSequence() {
                     level: job.level_name,
                     company: job.company,
                     round: round.name,
-                    allowsSmartVoice: round.allows_smart_voice,
                 },
             ),
         [start],

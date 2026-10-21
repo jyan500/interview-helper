@@ -88,20 +88,27 @@ _TURN_CONTRACT = textwrap.dedent("""
 """).strip()
 
 
-def _candidate_background_paragraph(candidate_background: str, *, behavioral_only: bool) -> str:
+def _kind_label(kind: dict) -> str:
+    """"Coding" -> "coding question", for prose. `kind` is one of the persona's question kinds."""
+    return f"{kind['name'].lower()} question"
+
+
+def _candidate_background_paragraph(candidate_background: str, kinds: list[dict]) -> str:
     """The persona paragraph that hands the interviewer the candidate's Profile background (roles,
     projects, skills — tools/background.format_candidate_background).
 
     The background is the CANDIDATE'S OWN CLAIMS, so the model is told to ask about it, never to
     embellish it: a follow-up that invents a detail ("and that migration cut latency by 40%, right?")
-    puts words in the candidate's mouth. `behavioral_only` scopes it for a Practice interview, whose
-    plan can mix kinds under one frozen persona: a coding or design follow-up has no use for a résumé.
+    puts words in the candidate's mouth. When the interview mixes kinds, it's SCOPED to the kinds that
+    use it (QuestionType.uses_candidate_background, i.e. behavioral): a coding or design follow-up has
+    no use for a résumé, and neither does the closing remark after one.
     """
-    scope = (
-        "Use it only while the question on the table is a behavioral one; ignore it for technical, "
-        "coding, or system-design questions, including in any reaction or closing remark on them. "
-        if behavioral_only else ""
-    )
+    using = [kind for kind in kinds if kind["uses_candidate_background"]]
+    scope = ""
+    if len(using) < len(kinds):
+        names = " or ".join(_kind_label(kind) for kind in using)
+        scope = (f"Use it only while the question on the table is a {names}; ignore it for every other "
+                 "question, including in any reaction or closing remark on one. ")
     return (
         f"About the candidate (from their own profile):\n{candidate_background}\n\n"
         f"{scope}Where it fits the question, make a follow-up specific to this background: ask about a "
@@ -111,8 +118,41 @@ def _candidate_background_paragraph(candidate_background: str, *, behavioral_onl
     )
 
 
-def behavioral_interview(role: str, seniority: str = "mid", candidate_background: str = "") -> str:
-    """The interviewer PERSONA — seeds a consistent interviewer for a role and seniority.
+def _question_kinds_paragraphs(kinds: list[dict]) -> list[str]:
+    """How to interview each KIND of question in the plan (QuestionType.interviewer_guidance), plus the
+    rule that the guidance decides when a question is covered. The same text for a kind in a Practice
+    and a Job interview, which is what makes a coding answer probed the same way in both.
+
+    Why the coverage rule: the turn contract alone probes only a WEAK answer, but a kind can need more
+    back-and-forth on a good one (a coding problem isn't done until there's working code and its
+    complexity). So the persona is told to keep probing while the guidance says the question isn't
+    covered. The client still caps it (the kind's `max_followups`), so that's a request, not a loop.
+    """
+    if len(kinds) == 1:
+        guidance = (f"Every question in this interview is a {_kind_label(kinds[0])}. How to interview "
+                    f"it:\n{kinds[0]['interviewer_guidance']}")
+    else:
+        lines = "\n".join(f"- {kind['name']} questions: {kind['interviewer_guidance']}" for kind in kinds)
+        guidance = ("This interview mixes kinds of question, and each turn tells you the kind of the "
+                    "question on the table. Follow the guidance for that kind:\n" + lines)
+    coverage = (
+        "The guidance for a question's kind decides when it is fully covered. While it isn't (for "
+        "example, a coding problem still lacks working code or a complexity analysis), set ask_followup "
+        "= true and ask for the next missing piece, even if the answer so far is good. Before you set "
+        "ask_followup = false, check every piece the guidance requires: a piece counts as covered only "
+        "if the CANDIDATE stated it themselves, earlier or now. Never fill a missing piece in for them, "
+        "not even as praise (\"and it runs in O(M*N)\"); ask for it instead."
+    )
+    return [guidance, coverage]
+
+
+def behavioral_interview(
+    role: str,
+    seniority: str = "mid",
+    kinds: list[dict] | None = None,
+    candidate_background: str = "",
+) -> str:
+    """The interviewer PERSONA for a Practice interview — a role and seniority, no company.
 
     REDUCED ROLE (client-driven loop): the CLIENT (api.py) owns the question spine — it picks
     each bank question, records every answer, caps follow-ups, and ends the interview. So this
@@ -122,12 +162,19 @@ def behavioral_interview(role: str, seniority: str = "mid", candidate_background
     record_answer / run until exhausted" rules are gone BY DESIGN — the model can't invent a
     question or mislabel an id if it never touches either.
 
-    `candidate_background` (optional, "" = leave it out): the candidate's Profile background, scoped to
-    behavioral questions, since a Practice plan can mix question kinds.
+    `kinds` — the distinct question kinds in the plan, in plan order: dicts of {name,
+    interviewer_guidance, uses_candidate_background} (tools/interview.create_interview builds them
+    from QuestionType rows). None = no per-kind guidance (the MCP prompt, which has no plan).
+
+    `candidate_background` (optional, "" = leave it out): the candidate's Profile background. Included
+    only when some kind in the plan uses it, and scoped to those kinds when the plan mixes.
     """
+    kinds = kinds or []
     paragraphs = [f"You are an experienced interviewer conducting a {seniority}-level {role} interview."]
-    if candidate_background:
-        paragraphs.append(_candidate_background_paragraph(candidate_background, behavioral_only=True))
+    if candidate_background and any(kind["uses_candidate_background"] for kind in kinds):
+        paragraphs.append(_candidate_background_paragraph(candidate_background, kinds))
+    if kinds:
+        paragraphs.extend(_question_kinds_paragraphs(kinds))
     paragraphs.append(_TURN_CONTRACT)
     return "\n\n".join(paragraphs)
 
@@ -138,24 +185,19 @@ def simulation_interview(
     summary: str,
     round_name: str,
     round_guidance: str,
+    kinds: list[dict],
     seniority: str = "mid",
     candidate_background: str = "",
 ) -> str:
     """The interviewer PERSONA for an interview SIMULATION — one company's round, from a saved job.
 
-    Same TurnReply contract as behavioral_interview (the /api/answer branches can't tell the two
-    apart), with the company and the round layered on top. The round's STYLE comes from its
-    `guidance` row in the DB — how a coding interviewer hints and reviews code, what a behavioral
-    screener probes for — so a new round is a seed entry, not an edit here.
+    Same TurnReply contract and the same per-kind guidance as behavioral_interview (the /api/answer
+    branches can't tell the two apart), with the company and the round layered on top. The round's
+    `interviewer_guidance` is only its FORMAT framing (a warm first-round screen, why-this-company);
+    how to probe each kind of question comes from `kinds`, exactly as in Practice.
 
-    The one rule that changes: the bank persona probes only a WEAK answer, but a round can need more
-    back-and-forth on a good one (a coding problem isn't done until there's working code and its
-    complexity). So the persona is told to keep probing while the guidance says the question isn't
-    covered. The client still caps it (the round's `max_followups`), so that's a request, not a loop.
-
-    `candidate_background` (optional, "" = leave it out): the candidate's Profile background. The caller
-    passes it only for a round that opts in (RoundType.uses_candidate_background, i.e. behavioral), so
-    here it's unscoped: every question in such a round may draw on it.
+    `kinds` and `candidate_background`: as in behavioral_interview. A behavioral round's generated
+    questions are all behavioral, so its background is unscoped; a coding or design round has none.
     """
     # Paragraphs joined rather than one dedented f-string: `summary` is LLM text that may span lines,
     # and interpolating it before dedent() would break the common-indent strip for the whole block.
@@ -165,19 +207,15 @@ def simulation_interview(
         f'works there.',
         f"About the company and the job:\n{summary}",
     ]
-    if candidate_background:
-        paragraphs.append(_candidate_background_paragraph(candidate_background, behavioral_only=False))
-    return "\n\n".join(paragraphs + [
+    if candidate_background and any(kind["uses_candidate_background"] for kind in kinds):
+        paragraphs.append(_candidate_background_paragraph(candidate_background, kinds))
+    paragraphs.append(
         f"How to run this round (the round's questions are already written, and the system presents "
-        f"each one itself; this is only about your style and what to probe):\n{round_guidance}",
-        "The round guidance decides when a question is fully covered. While it isn't (for example, "
-        "a coding problem still lacks working code or a complexity analysis), set ask_followup = "
-        "true and ask for the next missing piece, even if the answer so far is good. Before you set "
-        "ask_followup = false, check every piece the guidance requires: a piece counts as covered "
-        "only if the CANDIDATE stated it themselves, earlier or now. Never fill a missing piece in for them, not even as praise "
-        "(\"and it runs in O(M*N)\"); ask for it instead.",
-        _TURN_CONTRACT,
-    ])
+        f"each one itself; this is only about your style):\n{round_guidance}"
+    )
+    paragraphs.extend(_question_kinds_paragraphs(kinds))
+    paragraphs.append(_TURN_CONTRACT)
+    return "\n\n".join(paragraphs)
 
 
 def evaluate_answer(

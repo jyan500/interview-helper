@@ -32,14 +32,16 @@ export interface InterviewResponse {
     // The plan question on the table (never a probe) — the coding panel's problem statement.
     question?: PlanQuestion;
 }
-// A plan question as the start/answer/resume responses carry it: its slug and full text, and whether
-// its question TYPE shows the diagram canvas (system design) or the code editor (coding), so the SPA
-// never checks type slugs. Per question, so a mixed Practice interview switches workspace as it goes.
+// A plan question as the start/answer/resume responses carry it: its slug and full text, and its
+// question TYPE's flags: whether it shows the diagram canvas (system design) or the code editor
+// (coding), and whether smart voice turn-taking is offered (then the default) or it's manual-only. The
+// SPA never checks type slugs. Per question, so a mixed Practice interview switches as it goes.
 export interface PlanQuestion {
     slug: string;
     text: string;
     has_diagram_canvas: boolean;
     has_code_editor: boolean;
+    allows_smart_voice: boolean;
 }
 
 // The system-design canvas's wire/storage shape, mirroring DiagramDoc in server/diagram.py (our slim
@@ -183,11 +185,9 @@ export interface AnswerRequest {
 }
 
 // INTERVIEW SIMULATION — a round FORMAT a job can be simulated in (GET /api/round-types), mirroring
-// RoundTypeOut. `allows_smart_voice` says whether smart voice turn-taking is offered (and is then the
-// default). The code editor isn't a round flag: each PlanQuestion's type flags pick the workspace.
+// RoundTypeOut. The workspace and the voice mode aren't round flags: each PlanQuestion's type says.
 export interface RoundTypeItem extends BasePageItem {
     description: string;
-    allows_smart_voice: boolean;
 }
 // A saved job as listed (GET /api/jobs), mirroring JobOut. role/level carry the SLUG (edit pickers)
 // and the NAME (display). JobDetail adds the long fields the list never shows.
@@ -304,8 +304,7 @@ export interface ResumePayload extends SimulationFields {
     level: string; // human-readable name ("Mid level")
     turns: ResumeTurn[];
     current_question: string | null;
-    allows_smart_voice: boolean | null; // the round's voice-mode rule; null for a bank interview (no round)
-    question: PlanQuestion | null; // the PARENT plan question on the table, even mid-probe (its flags pick the workspace)
+    question: PlanQuestion | null; // the PARENT plan question on the table, even mid-probe (its flags pick the workspace + voice mode)
     diagram: DiagramDoc | null; // that question's latest diagram (reseeds the canvas), or null
 }
 
