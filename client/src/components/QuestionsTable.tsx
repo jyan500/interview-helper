@@ -12,9 +12,11 @@
  * saves immediately or stages until a Save button is the caller's business.
  *
  * The candidate's OWN questions (`is_custom`) carry a "Custom" tag. Pass `onEdit`/`onDelete` and those
- * rows also get Edit / Delete icon buttons in a trailing actions column (bank rows leave it blank). A
- * question saved from a job interview (`is_claimed`) is tagged "From interview" and gets View (`onView`)
- * instead of Edit: its interview still reads it, so editing it would rewrite that interview's history.
+ * rows also get Edit / Delete icon buttons in a trailing actions column. A question saved from a job
+ * interview (`is_claimed`) is tagged "From interview" and gets View (`onView`) instead of Edit: its
+ * interview still reads it, so editing it would rewrite that interview's history. Bank rows get View
+ * only (they aren't the candidate's to edit or delete); View is how the full text is read, since the
+ * row truncates it. In a table with `onView` but no `onEdit`/`onDelete`, every row gets View.
  */
 import { Eye, PencilSimple, Trash } from "@phosphor-icons/react";
 import type { QuestionItem } from "../api";
@@ -44,6 +46,10 @@ export default function QuestionsTable({
 }) {
     const selectable = Boolean(isChecked && onToggle);
     const editable = Boolean(onEdit && onDelete);
+    // the trailing actions column: Edit/Delete for your own rows, View for bank and claimed rows
+    const hasActions = editable || Boolean(onView);
+    // Edit is only for your own questions, and not ones saved from an interview (those are read-only)
+    const canEdit = (q: QuestionItem) => editable && q.is_custom && !q.is_claimed;
 
     // Empty line only when settled with no rows — never mid-fetch, when the skeleton shows.
     if (!loading && questions.length === 0) {
@@ -62,7 +68,7 @@ export default function QuestionsTable({
                     <col />
                     <col className="w-36" />
                     <col className="w-24" />
-                    {editable && <col className="w-24" />}
+                    {hasActions && <col className="w-24" />}
                 </colgroup>
                 <thead>
                     <tr>
@@ -71,7 +77,7 @@ export default function QuestionsTable({
                         <th>Question</th>
                         <th>Type</th>
                         <th>Level</th>
-                        {editable && <th></th>}
+                        {hasActions && <th></th>}
                     </tr>
                 </thead>
                 <tbody>
@@ -86,7 +92,7 @@ export default function QuestionsTable({
                                 </td>
                                 <td><Skeleton inline className="h-3.5 w-24" /></td>
                                 <td><Skeleton inline className="h-3.5 w-16" /></td>
-                                {editable && <td></td>}
+                                {hasActions && <td></td>}
                             </tr>
                         ))}
                     {!loading &&
@@ -106,14 +112,14 @@ export default function QuestionsTable({
                                         </td>
                                     )}
                                     {/* the row leads with the question's short title; the full text (which
-                                        gets long) follows as a muted one-line preview, with all of it on
-                                        hover. When selectable, clicking anywhere on it also toggles the row,
-                                        so the whole cell is a target, not just the 16px box. */}
+                                        gets long) follows as a muted one-line preview; View opens all of it.
+                                        When selectable, clicking anywhere on it also toggles the row, so the
+                                        whole cell is a target, not just the 16px box. */}
                                     <td
                                         className={selectable ? "cursor-pointer align-middle" : "align-middle"}
                                         onClick={selectable ? toggle : undefined}
                                     >
-                                        <div className="truncate font-medium text-ink" title={q.title}>
+                                        <div className="truncate font-medium text-ink">
                                             {q.is_custom && (
                                                 <span className="tag tag-accent mr-2 align-middle">
                                                     {q.is_claimed ? "From interview" : "Custom"}
@@ -121,7 +127,7 @@ export default function QuestionsTable({
                                             )}
                                             {q.title}
                                         </div>
-                                        <div className="mt-0.5 truncate text-[12.5px] text-neutral-400" title={q.text}>
+                                        <div className="mt-0.5 truncate text-[12.5px] text-neutral-400">
                                             {q.text}
                                         </div>
                                     </td>
@@ -131,26 +137,27 @@ export default function QuestionsTable({
                                     <td className="truncate align-middle text-neutral-400" title={q.level_name ?? undefined}>
                                         {q.level_name ?? "—"}
                                     </td>
-                                    {editable && (
+                                    {hasActions && (
                                         <td className="align-middle">
-                                            {q.is_custom && (
-                                                <div className="flex justify-end gap-1">
-                                                    {q.is_claimed ? (
-                                                        onView && (
-                                                            <Button variant="ghost" icon aria-label={`View "${q.title}"`} title="View" onClick={() => onView(q)}>
-                                                                <Eye size={17} weight="regular" />
-                                                            </Button>
-                                                        )
-                                                    ) : (
-                                                        <Button variant="ghost" icon aria-label={`Edit "${q.title}"`} title="Edit" onClick={() => onEdit!(q)}>
-                                                            <PencilSimple size={17} weight="regular" />
-                                                        </Button>
-                                                    )}
+                                            <div className="flex justify-end gap-1">
+                                                {/* View on any row without Edit: bank and claimed rows, and every
+                                                    row of a non-editable table */}
+                                                {onView && !canEdit(q) && (
+                                                    <Button variant="ghost" icon aria-label={`View "${q.title}"`} title="View" onClick={() => onView(q)}>
+                                                        <Eye size={17} weight="regular" />
+                                                    </Button>
+                                                )}
+                                                {canEdit(q) && (
+                                                    <Button variant="ghost" icon aria-label={`Edit "${q.title}"`} title="Edit" onClick={() => onEdit!(q)}>
+                                                        <PencilSimple size={17} weight="regular" />
+                                                    </Button>
+                                                )}
+                                                {editable && q.is_custom && (
                                                     <Button variant="ghost" icon aria-label={`Delete "${q.title}"`} title="Delete" onClick={() => onDelete!(q)}>
                                                         <Trash size={17} weight="regular" />
                                                     </Button>
-                                                </div>
-                                            )}
+                                                )}
+                                            </div>
                                         </td>
                                     )}
                                 </tr>

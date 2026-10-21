@@ -1313,7 +1313,7 @@ async def set_profile_avatar(profile_id: str, avatar_url: str | None) -> dict:
 def _empty_readiness() -> dict:
     """The readiness block when there's nothing graded for the selected kind — no series, no
     latest, no delta. The client renders the empty-state placeholder from `count == 0`."""
-    return {"series": [], "latest": None, "delta": None, "count": 0}
+    return {"series": [], "latest": None, "average": None, "delta": None, "count": 0}
 
 
 async def get_dashboard(
@@ -1350,8 +1350,9 @@ async def get_dashboard(
     oldest -> newest, reading ONLY that kind's answers (a mixed Practice interview contributes just
     its coding answers to the Coding view):
       readiness       — per interview, the mean of its graded answers of this kind (each answer's own
-                        mean, as in aggregate_by_kind), as a series, plus latest, the delta across the
-                        window (latest - earliest, None with < 2), and the count.
+                        mean, as in aggregate_by_kind), as a series, plus latest, the window's average
+                        of the series, the delta across the window (latest - earliest, None with < 2),
+                        and the count.
       skill_breakdown — those answers' scores averaged per dimension, in the kind's rubric order
                         (aggregate_scores with that whitelist both orders and drops any stray name).
       work_on_next    — the `improvement` line off those answers (newest interview first), capped.
@@ -1447,6 +1448,10 @@ async def get_dashboard(
             readiness = {
                 "series": series,
                 "latest": series[-1],
+                # the window's mean of the per-interview points, shown beside `latest` so the
+                # headline isn't mistaken for the period's level (the skill breakdown is a period
+                # average too).
+                "average": round(sum(series) / len(series), 2),
                 # delta across the shown window; None until there are two points to compare.
                 "delta": round(series[-1] - series[0], 2) if len(series) >= 2 else None,
                 "count": len(series),

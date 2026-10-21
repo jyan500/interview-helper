@@ -58,7 +58,7 @@ type SignalFilters = {
 
 // The readiness shape to render while there's no data yet (loading, or nothing graded) — the card
 // reads `latest === null` / `count === 0` from it for its empty state.
-const EMPTY_READINESS: Readiness = { series: [], latest: null, delta: null, count: 0 };
+const EMPTY_READINESS: Readiness = { series: [], latest: null, average: null, delta: null, count: 0 };
 
 export default function SignalPanel() {
     // what's actually in effect (drives the query). questionType undefined => let the backend pick the
