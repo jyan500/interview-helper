@@ -29,10 +29,8 @@ import type { PlanQuestion } from "../api";
 //   role / level — human-readable LABELS for the header (both flows carry them).
 //   company / round — a job SIMULATION's header labels instead (null/absent for a bank interview).
 //   question     — FRESH START: the first plan question. Its type flags say whether to open with the
-//                  coding panel or the diagram canvas. A RESUME learns it from the resume payload instead.
-//   allowsSmartVoice — FRESH START of a round: whether smart voice turn-taking is offered (then the
-//                  default) or the round is manual-only. Absent for a bank interview. A RESUME learns it
-//                  from the resume payload.
+//                  coding panel or the diagram canvas, and in smart or manual voice mode. A RESUME learns
+//                  it from the resume payload instead.
 export type SessionNavState = {
     interviewId: string;
     firstMessage?: string;
@@ -41,7 +39,6 @@ export type SessionNavState = {
     level: string;
     company?: string | null;
     round?: string | null;
-    allowsSmartVoice?: boolean | null;
     question?: PlanQuestion | null;
 };
 

@@ -342,7 +342,9 @@ class RoundType(Base, TimestampMixin):
     THE ROW DRIVES THE ROUND, so adding a round is a seed entry, not a code change:
       question_guidance     prose for the question GENERATOR: what the round contains and how to
                        write it. Only round_agent reads it.
-      interviewer_guidance  prose for the per-turn PERSONA: the round's style and what to probe.
+      interviewer_guidance  prose for the per-turn PERSONA: the round's FORMAT framing only (a warm
+                       first-round screen, why-this-company). What to probe on each kind of question
+                       is QuestionType.interviewer_guidance, shared with Practice interviews.
                        Split from question_guidance because the persona read "ask these four
                        questions, in this order" as an order to ask them itself, and pasted the next
                        planned question into its reaction. Both stay server-side.

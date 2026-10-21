@@ -166,15 +166,13 @@ export default function SessionPage() {
     // auto-opens after the AI finishes speaking (the edge effect below). onFinalTranscript is the
     // COMBINED stop+send: the hook hands us the Whisper text and we submit it like a typed answer.
     //
-    // The ROUND decides the mode (allows_smart_voice on its row): behavioral opens in smart with manual
-    // still selectable; coding and system design are manual-only, since their long thinking pauses
-    // would trip the silence countdown and submit a half-answer. A bank interview (no round, so
-    // null/absent) keeps the free choice and opens in manual. A resume learns the rule from its payload.
-    // A system-design or coding question is manual-only even in a bank interview: the canvas / editor
-    // locks it per question (a Job round of either kind is already locked by its round row).
-    const [allowsSmartVoice, setAllowsSmartVoice] = useState(nav.allowsSmartVoice);
-    const [voiceMode, setVoiceMode] = useState<TurnMode>(() => defaultVoiceMode(nav.allowsSmartVoice));
-    const smartVoiceLocked = allowsSmartVoice === false || hasDiagramCanvas || hasCodeEditor;
+    // The QUESTION'S TYPE decides the mode (allows_smart_voice on its PlanQuestion), the same in a
+    // Practice and a Job interview: behavioral opens in smart with manual still selectable; coding and
+    // system design are manual-only, since their long thinking pauses would trip the silence countdown
+    // and submit a half-answer. A fresh start opens on the first question's rule, a resume on the
+    // payload's, and each advance re-applies it for the new question (see handleSend).
+    const [voiceMode, setVoiceMode] = useState<TurnMode>(() => defaultVoiceMode(nav.question?.allows_smart_voice));
+    const smartVoiceLocked = !(problem?.allows_smart_voice ?? false);
 
     // Which microphone to capture from (micDeviceId, from useInterviewSettings above). "" = system
     // default; a real deviceId pins that exact mic — the picker exists because a wrong default mic
@@ -283,8 +281,7 @@ export default function SessionPage() {
                 // last sent (marked as sent, so it isn't re-sent unchanged).
                 // Set before the current question is spoken below, so a smart round's mic auto-arms
                 // when that speech ends (the edge effect) and a manual-only round's never does.
-                setAllowsSmartVoice(payload.allows_smart_voice);
-                setVoiceMode(defaultVoiceMode(payload.allows_smart_voice));
+                setVoiceMode(defaultVoiceMode(payload.question?.allows_smart_voice));
                 const coding = payload.question?.has_code_editor ?? false;
                 const problemText = payload.question?.text;
                 const shown = (text: string) => (coding ? cueProblem(text, problemText, CODING_PROBLEM_CUE) : text);
@@ -420,9 +417,10 @@ export default function SessionPage() {
                 setProblem(res.question);
                 setHasDiagramCanvas(res.question.has_diagram_canvas);
                 setHasCodeEditor(res.question.has_code_editor);
-                // system-design and coding questions are manual-only: drop out of smart before it's
-                // spoken, so the mic doesn't auto-arm when the speech ends
-                if (res.question.has_diagram_canvas || res.question.has_code_editor) setVoiceMode("manual");
+                // a manual-only question (coding, system design): drop out of smart before it's spoken,
+                // so the mic doesn't auto-arm when the speech ends. One that allows smart keeps the
+                // candidate's current choice.
+                if (!res.question.allows_smart_voice) setVoiceMode("manual");
                 setDiagram(emptyDiagram());
                 setLastSentDiagram(emptyDiagram());
                 // every language starts blank on the new problem

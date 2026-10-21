@@ -33,10 +33,10 @@ The line: the MODEL has no business creating an interview or setting `current_qu
 the client-driven rewrite). Those are the backend's own bookkeeping, so they stay off the
 model's menu even though they live here beside the tools.
 
-WHY create_interview TAKES `persona` INSTEAD OF FETCHING IT: the persona comes from the MCP
-`behavioral_interview` prompt, and this module deliberately knows nothing about MCP. api.py
-has the toolset, fetches the persona, and passes it down — keeping the data layer free of a
-dependency on the thing that's supposed to sit above it.
+WHY create_interview TAKES A PERSONA BUILDER INSTEAD OF BUILDING IT: the persona comes from the
+templates in prompts.py, and this module deliberately knows nothing about them. api.py owns the
+templates and passes a `build_persona(kinds)` down; this module only supplies the plan's question
+kinds — keeping the data layer free of a dependency on the thing that's supposed to sit above it.
 
 Quick test once filled in (from server/):
     .venv/Scripts/python.exe -m tools.interview
@@ -44,6 +44,7 @@ Quick test once filled in (from server/):
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
 from fastapi_pagination import Params
@@ -81,6 +82,19 @@ from tools.questions import build_interview_plan
 # grading here would pull the LLM stack (pydantic_agent, the model) into the data layer just to
 # reuse an average; the math moved to tools/scoring.py precisely so this import stays cheap.
 from tools.scoring import aggregate_scores
+
+
+def plan_question(slug: str, text: str, qtype: QuestionType) -> dict:
+    """The PlanQuestion wire shape the start / answer / resume responses carry: a plan question (never
+    a probe) plus its TYPE's flags, so the SPA picks the workspace (code editor, diagram canvas) and
+    the voice mode per question without ever checking a type slug."""
+    return {
+        "slug": slug,
+        "text": text,
+        "has_diagram_canvas": qtype.has_diagram_canvas,
+        "has_code_editor": qtype.has_code_editor,
+        "allows_smart_voice": qtype.allows_smart_voice,
+    }
 
 
 async def _insert_generated_questions(
@@ -146,13 +160,12 @@ async def list_recent_round_questions(
 async def create_interview(
     role: str,
     level: str,
-    persona: str,
+    build_persona: Callable[[list[dict]], str],
     profile_id: str | None = None,
     *,
     job: str | None = None,
     round_type: str | None = None,
     generated: list[dict] | None = None,
-    background_persona: str | None = None,
 ) -> dict:
     """Start an interview: mint its id and INSERT the row. Called by POST /api/interview.
 
@@ -179,14 +192,14 @@ async def create_interview(
     generated item becomes a real `questions` row (slug `gen-<hex>`, its own type, this level, tagged
     with the job and paired with NO role — which is what keeps it out of every bank read) plus a
     `reference_briefs` row, and THOSE are the frozen plan instead of build_interview_plan's pick.
-    The probe budget comes from the round. From here the turn loop and the grader can't tell a
-    simulation from a bank interview. The caller checks job ownership before spending on generation.
+    From here the turn loop and the grader can't tell a simulation from a bank interview. The caller
+    checks job ownership before spending on generation.
 
-    PRACTICE BACKGROUND: `background_persona` (optional) is the same persona WITH the candidate's
-    Profile background. It's stored instead of `persona` only when the materialized plan has a question
-    whose type opts in (QuestionType.uses_candidate_background, i.e. behavioral). The choice is made
-    here because the plan doesn't exist until here. A simulation never passes it: its round already
-    decided (RoundType.uses_candidate_background) when the caller built `persona`.
+    THE PERSONA IS BUILT FROM THE PLAN: `build_persona(kinds)` gets the plan's distinct question kinds,
+    in plan order, as {name, interviewer_guidance, uses_candidate_background} dicts, and returns the
+    persona string to store. A callable because the plan doesn't exist until here, while the templates
+    (prompts.py) belong to the caller: this module stays free of them. That's what puts the coding
+    guidance into a coding-only Practice interview and keeps the profile background out of it.
     """
     if (job is None) != (round_type is None) or (job is not None and not generated):
         return {"ok": False, "error": "a simulation needs a job, a round, and generated questions"}
@@ -226,28 +239,6 @@ async def create_interview(
                 .values(done=True, updated_at=Interview.updated_at)
             )
 
-        # the same id scheme api.py always used — short enough to eyeball in a URL, random
-        # enough that nobody guesses someone else's interview
-        slug = uuid.uuid4().hex[:8]
-
-        interview = Interview(
-            slug=slug,
-            role_id=role_row.id,
-            level_id=level_row.id,
-            persona=persona,
-            message_history=[],   # the agent hasn't said anything yet
-            profile_id=profile_id,   # Phase B: whose interview this is (None = nobody's)
-            job_id=job_row.id if job_row is not None else None,
-            round_type_id=round_row.id if round_row is not None else None,
-        )
-        if round_row is not None:
-            interview.max_followups = round_row.max_followups
-        db.add(interview)
-        # FLUSH (not commit): the INSERT runs and `interview.id` is assigned, but the transaction
-        # stays open so the plan rows below land atomically with it. An interview is never valid
-        # without its frozen plan, so they must commit together or not at all.
-        await db.flush()
-
         if generated:
             # the round's plan IS what the generator wrote — there's no saved set to consult.
             plan = await _insert_generated_questions(db, generated, job_row, level_row)
@@ -262,15 +253,46 @@ async def create_interview(
             # interview.
             plan, from_saved = await build_interview_plan(db, role_row, level_row, profile_id)
 
-        # PICK THE PERSONA — the background goes in only if some planned question's type uses it, so a
-        # coding-only plan's interviewer never sees the candidate's projects.
-        if background_persona is not None and plan:
-            plan_type_ids = {question.type_id for question in plan}
-            type_flags = (await db.execute(
-                select(QuestionType.uses_candidate_background).where(QuestionType.id.in_(plan_type_ids))
-            )).scalars().all()
-            if True in type_flags:
-                interview.persona = background_persona
+        # THE PLAN'S KINDS, in plan order (first appearance), for the persona. One query for every type
+        # the plan uses; the same rows give the first question's flags below.
+        types_by_id = {
+            qtype.id: qtype
+            for qtype in (await db.execute(
+                select(QuestionType).where(QuestionType.id.in_({question.type_id for question in plan}))
+            )).scalars()
+        }
+        kinds: list[dict] = []
+        seen_type_ids: set[int] = set()
+        for question in plan:
+            if question.type_id in seen_type_ids:
+                continue
+            seen_type_ids.add(question.type_id)
+            qtype = types_by_id[question.type_id]
+            kinds.append({
+                "name": qtype.name,
+                "interviewer_guidance": qtype.interviewer_guidance,
+                "uses_candidate_background": qtype.uses_candidate_background,
+            })
+
+        # the same id scheme api.py always used — short enough to eyeball in a URL, random
+        # enough that nobody guesses someone else's interview
+        slug = uuid.uuid4().hex[:8]
+
+        interview = Interview(
+            slug=slug,
+            role_id=role_row.id,
+            level_id=level_row.id,
+            persona=build_persona(kinds),
+            message_history=[],   # the agent hasn't said anything yet
+            profile_id=profile_id,   # Phase B: whose interview this is (None = nobody's)
+            job_id=job_row.id if job_row is not None else None,
+            round_type_id=round_row.id if round_row is not None else None,
+        )
+        db.add(interview)
+        # FLUSH (not commit): the INSERT runs and `interview.id` is assigned, but the transaction
+        # stays open so the plan rows below land atomically with it. An interview is never valid
+        # without its frozen plan, so they must commit together or not at all.
+        await db.flush()
 
         for position, question in enumerate(plan):
             db.add(InterviewQuestion(
@@ -283,13 +305,6 @@ async def create_interview(
         # exactly as api.py used to take it from next_question. Safe to read after commit: the
         # session is expire_on_commit=False (see db/engine.py).
         first = plan[0] if plan else None
-        first_has_diagram_canvas = False
-        first_has_code_editor = False
-        if first is not None:
-            first_has_diagram_canvas, first_has_code_editor = (await db.execute(
-                select(QuestionType.has_diagram_canvas, QuestionType.has_code_editor)
-                .where(QuestionType.id == first.type_id)
-            )).one()
         return {
             "ok": True,
             "interview_id": slug,
@@ -297,11 +312,9 @@ async def create_interview(
             # False when the default fired — the route surfaces this so the SPA can tell the
             # candidate a default set was chosen because they'd saved nothing.
             "from_saved": from_saved,
-            "first_qid": first.slug if first is not None else None,
-            "first_qtext": first.text if first is not None else None,
-            # whether the SPA shows the diagram canvas / code editor for it (its question type's flags)
-            "first_has_diagram_canvas": first_has_diagram_canvas,
-            "first_has_code_editor": first_has_code_editor,
+            # the PlanQuestion the SPA presents first (its type's flags pick the workspace + voice mode)
+            "first_question": (plan_question(first.slug, first.text, types_by_id[first.type_id])
+                               if first is not None else None),
         }
 
 
@@ -393,11 +406,15 @@ async def load_interview_state(interview_id: str) -> dict:
     """
     async with get_session() as db:
         # OUTER join on the current question: current_question_id is NULL before the first is picked.
+        # The current question's TYPE supplies its probe budget (QuestionType.max_followups) and its
+        # kind's name for the per-turn prompt: a coding question gets coding's budget in a Practice
+        # interview exactly as in a Job one.
         row = (await db.execute(
             select(
                 Interview.id, Interview.profile_id, Interview.persona, Interview.followups_used,
-                Interview.max_followups, Interview.done, Interview.message_history,
+                Interview.done, Interview.message_history,
                 Question.id, Question.slug, Question.text, QuestionType.has_diagram_canvas,
+                QuestionType.max_followups, QuestionType.name,
                 Role.slug, Level.slug,
             )
             .outerjoin(Question, Interview.current_question_id == Question.id)
@@ -408,9 +425,9 @@ async def load_interview_state(interview_id: str) -> dict:
         )).one_or_none()
         if row is None:
             return {"ok": False, "error": "Interview not found"}
-        (pk, profile_id, persona, followups_used, max_followups, done, message_history,
+        (pk, profile_id, persona, followups_used, done, message_history,
          current_question_pk, current_qid, current_qtext, current_has_diagram_canvas,
-         role_slug, level_slug) = row
+         max_followups, current_kind, role_slug, level_slug) = row
 
         # asked = every question with a turn, plus the one on the table (as Interview.asked_question_ids)
         asked_ids = set((await db.execute(
@@ -423,22 +440,16 @@ async def load_interview_state(interview_id: str) -> dict:
         # question is the first one in the plan, by position, that hasn't been asked yet. None means
         # the plan is exhausted, which is the ADVANCE branch's cue to END the interview.
         plan = (await db.execute(
-            select(Question.slug, Question.text, QuestionType.has_diagram_canvas, QuestionType.has_code_editor)
+            select(Question.slug, Question.text, QuestionType)
             .join(InterviewQuestion, InterviewQuestion.question_id == Question.id)
             .join(QuestionType, Question.type_id == QuestionType.id)
             .where(InterviewQuestion.interview_id == pk)
             .order_by(InterviewQuestion.position)
         )).all()
-        next_planned_qid = None
-        next_planned_qtext = None
-        next_planned_has_diagram_canvas = False
-        next_planned_has_code_editor = False
-        for slug, text, has_diagram_canvas, has_code_editor in plan:
+        next_planned_question = None
+        for slug, text, qtype in plan:
             if slug not in asked_ids:
-                next_planned_qid = slug
-                next_planned_qtext = text
-                next_planned_has_diagram_canvas = has_diagram_canvas
-                next_planned_has_code_editor = has_code_editor
+                next_planned_question = plan_question(slug, text, qtype)
                 break
 
         # THE CURRENT DIAGRAM — the question's newest non-NULL turns.diagram, the baseline /api/answer
@@ -464,11 +475,15 @@ async def load_interview_state(interview_id: str) -> dict:
             "persona": persona,
             "current_qid": current_qid,
             "current_qtext": current_qtext,
+            # the current question's kind ("Coding"), named in the per-turn prompt so the persona
+            # follows that kind's guidance in a mixed Practice interview
+            "current_kind": current_kind,
             # the diagram canvas: whether the current question has one, and its latest diagram (a
             # DiagramDoc dump, or None if nothing has been sent for it yet)
             "current_has_diagram_canvas": bool(current_has_diagram_canvas),
             "current_diagram": current_diagram,
             "followups_used": followups_used,
+            # the CURRENT question's type's budget (followups_used resets on every advance)
             "max_followups": max_followups,
             "done": done,
             "role": role_slug,
@@ -476,11 +491,8 @@ async def load_interview_state(interview_id: str) -> dict:
             # (`role` above is the same idea for the role dimension.)
             "level": level_slug,
             "asked_ids": list(asked_ids),
-            # the next plan question to advance to (slug + text), or None when the plan is spent.
-            "next_planned_qid": next_planned_qid,
-            "next_planned_qtext": next_planned_qtext,
-            "next_planned_has_diagram_canvas": next_planned_has_diagram_canvas,
-            "next_planned_has_code_editor": next_planned_has_code_editor,
+            # the next plan question to advance to (a plan_question dict), or None when the plan is spent.
+            "next_planned_question": next_planned_question,
             "message_history": message_history
         }
 
@@ -1580,15 +1592,10 @@ async def load_resume_payload(interview_id: str) -> dict:
             # So an interview resumes into the right UI: the job/company/round for the header, and the
             # PARENT question on the table (its full text — the coding panel's problem statement — even
             # while a probe is the open turn), whose type flags say whether the code editor or the
-            # diagram canvas shows.
+            # diagram canvas shows, and whether smart voice is offered.
             **_simulation_fields(interview),
-            # None for a bank interview (no round) — the SPA keeps its free manual/smart choice there.
-            "allows_smart_voice": (interview.round_type.allows_smart_voice
-                                   if interview.round_type is not None else None),
-            "question": ({"slug": interview.current_question.slug,
-                          "text": interview.current_question.text,
-                          "has_diagram_canvas": interview.current_question.type.has_diagram_canvas,
-                          "has_code_editor": interview.current_question.type.has_code_editor}
+            "question": (plan_question(interview.current_question.slug, interview.current_question.text,
+                                       interview.current_question.type)
                          if interview.current_question is not None else None),
             "diagram": diagram,
         }
@@ -1603,8 +1610,8 @@ if __name__ == "__main__":
     async def _smoke():
         print("unknown:", await get_interview("nope1234"))
         # create_interview works on its own — no api.py, no MCP, no LLM. The persona is
-        # normally the behavioral_interview prompt; any string does for a smoke test.
-        created = await create_interview("backend-engineer", "mid", "(test persona)")
+        # normally built by the behavioral_interview template; any string does for a smoke test.
+        created = await create_interview("backend-engineer", "mid", lambda kinds: f"(test persona: {kinds})")
         print("created:", created)
         # TODO: uncomment each as you implement it, using the slug just created
         slug = created["interview_id"]

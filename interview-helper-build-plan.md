@@ -2084,3 +2084,35 @@ coding answer got the generic persona, the role rubric, 3 follow-ups). Decision:
 **Next:** apply `d7f9b1c3e5a6`, run `python -m db.seed`, then Phase 2 (persona from the plan's types,
 per-question follow-up cap and smart voice). Open for Phase 3: the behavioral rubric's "Company and role
 fit" dimension has no meaning in Practice.
+
+### 2026-10-20 — Question type owns interview + grading behavior, Phase 2: the interview loop
+
+Phase 1's migration `d7f9b1c3e5a6` + seed were applied by the user. The turn loop now reads the question
+TYPE, so Practice and Job interviews run each kind of question the same way.
+
+- **Persona from the plan's kinds.** `create_interview(role, level, build_persona, ...)` builds the plan
+  FIRST, collects its distinct kinds in plan order ({name, interviewer_guidance,
+  uses_candidate_background}) and stores `build_persona(kinds)`. api.py passes a builder over
+  `behavioral_interview(role, seniority, kinds, candidate_background)` (Practice) or
+  `simulation_interview(..., round_guidance, kinds, ...)` (Job). Both render each kind's guidance plus
+  the "guidance decides when a question is covered" rule (Practice didn't have it before). The profile
+  background goes in only when a kind uses it, scoped to those kinds in a mixed plan. The round flag now
+  only gates the GENERATOR's grounding. `background_persona` is gone.
+- **Per-turn prompt names the kind:** "The current interview question (a coding question) is: ...".
+- **Follow-up cap per question:** `load_interview_state` returns the current question's
+  `QuestionType.max_followups` (behavioral 2, coding 6, system-design 8, in both modes; Practice used a
+  flat 3). `Interview.max_followups` is no longer written or read (dropped in the final migration).
+- **PlanQuestion** (`tools/interview.plan_question`) carries `allows_smart_voice` with the workspace
+  flags on start / advance / resume. `RoundTypeOut`, the resume payload and the client's
+  `SessionNavState`/`StartLabels` lost their round-level `allows_smart_voice`. SessionPage: initial mode
+  from the first question, lock = `!problem.allows_smart_voice`, an advance to a manual-only question
+  drops to manual. Behavior change: a behavioral Practice question now opens in smart (as in Job rounds).
+- **Round guidance trimmed** in questions.json to format framing (warm screen / why-this-company; "run
+  the way an engineer at this company would"); per-kind probing lives on the type.
+- Verified: py_compile + `npx tsc` clean; personas rendered from the live types (coding-only Practice: coding
+  guidance, no background; mixed: background scoped to behavioral; behavioral Job round: unscoped).
+
+**Next:** `python -m db.seed` (applies the trimmed round guidance), then a live check: one coding-only
+Practice interview (~3-5 `gemini-3.1-flash-lite` calls) should ask for complexity and to trace the
+example; a behavioral Job round should behave as before. Then Phase 3 (grading by the answer's type
+rubric, scorecard grouped by type, dashboard by type incl. Practice; decide "Company and role fit").
