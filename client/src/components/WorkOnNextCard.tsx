@@ -24,7 +24,10 @@ export default function WorkOnNextCard({
     loading?: boolean;
 }) {
     return (
-        <SignalCard title="Work on next">
+        <SignalCard
+            title="Work on next"
+            help="The improvement suggestions from your most recently graded answers of this type, newest first. Pick one to focus on in your next interview."
+        >
             {loading ? (
                 <div className="mt-3 flex flex-col gap-3">
                     {Array.from({ length: SKELETON_ROWS }).map((_, i) => (

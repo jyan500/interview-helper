@@ -2,9 +2,9 @@
  * Readiness card — the signal panel's headline trend (Nocturne mock 1a), now data-driven.
  *
  * The big number is the latest graded simulation's overall (the app's 1-5 scale, same as the
- * scorecard Donut and the interviews table), labeled "Latest interview" with the window's average
- * beside it, so it isn't misread against the skill breakdown (a period average); the delta is the
- * change across the selected window, and the Sparkline plots the series. All of it comes from GET /api/dashboard, scoped to the
+ * scorecard Donut and the interviews table); the help tooltip in the corner says so and gives the
+ * window's average, so it isn't misread against the skill breakdown (a period average). The delta is
+ * the change across the selected window, and the Sparkline plots the series. All of it comes from GET /api/dashboard, scoped to the
  * chosen round (+ optional job) and time window.
  *
  * THREE STATES inside the shared SignalCard shell: `loading` shows a shape-matching skeleton (so the
@@ -26,8 +26,23 @@ export default function ReadinessCard({
 }) {
     const { series, latest, average, delta, count } = readiness;
 
+    // The headline is ONE interview, while the skill breakdown is a period average, so the help
+    // tooltip says so and gives the period average to compare (once there's more than one point).
+    const help = (
+        <>
+            Your score on your most recent interview of this type, out of 5. The line tracks each
+            interview in the selected period.
+            {average !== null && count > 1 && (
+                <>
+                    {" "}Your average over the period is{" "}
+                    <span className="text-ink">{formatScore(average)}</span>
+                </>
+            )}
+        </>
+    );
+
     return (
-        <SignalCard title="Readiness">
+        <SignalCard title="Readiness" help={help}>
             {loading ? (
                 <>
                     <div className="mt-1.5 flex items-end gap-2.5">
@@ -53,16 +68,6 @@ export default function ReadinessCard({
                             </span>
                         )}
                     </div>
-                    {/* The headline is ONE interview; the average matches the skill breakdown's period scope */}
-                    <p className="mt-1.5 text-[12px] text-neutral-400">
-                        Latest interview
-                        {average !== null && count > 1 && (
-                            <>
-                                {" · "}
-                                <span className="text-neutral-200">{formatScore(average)}</span> average this period
-                            </>
-                        )}
-                    </p>
                     <div className="mt-2">
                         <Sparkline data={series} />
                     </div>
