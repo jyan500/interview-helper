@@ -1067,15 +1067,15 @@ async def scorecard(
         # and an empty one looked identical.
         raise HTTPException(status_code=404, detail="no recorded answers for this interview")
 
-    # 2. the rubric (dimensions + a human-readable text to hand the grader), chosen from the INTERVIEW
-    #    ROW — the round's rubric for a simulation, the role's for a bank interview. It used to come
-    #    from `req.role`, which let the client grade an interview against a rubric it wasn't run
-    #    under. The same context carries a simulation's job + round framing for the grader.
+    # 2. the rubrics, per question KIND: each answer is graded on its QUESTION TYPE's rubric, the same
+    #    in a Practice and a Job interview (a coding answer on Code correctness and Complexity
+    #    wherever it was asked). Read off the DB, never the request. The same context carries a
+    #    simulation's job + round framing for the grader.
     context = await load_grading_context(req.interview_id)
     if context["status"] != "ok":
-        raise HTTPException(status_code=404, detail="no rubric for this interview")
-    dimensions = context["dimensions"]
-    rubric_text = f"Dimensions: {'; '.join(dimensions)}. {context['scale']}"
+        raise HTTPException(status_code=404, detail="unknown interview")
+    rubrics = context["rubrics"]
+    kind_dimensions = {kind: rubric["dimensions"] for kind, rubric in rubrics.items()}
 
     # PHASE E — the interview's seniority, so the grader calibrates each grade to the right bar
     # (the same answer clears entry but not senior). TODO: get_interview must start returning
@@ -1111,24 +1111,28 @@ async def scorecard(
             continue
         grouped.setdefault(turn["question_id"], []).append((turn["question_text"], turn["answer"]))
 
-    async def grade_question(question_id: str, exchanges: list[tuple[str, str]]) -> tuple[AnswerGrade, dict]:
+    async def grade_question(question_id: str, exchanges: list[tuple[str, str]]) -> tuple[str, AnswerGrade, dict]:
         question = await get_question(question_id)
         found = question.get("status") == "ok"
         question_title = question["question"]["title"] if found else "(unknown question)"
         question_text = question["question"]["text"] if found else "(unknown question)"
+        # this question's KIND picks its rubric (dimensions + a human-readable text for the grader)
+        kind = context["question_kinds"][question_id]
+        rubric = rubrics[kind]
+        rubric_text = f"Dimensions: {'; '.join(rubric['dimensions'])}. {rubric['scale']}"
         # the first exchange answered the question itself; the rest answered probes on it
         first_answer, followups = exchanges[0][1], exchanges[1:]
         versions = diagram_versions.get(question_id, [])
         # Phase E — pass the question SLUG (so grade_one fetches this question's brief) and the
         # interview level (so scoring is calibrated). grade_one tolerates an un-briefed question.
         grade = await grade_one(
-            question_id, question_text, first_answer, rubric_text, dimensions, level=level,
+            question_id, question_text, first_answer, rubric_text, rubric["dimensions"], level=level,
             job_context=context["job_context"], round_note=context["round_note"],
             followups=followups,
             diagram=versions[-1] if versions else "", diagram_revisions=len(versions),
         )
-        return grade, {"question_id": question_id, "question_title": question_title,
-                       "question_text": question_text, **grade.model_dump()}
+        return kind, grade, {"question_id": question_id, "question_title": question_title,
+                             "question_text": question_text, "kind": kind, **grade.model_dump()}
 
     # The questions are graded independently, so grade them CONCURRENTLY: the scorecard waits for
     # the slowest grade instead of the sum of all of them. gather keeps input order, so `answers`
@@ -1136,12 +1140,12 @@ async def scorecard(
     results = await asyncio.gather(
         *(grade_question(qid, exchanges) for qid, exchanges in grouped.items())
     )
-    grades = [grade for grade, _ in results]
-    answers = [answer for _, answer in results]
+    graded = [(kind, grade) for kind, grade, _ in results]
+    answers = [answer for _, _, answer in results]
 
     # 4. aggregate the per-answer grades into headline numbers (deterministic Python — the LLM
-    #    already judged; this just averages).
-    agg = aggregate(grades, dimensions)
+    #    already judged; this just averages), grouped by kind since each kind has its own rubric.
+    agg = aggregate(graded, kind_dimensions)
 
     # 5. (Phase C) PERSIST the grade as rows so it OUTLIVES this request — the whole reason the
     #    History view can show a past interview's score without re-grading (re-paying, and
@@ -1165,7 +1169,8 @@ async def scorecard(
         "interview_id": req.interview_id,
         "role": context["role"],
         "answers": answers,
-        "dimension_averages": agg["dimension_averages"],
+        # per question kind, its rubric's dimension averages (the same shape get_scorecard reads back)
+        "kind_averages": agg["by_kind"],
         "overall": agg["overall"],
     }
 
@@ -1703,9 +1708,10 @@ async def save_profile_questions(
 # GET  /api/profile        — this user's display name + default role/level (for the kickoff
 #                            form's pre-fill and the panel's initial role).
 # PATCH /api/profile       — set that default (the "Set as default" control).
-# GET  /api/dashboard      — the SIMULATION signal: round-scoped (optionally job-narrowed) readiness /
-#                            skill breakdown / work-on-next. The job picker's options come from
-#                            GET /api/jobs?graded=true; the round picker's from /api/round-types.
+# GET  /api/dashboard      — the signal over every graded interview (Practice and Job): scoped to one
+#                            question KIND (optionally job-narrowed) — readiness / skill breakdown /
+#                            work-on-next. The job picker's options come from GET /api/jobs?graded=true;
+#                            the kind picker's from /api/question-types.
 #
 # All owner-scoped the same way as /api/interviews: the VERIFIED uid goes straight into the query,
 # never an id from the request, so there's nothing to authorize separately — "my dashboard" can't
@@ -1873,12 +1879,12 @@ async def skills(
 
 @app.get("/api/dashboard")
 async def dashboard(
-    round: str | None = None,    # round-type slug (omit => the most recently graded simulation's round)
-    job: str | None = None,      # job slug (omit => across every job)
-    period: str | None = None,   # "week"|"month"|"year" — the time window (get_dashboard defaults it)
+    question_type: str | None = None,  # question-type slug (omit => the most recently graded answer's kind)
+    job: str | None = None,            # job slug (omit => every interview, Practice included)
+    period: str | None = None,         # "week"|"month"|"year" — the time window (get_dashboard defaults it)
     user_id: str = Depends(require_user),
 ) -> dict:
-    return await get_dashboard(user_id, round_slug=round, job_slug=job, period=period)
+    return await get_dashboard(user_id, question_type_slug=question_type, job_slug=job, period=period)
 
 
 # NOTE — deliberately NOT calling `add_pagination(app)`. In fastapi-pagination 0.15.16 that helper

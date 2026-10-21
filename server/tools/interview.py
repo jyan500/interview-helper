@@ -81,7 +81,7 @@ from tools.questions import build_interview_plan
 # The shared score arithmetic (Phase C) — a pure leaf module, NOT grading.py. Importing from
 # grading here would pull the LLM stack (pydantic_agent, the model) into the data layer just to
 # reuse an average; the math moved to tools/scoring.py precisely so this import stays cheap.
-from tools.scoring import aggregate_scores
+from tools.scoring import aggregate_by_kind, aggregate_scores
 
 
 def plan_question(slug: str, text: str, qtype: QuestionType) -> dict:
@@ -815,12 +815,6 @@ CARD_LOADS = (
     selectinload(Interview.scorecard),
     *SIMULATION_LOADS,
 )
-# What _interview_rubric reads: the round's rubric for a simulation, the role's for a bank interview,
-# each with its dimensions. Both paths load (which one applies is only known per row).
-RUBRIC_LOADS = (
-    selectinload(Interview.role).selectinload(Role.rubric).selectinload(Rubric.dimensions),
-    selectinload(Interview.round_type).selectinload(RoundType.rubric).selectinload(Rubric.dimensions),
-)
 # A graded interview's scores, down to each score's dimension name (get_scorecard, the dashboard).
 SCORE_LOADS = (
     selectinload(Interview.scorecard).selectinload(Scorecard.entries)
@@ -959,42 +953,61 @@ async def list_interviews(
         }
 
 
-def _interview_rubric(iv: Interview) -> Rubric | None:
-    """The rubric an interview is graded on: its ROUND's for a simulation (a behavioral answer must
-    not be scored on "Technical depth"), its ROLE's for a bank interview. Read off the ROW, never
-    from the request — one rule shared by grading and save_scorecard, so the dimension names the
-    grader scores are exactly the ones the scorecard resolves. Needs RUBRIC_LOADS."""
-    if iv.round_type is not None:
-        return iv.round_type.rubric
-    return iv.role.rubric
+async def _question_type_rubrics(db) -> dict[int, QuestionType]:
+    """Every question type with its rubric and the rubric's dimensions loaded, by type id.
+
+    An answer is graded on its QUESTION'S TYPE's rubric (a coding answer on Code correctness and
+    Complexity, in a Practice and a Job interview alike), so grading, save_scorecard and the dashboard
+    all resolve a rubric this way. A handful of rows (one per kind), so they're all loaded at once."""
+    rows = (await db.execute(
+        select(QuestionType).options(selectinload(QuestionType.rubric).selectinload(Rubric.dimensions))
+    )).scalars().all()
+    return {qtype.id: qtype for qtype in rows}
 
 
 async def load_grading_context(interview_id: str) -> dict:
-    """What /api/scorecard hands the grader beyond the transcript: the rubric (dimension names + a
-    scale), plus — for a simulation — the job and round context the grading template frames the
-    answer with. Returns {"status": "ok", "role", "dimensions", "scale", "job_context", "round_note"}
-    or {"status": "not_found"} (unknown interview, or its role/round has no rubric)."""
+    """What /api/scorecard hands the grader beyond the transcript: each answered question's KIND and
+    that kind's rubric, plus — for a simulation — the job and round context the grading template
+    frames the answer with. Returns {"status": "ok", "role", "job_context", "round_note", "rubrics",
+    "question_kinds"} or {"status": "not_found"} (unknown interview).
+
+      rubrics         kind name -> {"dimensions": [names], "scale": str}, for every kind with a rubric
+      question_kinds  question slug -> kind name, for every question this interview has a turn on
+
+    Example: {"rubrics": {"Coding": {"dimensions": ["Problem understanding", ...], "scale": "1 ..."}},
+              "question_kinds": {"user-51b9f22a4efd": "Coding"}}
+    """
     async with get_session() as db:
         interview = (
             await db.execute(
                 select(Interview).where(Interview.slug == interview_id)
-                .options(*RUBRIC_LOADS, selectinload(Interview.job))
+                .options(selectinload(Interview.role), *SIMULATION_LOADS)
             )
         ).scalar_one_or_none()
         if interview is None:
             return {"status": "not_found"}
-        rubric = _interview_rubric(interview)
-        if rubric is None:
-            return {"status": "not_found"}
+        types_by_id = await _question_type_rubrics(db)
+        rubrics = {}
+        for qtype in types_by_id.values():
+            if qtype.rubric is not None:
+                rubrics[qtype.name] = {"dimensions": [dim.name for dim in qtype.rubric.dimensions],
+                                       "scale": qtype.rubric.scale}
+        question_rows = (await db.execute(
+            select(Question.slug, Question.type_id)
+            .join(Turn, Turn.question_id == Question.id)
+            .where(Turn.interview_id == interview.id)
+            .distinct()
+        )).all()
+        question_kinds = {slug: types_by_id[type_id].name for slug, type_id in question_rows}
         job, round_row = interview.job, interview.round_type
         return {
             "status": "ok",
             "role": interview.role.slug,
-            "dimensions": [dim.name for dim in rubric.dimensions],
-            "scale": rubric.scale,
             "job_context": (f"{job.company} — {job.title}\n{job.summary}" if job is not None else ""),
             "round_note": (f"{round_row.name} round — {round_row.description}"
                            if round_row is not None else ""),
+            "rubrics": rubrics,
+            "question_kinds": question_kinds,
         }
 
 
@@ -1021,10 +1034,10 @@ async def save_scorecard(interview_id: str, overall: float, answers: list[dict])
          ("Tradeoff reasoning"), because that's what we put in the rubric text it graded
          against. But ScorecardEntryScore points at a rubric_dimensions ROW, not a string —
          that's the whole reason a reworded dimension can't orphan old scores. So we resolve
-         each name to its id via the role's rubric, and DROP any score whose name doesn't
+         each name to its id via the rubric of THAT ANSWER'S QUESTION TYPE (two kinds can share
+         a name like "Communication" on different rows), and DROP any score whose name doesn't
          resolve rather than writing it under a guess (the same "don't invent an id" rule the
-         turn loop follows). The map is built from the interview's rubric dimensions
-         (RUBRIC_LOADS).
+         turn loop follows).
 
       2. THE per-dimension `note` IS NOT STORED. ScorecardEntryScore has `dimension_id` +
          `score` and nothing else — the schema chose to keep only the number, since the notes
@@ -1040,19 +1053,16 @@ async def save_scorecard(interview_id: str, overall: float, answers: list[dict])
     """
     async with get_session() as db:
         interview = (
-            await db.execute(
-                select(Interview).where(Interview.slug == interview_id).options(*RUBRIC_LOADS)
-            )
+            await db.execute(select(Interview).where(Interview.slug == interview_id))
         ).scalar_one_or_none()
         if interview is None:
             return {"ok": False, "error": "unknown interview"}
-        rubric = _interview_rubric(interview)
-        if rubric is None:
-            return {"ok": False, "error": f"interview {interview_id} has no rubric"}
 
-        # (1) the NAME -> ID map, built once from this interview's rubric dimensions (the round's for
-        #     a simulation, the role's otherwise — see _interview_rubric).
-        name_to_id = {dim.name: dim.id for dim in rubric.dimensions}
+        # (1) the NAME -> ID maps, one per question type: type id -> {dimension name: dimension id}.
+        name_to_id_by_type: dict[int, dict[str, int]] = {}
+        for type_id, qtype in (await _question_type_rubrics(db)).items():
+            if qtype.rubric is not None:
+                name_to_id_by_type[type_id] = {dim.name: dim.id for dim in qtype.rubric.dimensions}
 
         # idempotency: drop a prior scorecard for this interview. A SQL DELETE, not db.delete(row):
         # the ORM delete would LOAD entries + scores to cascade them in Python (relationships are
@@ -1065,9 +1075,13 @@ async def save_scorecard(interview_id: str, overall: float, answers: list[dict])
         #     it flushes, so we never touch them by hand.
         scorecard = Scorecard(interview_id=interview.id, overall=overall)
         for ans in answers:
-            question_pk = await _question_pk(db, ans["question_id"])
-            if question_pk is None:
+            question_row = (await db.execute(
+                select(Question.id, Question.type_id).where(Question.slug == ans["question_id"])
+            )).one_or_none()
+            if question_row is None:
                 continue   # a slug that isn't a real question can't be graded onto a row
+            question_pk, type_id = question_row
+            name_to_id = name_to_id_by_type.get(type_id, {})
             entry = ScorecardEntry(
                 question_id=question_pk,
                 strength=ans["strength"],
@@ -1107,6 +1121,7 @@ async def get_scorecard(interview_id: str) -> dict:
                 "question_id":   entry.question.slug,
                 "question_title": entry.question.title,
                 "question_text": entry.question.text,        # join to questions for the text
+                "kind": entry.question.type.name,            # "Coding": which rubric scored it
                 "strength": ..., "gap": ..., "improvement": ...,
                 "dimension_scores": [ {                      # one per ScorecardEntryScore
                     "dimension": score.dimension.name,       # id -> name, back for display
@@ -1114,7 +1129,8 @@ async def get_scorecard(interview_id: str) -> dict:
                     "note": "",   # NOT STORED — see save_scorecard note (2). Empty on read-back.
                 }, ... ],
             }, ... ],
-            "dimension_averages": { <dimension name>: <avg>, ... },
+            # per question KIND, its rubric's dimension averages (tools/scoring.aggregate_by_kind)
+            "kind_averages": [ {"kind": "Coding", "dimension_averages": {<name>: <avg>, ...}}, ... ],
         }
 
     POINTERS:
@@ -1122,10 +1138,9 @@ async def get_scorecard(interview_id: str) -> dict:
         `interview.scorecard` is None, return {"status": "not_found"}.
       - the query loads the nested rows (SCORE_LOADS + each entry's question): `scorecard.entries`,
         each `entry.scores`, and `score.dimension` — no extra queries, just walk them.
-      - `dimension_averages` is NOT a stored column (only `overall` is cached). Recompute it
-        here the same way grading.aggregate does: bucket every ScorecardEntryScore by its
-        dimension NAME, average each bucket, round(…, 2). This is a read, so a plain Python
-        loop over the loaded rows is fine — no GROUP BY SQL needed.
+      - `kind_averages` is NOT a stored column (only `overall` is cached). Recompute it here the
+        same way grading.aggregate does (aggregate_by_kind over each entry's kind + scores). This
+        is a read, so a plain Python loop over the loaded rows is fine — no GROUP BY SQL needed.
       - `note` is gone (save_scorecard didn't store it): emit "" so <ScorecardView> still
         renders. If that emptiness ever matters, that's the signal to add the column.
 
@@ -1137,17 +1152,18 @@ async def get_scorecard(interview_id: str) -> dict:
             select(Interview).where(Interview.slug == interview_id)
             .options(*SCORE_LOADS,
                      selectinload(Interview.scorecard).selectinload(Scorecard.entries)
-                     .selectinload(ScorecardEntry.question))
+                     .selectinload(ScorecardEntry.question).selectinload(Question.type))
         )).scalar_one_or_none()
         if interview is None or interview.scorecard is None:
             return {"status": "not_found"}
 
         answers = []
-        # flat (dimension_name, score) pairs across EVERY entry — the shape aggregate_scores
-        # takes. No `dimensions` whitelist needed here: save_scorecard already dropped anything
-        # that didn't resolve to a real rubric dimension, so the persisted rows are clean.
-        all_pairs: list[tuple[str, int]] = []
+        # one (kind, dimension_scores) per entry — the shape aggregate_by_kind takes. No whitelist
+        # needed here: save_scorecard already dropped anything that didn't resolve to a real rubric
+        # dimension, so the persisted rows are clean.
+        graded: list[tuple[str, list[tuple[str, int]]]] = []
         for entry in interview.scorecard.entries:
+            kind = entry.question.type.name
             dimension_scores = []
             for score in entry.scores:
                 dimension_scores.append({
@@ -1155,23 +1171,24 @@ async def get_scorecard(interview_id: str) -> dict:
                     "score": score.score,
                     "note": "",   # NOT STORED — see save_scorecard note (2); empty on read-back
                 })
-                all_pairs.append((score.dimension.name, score.score))
+            graded.append((kind, [(score.dimension.name, score.score) for score in entry.scores]))
             answers.append({
                 "question_id": entry.question.slug,
                 "question_title": entry.question.title,
                 "question_text": entry.question.text,
+                "kind": kind,
                 "strength": entry.strength,
                 "gap": entry.gap,
                 "improvement": entry.improvement,
                 "dimension_scores": dimension_scores,
             })
 
-        agg = aggregate_scores(all_pairs)
+        agg = aggregate_by_kind(graded)
         return {
             "status": "ok",
             "interview_id": interview_id,
             "answers": answers,
-            "dimension_averages": agg["dimension_averages"],
+            "kind_averages": agg["by_kind"],
             # the PERSISTED overall is authoritative (it's what the History list sorts on and
             # what was cached at grade time) — use it rather than the recomputed agg["overall"],
             # which could differ if any score was dropped at write time.
@@ -1191,11 +1208,11 @@ async def get_scorecard(interview_id: str) -> dict:
 #   Readiness       -> each graded interview's `scorecards.overall`, oldest -> newest (a trend)
 #   Skill breakdown -> per-dimension averages across those interviews' ScorecardEntryScore rows
 #   Work on next    -> the `improvement` line off recent ScorecardEntry rows
-# The dashboard tracks INTERVIEW SIMULATIONS (the app's main mode), and all THREE cards are scoped
-# to ONE ROUND TYPE, because a simulation is graded on its round's rubric — averaging a coding
-# round's "Code correctness" with a behavioral round's dimensions would blend two different bars.
-# The round is the user's pick, else the round of their most recently graded simulation. An
-# optional job narrows it further (one company's rounds); omitted = across every job.
+# The dashboard tracks EVERY graded interview, Practice and Job, and all THREE cards are scoped to
+# ONE QUESTION KIND, because each answer is graded on its question type's rubric — averaging coding's
+# "Code correctness" with behavioral's dimensions would blend two different bars. The kind is the
+# user's pick, else the kind of their most recently graded answer. An optional job narrows it to one
+# company's interviews; omitted = every interview.
 # ===========================================================================
 
 # How many "work on next" improvement lines the dashboard surfaces — the most recent few, so
@@ -1294,79 +1311,76 @@ async def set_profile_avatar(profile_id: str, avatar_url: str | None) -> dict:
 
 
 def _empty_readiness() -> dict:
-    """The readiness block when there's nothing graded for the selected round — no series, no
+    """The readiness block when there's nothing graded for the selected kind — no series, no
     latest, no delta. The client renders the empty-state placeholder from `count == 0`."""
     return {"series": [], "latest": None, "delta": None, "count": 0}
 
 
 async def get_dashboard(
     profile_id: str,
-    round_slug: str | None = None,
+    question_type_slug: str | None = None,
     job_slug: str | None = None,
     period: str | None = None,
 ) -> dict:
-    """The signal panel's round-scoped aggregates over the user's SIMULATIONS — readiness trend,
-    skill breakdown, work-on-next.
+    """The signal panel's aggregates for ONE KIND of question (behavioral, coding, system design)
+    over the user's graded interviews, Practice and Job alike — readiness trend, skill breakdown,
+    work-on-next.
 
-    ROUND RESOLUTION (the "effective round" the panel opens on):
+    WHY A KIND IS THE SCOPE: every answer is graded on its QUESTION TYPE's rubric, the same in both
+    modes, so a kind's dimensions line up across every interview that asked one. Averaging a coding
+    "Code correctness" with a behavioral rubric's bars would blend two different bars, so the panel
+    shows one kind at a time.
+
+    KIND RESOLUTION (the "effective kind" the panel opens on):
       1. the slug the client asked for (the picker's current value), if given and real;
-      2. else the round of the user's most-recently-graded simulation;
-      3. else None — the user has no graded simulations at all (a first-visit empty state).
-    The chosen round's slug + name are echoed back so the picker can seed its label without a
-    second lookup. Resolution is NOT time-bounded — we pick a sensible round first, then the
-    window filters its interviews (so a too-narrow window shows that round's empty state, not a
-    different round's data).
+      2. else the kind of the user's most-recently-graded answer;
+      3. else None — nothing graded at all (a first-visit empty state).
+    The chosen kind's slug + name are echoed back so the picker can seed its label without a second
+    lookup. Resolution is NOT time-bounded — we pick a sensible kind first, then the window filters
+    (so a too-narrow window shows that kind's empty state, not a different kind's data).
 
-    JOB FILTER: `job_slug` narrows to one job's simulations (an EXISTS on the job's slug, like
-    list_interviews(job=)); omitted = across every job. The query is owner-scoped on the verified
-    uid, so another user's job slug just matches nothing — no separate authorization needed. The
-    job's "company · title" is echoed back (None when unfiltered or not the caller's).
+    JOB FILTER: `job_slug` narrows to one job's interviews (an EXISTS on the job's slug, like
+    list_interviews(job=)); omitted = every interview, Practice included. Owner-scoped on the verified
+    uid, so another user's job slug just matches nothing. The job's "company · title" is echoed back.
 
     TIME WINDOW: `period` ("week"|"month"|"year", default "month") bounds the aggregates to
-    interviews graded within that lookback — the client's window control. The effective period is
-    echoed back so the client can reflect what was actually applied.
+    interviews created within that lookback. The effective period is echoed back.
 
-    Then, over this user's GRADED simulations OF THAT ROUND within the window, oldest -> newest:
-      readiness       — `overall` per interview as a series (the sparkline), plus latest, the
-                        delta across the window (latest - earliest, None with < 2), and the count.
-      skill_breakdown — every ScorecardEntryScore averaged per dimension, in the ROUND rubric's own
-                        dimension order (aggregate_scores with that whitelist both orders and drops
-                        any stray name). One {dimension, average} per bar.
-      work_on_next    — the `improvement` line off recent entries (newest interview first), capped.
-
-    The queries load the nested rows (scorecard -> entries -> scores -> dimension via SCORE_LOADS,
-    and the round's rubric -> dimensions), so this walks them in Python — no GROUP BY SQL — exactly
-    like get_scorecard.
-
-    BANK INTERVIEWS ARE EXCLUDED (`job_id IS NOT NULL` on every query here). A bank interview is
-    graded on its ROLE's rubric, so its dimensions wouldn't line up with the round's skill bars.
+    Then, over this user's graded interviews with at least one answer of that kind in the window,
+    oldest -> newest, reading ONLY that kind's answers (a mixed Practice interview contributes just
+    its coding answers to the Coding view):
+      readiness       — per interview, the mean of its graded answers of this kind (each answer's own
+                        mean, as in aggregate_by_kind), as a series, plus latest, the delta across the
+                        window (latest - earliest, None with < 2), and the count.
+      skill_breakdown — those answers' scores averaged per dimension, in the kind's rubric order
+                        (aggregate_scores with that whitelist both orders and drops any stray name).
+      work_on_next    — the `improvement` line off those answers (newest interview first), capped.
     """
     period = period if period in DASHBOARD_PERIODS else DASHBOARD_DEFAULT_PERIOD
     cutoff = datetime.now(timezone.utc) - DASHBOARD_PERIODS[period]
-    # the skill breakdown reads the round's rubric dimensions, whichever way the round resolves
-    rubric_loads = selectinload(RoundType.rubric).selectinload(Rubric.dimensions)
     async with get_session() as db:
-        # (1)-(3) resolve the effective round.
-        round_row = None
-        if round_slug:
-            round_row = (
+        types_by_id = await _question_type_rubrics(db)
+
+        # (1)-(3) resolve the effective kind.
+        qtype = None
+        if question_type_slug:
+            for candidate in types_by_id.values():
+                if candidate.slug == question_type_slug:
+                    qtype = candidate
+        if qtype is None and not question_type_slug:
+            recent_type_id = (
                 await db.execute(
-                    select(RoundType).where(RoundType.slug == round_slug).options(rubric_loads)
-                )
-            ).scalar_one_or_none()
-        if round_row is None and not round_slug:
-            recent = (
-                await db.execute(
-                    select(Interview)
-                    .join(Interview.scorecard)   # inner join -> graded interviews only
-                    .where(Interview.profile_id == profile_id, Interview.job_id.is_not(None))
+                    select(Question.type_id)
+                    .join(ScorecardEntry, ScorecardEntry.question_id == Question.id)
+                    .join(Scorecard, Scorecard.id == ScorecardEntry.scorecard_id)
+                    .join(Interview, Interview.id == Scorecard.interview_id)
+                    .where(Interview.profile_id == profile_id)
                     .order_by(Interview.created_at.desc())
                     .limit(1)
-                    .options(selectinload(Interview.round_type).options(rubric_loads))
                 )
             ).scalar_one_or_none()
-            if recent is not None:
-                round_row = recent.round_type
+            if recent_type_id is not None:
+                qtype = types_by_id[recent_type_id]
 
         # the job filter's display name — owner-scoped, so a stranger's slug resolves to None.
         job_row = None
@@ -1378,10 +1392,10 @@ async def get_dashboard(
             ).scalar_one_or_none()
         job_name = f"{job_row.company} · {job_row.title}" if job_row is not None else None
 
-        if round_row is None:
+        if qtype is None:
             return {
-                "round": None,
-                "round_name": None,
+                "question_type": None,
+                "question_type_name": None,
                 "job": job_row.slug if job_row is not None else None,
                 "job_name": job_name,
                 "period": period,
@@ -1390,25 +1404,44 @@ async def get_dashboard(
                 "work_on_next": [],
             }
 
-        # this round's graded simulations WITHIN THE WINDOW, oldest -> newest (the trend's natural
-        # order). The `created_at >= cutoff` predicate is the time-window filter.
+        # graded interviews WITHIN THE WINDOW with an answer of this kind, oldest -> newest (the
+        # trend's natural order). The `created_at >= cutoff` predicate is the time-window filter.
         stmt = (
             select(Interview)
             .join(Interview.scorecard)
             .where(
                 Interview.profile_id == profile_id,
-                Interview.job_id.is_not(None),
-                Interview.round_type_id == round_row.id,
                 Interview.created_at >= cutoff,
+                Scorecard.entries.any(ScorecardEntry.question.has(Question.type_id == qtype.id)),
             )
         )
         if job_slug:
             stmt = stmt.where(Interview.job.has(Job.slug == job_slug))
         interviews = (
-            await db.execute(stmt.order_by(Interview.created_at.asc()).options(*SCORE_LOADS))
+            await db.execute(
+                stmt.order_by(Interview.created_at.asc())
+                .options(*SCORE_LOADS,
+                         selectinload(Interview.scorecard).selectinload(Scorecard.entries)
+                         .selectinload(ScorecardEntry.question))
+            )
         ).scalars().all()
 
-        series = [iv.scorecard.overall for iv in interviews]
+        # 1. each interview's answers of THIS kind only (a mixed Practice interview's other kinds
+        #    belong to their own views)
+        kind_entries = []
+        for iv in interviews:
+            entries = [entry for entry in iv.scorecard.entries if entry.question.type_id == qtype.id]
+            kind_entries.append(entries)
+
+        # 2. readiness: one point per interview, the mean of its graded answers of this kind. An
+        #    interview whose answers of this kind were all skipped has no point.
+        series = []
+        for entries in kind_entries:
+            graded = [(qtype.name, [(score.dimension.name, score.score) for score in entry.scores])
+                      for entry in entries]
+            point = aggregate_by_kind(graded)
+            if point["by_kind"]:
+                series.append(point["overall"])
         readiness = _empty_readiness()
         if series:
             readiness = {
@@ -1419,26 +1452,27 @@ async def get_dashboard(
                 "count": len(series),
             }
 
-        # skill breakdown — flatten every (dimension_name, score) pair, average per dimension in
-        # the rubric's declared order (the whitelist also drops anything not in this rubric).
-        pairs: list[tuple[str, int]] = []
-        for iv in interviews:
-            for entry in iv.scorecard.entries:
+        # 3. skill breakdown — every (dimension_name, score) of this kind's answers, averaged per
+        #    dimension in the kind's rubric order (the whitelist also drops anything not in it).
+        dimension_scores: list[tuple[str, int]] = []
+        for entries in kind_entries:
+            for entry in entries:
                 for score in entry.scores:
-                    pairs.append((score.dimension.name, score.score))
+                    dimension_scores.append((score.dimension.name, score.score))
         dim_names = (
-            [d.name for d in round_row.rubric.dimensions] if round_row.rubric is not None else None
+            [d.name for d in qtype.rubric.dimensions] if qtype.rubric is not None else None
         )
-        agg = aggregate_scores(pairs, dim_names)
+        agg = aggregate_scores(dimension_scores, dim_names)
         skill_breakdown = [
             {"dimension": name, "average": avg}
             for name, avg in agg["dimension_averages"].items()
         ]
 
-        # work on next — the improvement lines off the most recent interviews first, capped.
+        # 4. work on next — the improvement lines off this kind's answers, most recent interviews
+        #    first, capped.
         work_on_next: list[str] = []
-        for iv in reversed(interviews):          # newest first
-            for entry in iv.scorecard.entries:
+        for entries in reversed(kind_entries):          # newest first
+            for entry in entries:
                 if entry.improvement:
                     work_on_next.append(entry.improvement)
                     if len(work_on_next) >= WORK_ON_NEXT_CAP:
@@ -1447,8 +1481,8 @@ async def get_dashboard(
                 break
 
         return {
-            "round": round_row.slug,
-            "round_name": round_row.name,
+            "question_type": qtype.slug,
+            "question_type_name": qtype.name,
             "job": job_row.slug if job_row is not None else None,
             "job_name": job_name,
             "period": period,

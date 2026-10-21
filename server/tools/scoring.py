@@ -55,3 +55,51 @@ def aggregate_scores(
     }
     overall = round(sum(averages.values()) / len(averages), 2) if averages else 0
     return {"dimension_averages": averages, "overall": overall}
+
+
+def aggregate_by_kind(
+    answers: Iterable[tuple[str, list[tuple[str, int]]]],
+    kind_dimensions: dict[str, list[str]] | None = None,
+) -> dict:
+    """A whole interview's numbers when its answers can be of different KINDS, each graded on its own
+    question type's rubric (a mixed Practice interview: behavioral + coding).
+
+    answers:          one (kind name, dimension_scores) per graded question, in interview order.
+                      `dimension_scores` is that answer's (dimension_name, score) pairs, the same
+                      shape aggregate_scores takes; a skipped answer has none.
+    kind_dimensions:  OPTIONAL whitelist per kind, as in aggregate_scores (the live-grader path).
+
+    Example:
+        answers = [
+            ("Behavioral", [("Structure (situation, action, result)", 4), ("Communication", 5)]),
+            ("Coding",     [("Code correctness", 2), ("Communication", 4)]),
+            ("Coding",     [("Code correctness", 4), ("Communication", 4)]),
+            ("Behavioral", []),                     # skipped: no scores
+        ]
+        -> by_kind: Behavioral {Structure...: 4.0, Communication: 5.0}
+                    Coding     {Code correctness: 3.0, Communication: 4.0}
+           overall: mean of the three graded answers' own means (4.5, 3.0, 4.0) = 3.83
+
+    Per kind, the dimension averages come from aggregate_scores over that kind's answers only, so a
+    behavioral "Communication" never blends with a coding "Communication" (different rubric rows).
+    Kinds keep first-seen order. `overall` weighs every graded question the same whatever its kind,
+    and a skipped answer drops out instead of counting as 0. For a one-kind interview it equals the old
+    mean-of-dimension-means, since every graded answer scores every dimension.
+
+    Returns {"by_kind": [{"kind": name, "dimension_averages": {...}}, ...], "overall": float}.
+    """
+    scores_by_kind: dict[str, list[tuple[str, int]]] = {}
+    answer_means: list[float] = []
+    for kind, dimension_scores in answers:
+        scores_by_kind.setdefault(kind, []).extend(dimension_scores)
+        if dimension_scores:
+            answer_means.append(sum(score for _, score in dimension_scores) / len(dimension_scores))
+
+    by_kind = []
+    for kind, dimension_scores in scores_by_kind.items():
+        dimensions = kind_dimensions.get(kind) if kind_dimensions is not None else None
+        averages = aggregate_scores(dimension_scores, dimensions)["dimension_averages"]
+        if averages:
+            by_kind.append({"kind": kind, "dimension_averages": averages})
+    overall = round(sum(answer_means) / len(answer_means), 2) if answer_means else 0
+    return {"by_kind": by_kind, "overall": overall}

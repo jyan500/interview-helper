@@ -185,13 +185,17 @@ function ScorecardPanel({
                 <Donut value={card.overall} max={5} />
             </div>
 
-            {/* Criteria bars — one per rubric dimension, from the whole-interview averages. Shared
-                <ScoreBar> with the dashboard's skill breakdown. */}
-            <div className="flex flex-col gap-[13px]">
-                {Object.entries(card.dimension_averages).map(([dimension, avg]) => (
-                    <ScoreBar key={dimension} label={dimension} value={avg} />
-                ))}
-            </div>
+            {/* Criteria bars — one per rubric dimension, grouped by question KIND: each kind is graded
+                on its own question type's rubric, so a mixed Practice interview gets one group per kind
+                (the kind label shows only then). Shared <ScoreBar> with the dashboard's skill breakdown. */}
+            {card.kind_averages.map((group) => (
+                <div key={group.kind} className="flex flex-col gap-[13px]">
+                    {card.kind_averages.length > 1 && <div className="kicker">{group.kind}</div>}
+                    {Object.entries(group.dimension_averages).map(([dimension, avg]) => (
+                        <ScoreBar key={dimension} label={dimension} value={avg} />
+                    ))}
+                </div>
+            ))}
 
             {/* Per-question cards */}
             {card.answers.map((grade, i) => {
@@ -205,7 +209,9 @@ function ScorecardPanel({
                 return (
                     <div key={i} className="rounded-md border border-divider px-4 py-[15px]">
                         <div className="flex items-baseline justify-between gap-3">
-                            <span className="kicker">Question {i + 1}</span>
+                            <span className="kicker">
+                                Question {i + 1} · {grade.kind}
+                            </span>
                             {/* a skipped question is graded with no dimension scores (and is left out of
                                 the averages), so it shows as skipped rather than a 0 */}
                             <span className="text-[13px] text-neutral-300">

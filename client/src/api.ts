@@ -231,17 +231,24 @@ export interface AnswerGrade {
     question_id: string;
     question_title: string;
     question_text: string;
+    kind: string; // the question type's name ("Coding"): its rubric scored this answer
     dimension_scores: DimensionScore[];
     strength: string;
     gap: string;
     improvement: string;
 }
+// One question KIND's dimension averages. Each kind is graded on its own question type's rubric, so a
+// mixed Practice interview has one of these per kind (a one-kind interview has exactly one).
+export interface KindAverages {
+    kind: string; // "Coding"
+    dimension_averages: Record<string, number>; // dimension name -> average score
+}
 export interface Scorecard {
     interview_id: string;
     role: string;
     answers: AnswerGrade[];
-    dimension_averages: Record<string, number>; // dimension name -> average score
-    overall: number;
+    kind_averages: KindAverages[]; // in first-asked order
+    overall: number; // mean of each graded answer's own mean, so every question weighs the same
 }
 export interface ScorecardRequest {
     interview_id: string;
@@ -308,30 +315,30 @@ export interface ResumePayload extends SimulationFields {
     diagram: DiagramDoc | null; // that question's latest diagram (reseeds the canvas), or null
 }
 
-// The dashboard signal panel (GET /api/dashboard) — aggregates over the user's SIMULATIONS, scoped
-// to ONE round type (a simulation is graded on its round's rubric) and optionally one job. Mirrors
-// get_dashboard in tools/interview.py; keep in sync by hand. `round`/`round_name` echo the EFFECTIVE
-// round the backend resolved (the picker's value, else the most-recently-graded simulation's round,
-// else null when nothing is graded yet) so the picker can seed its label without a second lookup.
-// `job`/`job_name` echo the job filter ("company · title"), null when unfiltered. All scores are on
-// the app's 1-5 scale.
+// The dashboard signal panel (GET /api/dashboard) — aggregates over the user's graded interviews,
+// Practice and Job alike, scoped to ONE question kind (each answer is graded on its question type's
+// rubric) and optionally one job. Mirrors get_dashboard in tools/interview.py; keep in sync by hand.
+// `question_type`/`question_type_name` echo the EFFECTIVE kind the backend resolved (the picker's
+// value, else the most-recently-graded answer's kind, else null when nothing is graded yet) so the
+// picker can seed its label without a second lookup. `job`/`job_name` echo the job filter ("company ·
+// title"), null when unfiltered. All scores are on the app's 1-5 scale.
 //
 // The three time windows the panel can aggregate over — the client's window control sends one and
 // the response echoes the effective `period` back. Mirrors DASHBOARD_PERIODS in tools/interview.py.
 export type DashboardPeriod = "week" | "month" | "year";
 export interface Readiness {
-    series: number[]; // each graded interview's overall in the window, oldest -> newest (sparkline)
-    latest: number | null; // the newest overall, or null with no graded interviews in the window
+    series: number[]; // per graded interview in the window, its answers of this kind, oldest -> newest
+    latest: number | null; // the newest point, or null with no graded interviews in the window
     delta: number | null; // latest - earliest across the window; null with < 2 points
     count: number; // how many graded interviews back this
 }
 export interface SkillScore {
     dimension: string; // rubric dimension name ("Tradeoff reasoning")
-    average: number; // 1-5, averaged across the round's graded simulations in the window
+    average: number; // 1-5, averaged across this kind's graded answers in the window
 }
 export interface DashboardData {
-    round: string | null; // effective round slug, or null when the user has nothing graded
-    round_name: string | null; // its display name, for seeding the picker's label
+    question_type: string | null; // effective kind slug, or null when the user has nothing graded
+    question_type_name: string | null; // its display name, for seeding the picker's label
     job: string | null; // the job filter's slug, or null = across every job
     job_name: string | null; // "company · title" of that job
     period: DashboardPeriod; // the window actually applied
@@ -339,10 +346,10 @@ export interface DashboardData {
     skill_breakdown: SkillScore[];
     work_on_next: string[]; // recent improvement lines, newest first
 }
-// The query arg: the picked round slug (omit to let the backend pick the most recent), an optional
-// job slug (omit = every job), and the time window (omit to let the backend default it).
+// The query arg: the picked question-type slug (omit to let the backend pick the most recent), an
+// optional job slug (omit = every interview), and the time window (omit to let the backend default it).
 export interface DashboardQuery {
-    round?: string;
+    question_type?: string;
     job?: string;
     period?: DashboardPeriod;
 }
@@ -616,9 +623,10 @@ export const interviewApi = createApi({
         getRole: builder.query<RolePageItem, string>({
             query: (slug) => `/roles/${encodeURIComponent(slug)}`,
         }),
-        // The dashboard signal panel — round-, job- and window-scoped aggregates over simulations. A
-        // QUERY (cacheable GET); omit `round`/`job`/`period` to let the backend pick the most recent
-        // round, span every job, and default the window. Tagged "Dashboard" so a new grade refetches it.
+        // The dashboard signal panel — kind-, job- and window-scoped aggregates over graded interviews.
+        // A QUERY (cacheable GET); omit `question_type`/`job`/`period` to let the backend pick the most
+        // recent kind, span every interview, and default the window. Tagged "Dashboard" so a new grade
+        // refetches it.
         getDashboard: builder.query<DashboardData, DashboardQuery | void>({
             query: (arg) => ({ url: "/dashboard", params: (arg as DashboardQuery) ?? {} }),
             providesTags: ["Dashboard"],

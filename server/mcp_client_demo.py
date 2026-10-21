@@ -8,7 +8,7 @@ mcp_server.py. The only difference is we go past *listing* primitives to *invoki
 them:
 
     list_tools()          -> already done by mcp_server.py --list
-    read_resource(uri)    -> GET a resource (rubric://{role}, question://{id})
+    read_resource(uri)    -> GET a resource (rubric://{question_type}, question://{id})
     call_tool(name, args) -> run a tool  (record_answer, save_interview_summary)
 
 Every call goes through the full MCP protocol — arg-schema validation in, JSON
@@ -49,9 +49,9 @@ async def main() -> None:
         # WORKED EXAMPLE — read the rubric resource. Note the two-step unwrap:
         # read_resource gives a LIST of content blocks; block .text is a JSON
         # string, so json.loads it back into the dict your body returned.
-        rubric_blocks = await c.read_resource("rubric://backend-engineer")
+        rubric_blocks = await c.read_resource("rubric://coding")
         rubric = json.loads(rubric_blocks[0].text)
-        print("rubric://backend-engineer ->", rubric["status"])
+        print("rubric://coding ->", rubric["status"])
         print("  dimensions:", rubric["rubric"]["dimensions"])
 
         # TODO: read the question:// resource the same way and print the question text.

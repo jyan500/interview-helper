@@ -2116,3 +2116,38 @@ TYPE, so Practice and Job interviews run each kind of question the same way.
 Practice interview (~3-5 `gemini-3.1-flash-lite` calls) should ask for complexity and to trace the
 example; a behavioral Job round should behave as before. Then Phase 3 (grading by the answer's type
 rubric, scorecard grouped by type, dashboard by type incl. Practice; decide "Company and role fit").
+
+### 2026-10-20 — Question type owns interview + grading behavior, Phase 3: grading, scorecard, dashboard
+
+Every answer is now graded on its QUESTION TYPE's rubric, in Practice and Job interviews alike, and the
+legacy owners are gone. "Company and role fit" was dropped from the behavioral rubric (user decision:
+Practice has no company to judge it against).
+
+- **Scoring:** `tools/scoring.aggregate_by_kind(answers, kind_dimensions)` — per kind, dimension averages
+  (so behavioral and coding "Communication" never blend); `overall` = mean of each graded answer's own
+  mean (skips drop out; equals the old number for a one-kind interview). Docstring has a run-verified
+  example. `grading.aggregate` is the AnswerGrade adapter over it.
+- **Grading:** `load_grading_context` returns `rubrics` (kind -> dimensions/scale) + `question_kinds`
+  (question slug -> kind); `/api/scorecard` grades each question on its kind's rubric. `save_scorecard`
+  resolves dimension names per question type. Scorecard wire shape: `kind_averages` (list of {kind,
+  dimension_averages}) replaces `dimension_averages`; each answer carries `kind`.
+- **Coding grading line** (prompts.evaluate_answer code note): trace the question's own example(s)
+  through the FINAL code, report a mismatch / syntax error / empty-input crash exactly, never blame a
+  correct line (the 779e48f3 miss).
+- **Dashboard:** scoped by question kind (`?question_type=`), over Practice AND Job interviews, reading
+  only that kind's answers (readiness point per interview = mean of its answers of that kind). Client
+  SignalPanel picks from /api/question-types.
+- **MCP:** `rubric://{question_type}` (was `{role}`).
+- **Final migration `e8a0c2d4f6b7` (written, NOT applied):** deletes "Company and role fit" scores (14)
+  + the dimension; deletes old Practice scorecards (11 role-graded + 20 empty `seed-*` ones; interviews
+  stay, ungraded; 0 Job scorecards touched); deletes the 3 role rubrics; drops `rubrics.role_id`,
+  `rubrics.round_type_id`, the owner CHECK, `round_types.max_followups/allows_smart_voice`,
+  `interviews.max_followups`; `rubrics.question_type_id` NOT NULL. Models, seed and questions.json
+  (role rubric blocks removed) already match it.
+- Verified: py_compile, `npx tsc`, alembic single head; read-only run of load_grading_context,
+  get_scorecard (a Job scorecard -> kind_averages [Coding]) and get_dashboard for each kind.
+
+**ORDER MATTERS:** apply `e8a0c2d4f6b7` BEFORE restarting the backend on this code — `interviews.
+max_followups` is NOT NULL with no server default, so starting an interview fails until it's dropped.
+**Next:** apply, restart, re-grade `779e48f3` (1 grader call) to confirm the coding rubric + the example
+trace, check a scorecard and the dashboard in the browser, then commit and open the PR.
