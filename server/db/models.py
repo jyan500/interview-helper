@@ -670,6 +670,12 @@ class Interview(Base, TimestampMixin):
     # anyway), or moving this one column to a 1:1 side table so the hot row stays small.
     message_history: Mapped[list] = mapped_column(JSONB, default=list)
 
+    # TIMED INTERVIEWS — the limit picked at kickoff (NULL = untimed) and the candidate-turn time spent
+    # so far. The clock runs only during the candidate's turn: the client measures each turn and
+    # /api/answer adds it here (clamped to what's left), so LLM and TTS latency never cost them time.
+    time_limit_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    time_used_ms: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
     # outcome
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)   # save_interview_summary
     done: Mapped[bool] = mapped_column(Boolean, default=False)

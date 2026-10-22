@@ -411,6 +411,17 @@ get different questions and level-calibrated feedback).
 
 ## CURRENT STATUS (resume point)
 
+*2026-10-21: **Interview time limit** (branch `time-limit-mode`). A per-interview limit picked at kickoff
+(15/30/45/60 min, `TIME_LIMIT_MINUTES` in api.py), and the clock runs only during the candidate's turn.
+**Phase 1 (schema + backend) DONE:** migration `a1c3e5f7b9d0` adds `interviews.time_limit_seconds` (NULL =
+untimed) + `time_used_ms`. `/api/answer` takes a client-measured `turn_ms`, clamps it to what's left, and
+writes it on every exit, returning 409 once time is up. New `POST /api/interviews/{id}/final-answer` records the
+in-progress answer with no LLM call and marks the interview done. Answer prep is shared via `_prepare_answer`.
+Resume returns the limit + time used. Verified free (no LLM): clamping, time-up, final answer, untimed unaffected.
+**Next action: Phase 2 (client)**: kickoff `TimeLimitSelect`, `useTurnCountdown`, the SessionPage expiry path
+(stop mic / send draft → final-answer → scorecard), and the header countdown. See the plan in
+`~/.claude/plans/i-would-like-to-cozy-teacup.md`.*
+
 *2026-10-16: **Coding-round variety** (branch `increase-coding-question-variety`). Job coding rounds kept
 producing an intervals problem, then a graph problem. Causes: the coding `question_guidance` used
 `mergeIntervals(...)` as its example signature, and every generation was stateless. Fixes: neutral
