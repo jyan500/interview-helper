@@ -166,6 +166,7 @@ async def create_interview(
     job: str | None = None,
     round_type: str | None = None,
     generated: list[dict] | None = None,
+    time_limit_seconds: int | None = None,
 ) -> dict:
     """Start an interview: mint its id and INSERT the row. Called by POST /api/interview.
 
@@ -194,6 +195,8 @@ async def create_interview(
     `reference_briefs` row, and THOSE are the frozen plan instead of build_interview_plan's pick.
     From here the turn loop and the grader can't tell a simulation from a bank interview. The caller
     checks job ownership before spending on generation.
+
+    TIMED: `time_limit_seconds` is the limit picked at kickoff (None = untimed), frozen on the row.
 
     THE PERSONA IS BUILT FROM THE PLAN: `build_persona(kinds)` gets the plan's distinct question kinds,
     in plan order, as {name, interviewer_guidance, uses_candidate_background} dicts, and returns the
@@ -287,6 +290,7 @@ async def create_interview(
             profile_id=profile_id,   # Phase B: whose interview this is (None = nobody's)
             job_id=job_row.id if job_row is not None else None,
             round_type_id=round_row.id if round_row is not None else None,
+            time_limit_seconds=time_limit_seconds,
         )
         db.add(interview)
         # FLUSH (not commit): the INSERT runs and `interview.id` is assigned, but the transaction
@@ -413,6 +417,7 @@ async def load_interview_state(interview_id: str) -> dict:
             select(
                 Interview.id, Interview.profile_id, Interview.persona, Interview.followups_used,
                 Interview.done, Interview.message_history,
+                Interview.time_limit_seconds, Interview.time_used_ms,
                 Question.id, Question.slug, Question.text, QuestionType.has_diagram_canvas,
                 QuestionType.max_followups, QuestionType.name,
                 Role.slug, Level.slug,
@@ -426,6 +431,7 @@ async def load_interview_state(interview_id: str) -> dict:
         if row is None:
             return {"ok": False, "error": "Interview not found"}
         (pk, profile_id, persona, followups_used, done, message_history,
+         time_limit_seconds, time_used_ms,
          current_question_pk, current_qid, current_qtext, current_has_diagram_canvas,
          max_followups, current_kind, role_slug, level_slug) = row
 
@@ -486,6 +492,9 @@ async def load_interview_state(interview_id: str) -> dict:
             # the CURRENT question's type's budget (followups_used resets on every advance)
             "max_followups": max_followups,
             "done": done,
+            # the time limit (None = untimed) and the candidate-turn time spent so far
+            "time_limit_seconds": time_limit_seconds,
+            "time_used_ms": time_used_ms,
             "role": role_slug,
             # Phase D — the interview's seniority (the `levels.slug`, e.g. "mid"), stored at kickoff.
             # (`role` above is the same idea for the role dimension.)
@@ -506,6 +515,7 @@ async def save_interview_state(
     followups_used: int | None = None,
     message_history: list | None = None,
     done: bool | None = None,
+    time_used_ms: int | None = None,
 ) -> dict:
     """Write the spine back after a turn. The WRITE half of load -> run -> write-back.
 
@@ -534,7 +544,7 @@ async def save_interview_state(
         if interview_pk is None:
             return {"ok": False, "error": "interview is not found"}
         error = await _write_state(db, interview_pk, current_qid=current_qid, followups_used=followups_used,
-                                   message_history=message_history, done=done)
+                                   message_history=message_history, done=done, time_used_ms=time_used_ms)
         if error is not None:
             return {"ok": False, "error": error}
         await db.commit()
@@ -566,6 +576,7 @@ async def _write_state(
     followups_used: int | None,
     message_history: list | None,
     done: bool | None,
+    time_used_ms: int | None = None,
 ) -> str | None:
     """One UPDATE of the spine columns. None means "don't touch" (see save_interview_state)."""
     values = {}
@@ -580,6 +591,8 @@ async def _write_state(
         values["message_history"] = message_history
     if done is not None:
         values["done"] = done
+    if time_used_ms is not None:
+        values["time_used_ms"] = time_used_ms
     if values:
         # updated_at is bumped by the column's onupdate, which a Core UPDATE applies too
         await db.execute(update(Interview).where(Interview.id == interview_pk).values(**values))
@@ -632,6 +645,7 @@ async def commit_turn(
     followups_used: int | None = None,
     message_history: list | None = None,
     done: bool | None = None,
+    time_used_ms: int | None = None,
     open_qid: str | None = None,
     open_prompt: str | None = None,
 ) -> dict:
@@ -639,7 +653,7 @@ async def commit_turn(
 
     In order, each step only when its arguments are given:
       1. CLOSE the open turn with `answer` (`answered_qid` is the guard, as in record_answer)
-      2. WRITE the spine (current_qid / followups_used / message_history / done, as in
+      2. WRITE the spine (current_qid / followups_used / message_history / done / time_used_ms, as in
          save_interview_state, where None means "don't touch")
       3. OPEN the next turn (`open_qid` + `open_prompt`, as in open_turn)
 
@@ -663,7 +677,7 @@ async def commit_turn(
                 return {"ok": False, "error": error}
 
         error = await _write_state(db, interview_pk, current_qid=current_qid, followups_used=followups_used,
-                                   message_history=message_history, done=done)
+                                   message_history=message_history, done=done, time_used_ms=time_used_ms)
         if error is not None:
             return {"ok": False, "error": error}
 
@@ -1637,6 +1651,9 @@ async def load_resume_payload(interview_id: str) -> dict:
                                        interview.current_question.type)
                          if interview.current_question is not None else None),
             "diagram": diagram,
+            # a timed interview resumes with the time it has left
+            "time_limit_seconds": interview.time_limit_seconds,
+            "time_used_ms": interview.time_used_ms,
         }
 
 

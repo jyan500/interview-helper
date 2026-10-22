@@ -206,6 +206,10 @@ app.add_middleware(
 )
 
 
+# The time limits offered at kickoff, in minutes (the SPA's TIME_LIMIT_OPTIONS mirrors these).
+TIME_LIMIT_MINUTES = {15, 30, 45, 60}
+
+
 # --- request bodies. FastAPI validates+parses these from the JSON payload automatically.
 class StartRequest(BaseModel):
     role: str = "backend-engineer"
@@ -216,10 +220,13 @@ class StartRequest(BaseModel):
     # job supplies role + level (role/seniority above are ignored) and the round is GENERATED.
     job: str | None = None
     round: str | None = None
+    # TIMED INTERVIEW — the limit picked at kickoff, in minutes (one of TIME_LIMIT_MINUTES), or None
+    # for untimed. Frozen on the row; the clock runs only during the candidate's turns.
+    time_limit_minutes: int | None = None
 
 
-class AnswerRequest(BaseModel):
-    interview_id: str
+# What one candidate turn sends: shared by /api/answer and /api/interviews/{id}/final-answer.
+class AnswerBody(BaseModel):
     text: str
     # A coding round's editor contents, sent with the turn when they changed. Appended to `text` as
     # a fenced block, so the model and the transcript both see the code. Nothing is executed.
@@ -229,6 +236,13 @@ class AnswerRequest(BaseModel):
     # so the stored positions stay current). Validated here (size caps, real edge endpoints), stored
     # on the open turn, and shown to the model as diagram.serialize_diagram text, never as JSON.
     diagram: DiagramDoc | None = None
+    # A timed interview's clock: how long this turn was the CANDIDATE'S (the client measures it, and
+    # stops it while the answer is transcribed or the interviewer thinks or speaks). Ignored when untimed.
+    turn_ms: int | None = None
+
+
+class AnswerRequest(AnswerBody):
+    interview_id: str
 
 
 class ScorecardRequest(BaseModel):
@@ -512,6 +526,10 @@ async def start_interview(
     # kind brings its own guidance (QuestionType.interviewer_guidance), the same in Practice and Job
     # interviews, so a coding question is probed the same way in both.
     role, seniority = req.role, req.seniority
+    # a timed interview's limit must be one the picker offers (checked before any paid generation)
+    if req.time_limit_minutes is not None and req.time_limit_minutes not in TIME_LIMIT_MINUTES:
+        raise HTTPException(status_code=400, detail=f"unknown time limit: {req.time_limit_minutes} minutes")
+    time_limit_seconds = req.time_limit_minutes * 60 if req.time_limit_minutes is not None else None
     # THE CANDIDATE'S BACKGROUND (Profile page roles/projects/skills), read once, as prompt text ("" when
     # they've filled in nothing, and every template then leaves its paragraph out). FROZEN with the
     # persona: it's baked into the stored string, so editing the profile mid-interview changes nothing
@@ -582,7 +600,8 @@ async def start_interview(
     # (the model never picks), exactly as it used to take it from next_question. What changed is the
     # SOURCE: a frozen, finite plan instead of "the first at-or-below-level bank question", which is
     # what stops the interview from walking the entire bank.
-    created = await create_interview(role, seniority, build_persona, profile_id=user_id, **simulation)
+    created = await create_interview(role, seniority, build_persona, profile_id=user_id,
+                                     time_limit_seconds=time_limit_seconds, **simulation)
     if not created["ok"]:
         raise HTTPException(status_code=400, detail=created["error"])
     interview_id = created["interview_id"]
@@ -614,6 +633,8 @@ async def start_interview(
         "default_selection": not created["from_saved"] and req.job is None,
         "plan_size": created["plan_size"],
         "question": first_question,
+        # the limit the session's countdown starts from (None = untimed)
+        "time_limit_seconds": time_limit_seconds,
     }
 
 
@@ -677,48 +698,13 @@ async def submit_answer(
         # that vanished with the process.
         raise HTTPException(status_code=409, detail="this interview is already finished")
 
-    # CODING ROUNDS — the editor's contents ride along with the turn. They're folded into the message
-    # as a fenced block, so ONE string is what the model reads, what record_answer stores, and what
-    # the grader later sees (its template notices the fence and grades the code as typed, not spoken).
-    # Code alone is a valid turn ("here's my solution"), so the blank check runs on the combined text.
-    text = req.text
-    if req.code is not None and req.code.strip():
-        if len(req.code) > ANSWER_CODE_MAX_CHARS:
-            raise HTTPException(status_code=413, detail=f"code is too long (max {ANSWER_CODE_MAX_CHARS} characters)")
-        fence = f"```{req.language or ''}\n{req.code.rstrip()}\n```"
-        text = f"{text.rstrip()}\n\n{fence}" if text.strip() else fence
+    if _time_is_up(state):
+        # a timed interview's clock has run out: its last answer goes to /final-answer (no LLM call),
+        # never through another interviewer turn
+        raise HTTPException(status_code=409, detail="time is up for this interview")
+    time_used_ms = _time_used_after(state, req.turn_ms)
 
-    # SYSTEM-DESIGN CANVAS — unlike code, the diagram is NOT folded into `text`: it's stored on the
-    # open turn (turns.diagram), and the model reads its serialize_diagram text. That text is added to
-    # the prompt only when it differs from the question's last diagram, so a turn that only moved
-    # nodes around neither costs tokens nor replays the same block into message_history.
-    # A diagram for a question without a canvas (a stale client) is ignored.
-    diagram = req.diagram if state["current_has_diagram_canvas"] else None
-    diagram_text = None
-    if diagram is not None:
-        serialized = serialize_diagram(diagram)
-        if serialized != serialize_stored(state["current_diagram"]):
-            diagram_text = serialized
-
-    if not text.strip() and diagram_text is None:
-        # Reject a blank BEFORE the LLM call: it would otherwise close the open turn with "" and
-        # spend tokens on nothing. The open turn stays open, so the candidate just answers again.
-        # (PRODUCT choice, not a null-safety one — "" is a valid non-NULL answer as far as the
-        # schema cares; drop this guard if a blank should count as an "I don't know".)
-        raise HTTPException(status_code=400, detail="answer must not be empty")
-
-    if diagram is not None:
-        # Store it BEFORE the model decides, so it lands on every path (a clarification leaves the
-        # turn open, and the diagram rides on it until it closes). See save_open_turn_diagram.
-        saved = await save_open_turn_diagram(req.interview_id, state["current_qid"],
-                                             diagram.model_dump(mode="json"))
-        if not saved["ok"]:
-            raise HTTPException(status_code=409, detail=saved["error"])
-
-    # A diagram-only turn ("here's my updated design") is valid. It's recorded as a short marker, so
-    # the transcript and the grader read a turn rather than a blank answer.
-    if not text.strip():
-        text = "(updated the diagram)"
+    text, diagram_text = await _prepare_answer(req.interview_id, req, state)
     message = text
     if diagram_text is not None:
         message = f"{text}\n\nThe candidate updated their diagram on the canvas. Current version:\n{diagram_text}"
@@ -757,7 +743,7 @@ async def submit_answer(
     )
     llm_done = time.perf_counter()
     try:
-        return await _finish_turn(req, state, text, result)
+        return await _finish_turn(req, state, text, result, time_used_ms)
     finally:
         # One line per turn (PERF_LOG=1): where the wait went. requests > 1 means the reaction
         # validator retried, a full extra LLM round trip. db = every write after the LLM call.
@@ -769,11 +755,14 @@ async def submit_answer(
         )
 
 
-async def _finish_turn(req: AnswerRequest, state: dict, text: str, result) -> dict:
+async def _finish_turn(req: AnswerRequest, state: dict, text: str, result, time_used_ms: int | None) -> dict:
     """Steps 3-5 of /api/answer: act on the model's decision and write the turn back.
 
     Split out of submit_answer only so the route can time everything after the LLM call as one
     `db` stage, across every exit path, with a single try/finally.
+
+    `time_used_ms` is a timed interview's clock after this turn (None = untimed): EVERY exit writes it,
+    since the candidate spent the time whatever the model decided.
     """
     decision = result.output      # TurnReply(is_clarification, reaction, followup, ask_followup)
     #    Dump ONCE, here; every branch below writes this same value. mode="json" is what makes
@@ -800,12 +789,15 @@ async def _finish_turn(req: AnswerRequest, state: dict, text: str, result) -> di
     #
     #    A SKIP wins over this: "just tell me and move on" closes the question, so it advances below.
     if decision.answer_request and not decision.skip_requested:
+        # only the clock moves (and only when timed, so an untimed turn here stays write-free)
+        if time_used_ms is not None:
+            await save_interview_state(req.interview_id, time_used_ms=time_used_ms)
         return {"message": ANSWER_REQUEST_REPLY, "done": False}
 
     #    A SKIP request is never a clarification, whatever the model set: it falls through to record +
     #    advance below, so "let's move on" can't strand the candidate on the question.
     if decision.is_clarification and not decision.skip_requested:
-        await save_interview_state(req.interview_id, message_history=new_history)
+        await save_interview_state(req.interview_id, message_history=new_history, time_used_ms=time_used_ms)
         return {"message": decision.reaction, "done": False}
 
     # 4. RECORD — it's a real answer, so COMPLETE the open turn (the one presented last, either
@@ -847,6 +839,7 @@ async def _finish_turn(req: AnswerRequest, state: dict, text: str, result) -> di
         await commit_turn(req.interview_id,
                           answered_qid=state["current_qid"], answer=text,
                           followups_used=followups_used, message_history=new_history,
+                          time_used_ms=time_used_ms,
                           open_qid=state["current_qid"], open_prompt=decision.followup)
         return {"message": f"{decision.reaction}\n\n{decision.followup}", "done": False}
 
@@ -874,6 +867,7 @@ async def _finish_turn(req: AnswerRequest, state: dict, text: str, result) -> di
         await commit_turn(req.interview_id,
                           answered_qid=state["current_qid"], answer=text,
                           current_qid=next_qid, followups_used=0, message_history=new_history,
+                          time_used_ms=time_used_ms,
                           open_qid=next_qid, open_prompt=next_question["text"])
         return {"message": f"{decision.reaction}\n\nLet's move on to the next question. {next_question['text']}",
                 "done": False,
@@ -888,9 +882,112 @@ async def _finish_turn(req: AnswerRequest, state: dict, text: str, result) -> di
     #      is also the flag that makes the 409 guard at the top of this function work.
     await commit_turn(req.interview_id,
                       answered_qid=state["current_qid"], answer=text,
-                      message_history=new_history, done=True)
+                      message_history=new_history, done=True, time_used_ms=time_used_ms)
     return {"message": f"{decision.reaction}\n\nThat's the end of the interview. "
                        f"Thank you for your time!", "done": True}
+
+
+def _time_is_up(state: dict) -> bool:
+    """Whether a timed interview has spent its whole limit (always False when untimed)."""
+    limit = state["time_limit_seconds"]
+    return limit is not None and state["time_used_ms"] >= limit * 1000
+
+
+def _time_used_after(state: dict, turn_ms: int | None) -> int | None:
+    """A timed interview's clock after a turn of `turn_ms`, or None when untimed (nothing to write).
+
+    The client measures the turn, so it's clamped: never negative, never past the limit. A missing
+    turn_ms counts as 0, so an old client can't break the clock, only fail to run it.
+    e.g. limit 900s, used 899_000ms, turn_ms 5_000  ->  900_000 (only the 1s that was left)
+    """
+    limit = state["time_limit_seconds"]
+    if limit is None:
+        return None
+    remaining_ms = max(limit * 1000 - state["time_used_ms"], 0)
+    return state["time_used_ms"] + min(max(turn_ms or 0, 0), remaining_ms)
+
+
+async def _prepare_answer(interview_id: str, body: AnswerBody, state: dict) -> tuple[str, str | None]:
+    """The answer half of a turn, shared by /api/answer and /final-answer: fold the code into the text,
+    reject a blank, and store a changed diagram on the open turn.
+
+    Returns (text, diagram_text): `text` is what the turn records, and `diagram_text` is the diagram's
+    serialized text when the DESIGN changed (for the model's prompt), else None.
+    """
+    # CODING ROUNDS — the editor's contents ride along with the turn. They're folded into the message
+    # as a fenced block, so ONE string is what the model reads, what record_answer stores, and what
+    # the grader later sees (its template notices the fence and grades the code as typed, not spoken).
+    # Code alone is a valid turn ("here's my solution"), so the blank check runs on the combined text.
+    text = body.text
+    if body.code is not None and body.code.strip():
+        if len(body.code) > ANSWER_CODE_MAX_CHARS:
+            raise HTTPException(status_code=413, detail=f"code is too long (max {ANSWER_CODE_MAX_CHARS} characters)")
+        fence = f"```{body.language or ''}\n{body.code.rstrip()}\n```"
+        text = f"{text.rstrip()}\n\n{fence}" if text.strip() else fence
+
+    # SYSTEM-DESIGN CANVAS — unlike code, the diagram is NOT folded into `text`: it's stored on the
+    # open turn (turns.diagram), and the model reads its serialize_diagram text. That text is added to
+    # the prompt only when it differs from the question's last diagram, so a turn that only moved
+    # nodes around neither costs tokens nor replays the same block into message_history.
+    # A diagram for a question without a canvas (a stale client) is ignored.
+    diagram = body.diagram if state["current_has_diagram_canvas"] else None
+    diagram_text = None
+    if diagram is not None:
+        serialized = serialize_diagram(diagram)
+        if serialized != serialize_stored(state["current_diagram"]):
+            diagram_text = serialized
+
+    if not text.strip() and diagram_text is None:
+        # Reject a blank BEFORE the LLM call: it would otherwise close the open turn with "" and
+        # spend tokens on nothing. The open turn stays open, so the candidate just answers again.
+        # (PRODUCT choice, not a null-safety one — "" is a valid non-NULL answer as far as the
+        # schema cares; drop this guard if a blank should count as an "I don't know".)
+        raise HTTPException(status_code=400, detail="answer must not be empty")
+
+    if diagram is not None:
+        # Store it BEFORE the model decides, so it lands on every path (a clarification leaves the
+        # turn open, and the diagram rides on it until it closes). See save_open_turn_diagram.
+        saved = await save_open_turn_diagram(interview_id, state["current_qid"],
+                                             diagram.model_dump(mode="json"))
+        if not saved["ok"]:
+            raise HTTPException(status_code=409, detail=saved["error"])
+
+    # A diagram-only turn ("here's my updated design") is valid. It's recorded as a short marker, so
+    # the transcript and the grader read a turn rather than a blank answer.
+    if not text.strip():
+        text = "(updated the diagram)"
+    return text, diagram_text
+
+
+# ===========================================================================
+# POST /api/interviews/{interview_id}/final-answer : a TIMED interview's last word.
+#
+# When the clock runs out mid-answer, what the candidate had (the recording, a typed draft, the code
+# or the diagram) is still theirs to be graded on. This records it on the open turn and ENDS the
+# interview, with NO LLM call: there's no interviewer reply to give, and the client goes straight
+# to /api/scorecard. A dedicated route rather than a flag on /api/answer, since it skips everything
+# that route is for. With nothing in progress the client skips this and just calls /api/scorecard
+# (which ignores open turns and marks the interview done itself).
+# ===========================================================================
+@app.post("/api/interviews/{interview_id}/final-answer")
+async def submit_final_answer(
+    interview_id: str,
+    body: AnswerBody,
+    user_id: str = Depends(require_user),
+) -> dict:
+    state = await load_interview_state(interview_id)
+    if not state["ok"]:
+        raise HTTPException(status_code=404, detail="unknown interview")
+    require_ownership(state["profile_id"], user_id)
+    if state["done"]:
+        raise HTTPException(status_code=409, detail="this interview is already finished")
+
+    text, _ = await _prepare_answer(interview_id, body, state)
+    committed = await commit_turn(interview_id, answered_qid=state["current_qid"], answer=text,
+                                  done=True, time_used_ms=_time_used_after(state, body.turn_ms))
+    if not committed["ok"]:
+        raise HTTPException(status_code=409, detail=committed["error"])
+    return {"done": True}
 
 
 # ===========================================================================
@@ -1365,6 +1462,9 @@ async def resume_interview(
         "question": payload["question"],
         # the current question's latest diagram (reseeds the canvas), or None
         "diagram": payload["diagram"],
+        # a timed interview's limit (None = untimed) and the candidate-turn time already spent
+        "time_limit_seconds": payload["time_limit_seconds"],
+        "time_used_ms": payload["time_used_ms"],
     }
 
 
