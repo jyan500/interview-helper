@@ -20,7 +20,12 @@
  *
  * NO QUESTION COUNTER, deliberately: an interview has no fixed length — the interviewer may probe
  * with follow-ups (or not) depending on the answer, so "question N of M" isn't knowable ahead of
- * time. The header shows elapsed time only; the right rail lists the turns actually asked so far.
+ * time. The right rail lists the turns actually asked so far.
+ *
+ * A TIMED interview (a limit picked at kickoff) shows its time left in the header; an untimed one shows
+ * no clock. The clock runs only on the candidate's turn (see useTurnCountdown). When it runs out, the
+ * answer in progress is sent as the final one (POST /final-answer, no interviewer reply) and the
+ * interview is graded on what was submitted (handleTimeUp).
  */
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router";
@@ -35,11 +40,13 @@ import Button from "../components/Button";
 import Tooltip from "../components/Tooltip";
 import GuidedTour from "../components/tour/GuidedTour";
 import NeedHelpButton from "../components/tour/NeedHelpButton";
+import CountdownClock from "../components/CountdownClock";
 import { sessionTourSteps } from "../components/tour/steps";
 import {
     useGetScorecardMutation,
     useLazyGetResumeQuery,
     useSubmitAnswerMutation,
+    useSubmitFinalAnswerMutation,
     type DiagramDoc,
     type PlanQuestion,
 } from "../api";
@@ -57,7 +64,8 @@ import {
     withCodeFence,
 } from "../helpers";
 import { CODING_PROBLEM_CUE, DIAGRAM_ONLY_ANSWER, type AnswerMode, type CodeLanguage } from "../constants";
-import { useElapsedClock, useInterviewSettings, useMicOptions, useNoInputPrompt, useSpeaking } from "../hooks";
+import { useInterviewSettings, useMicOptions, useNoInputPrompt, useSpeaking, useTurnCountdown } from "../hooks";
+import { useToast } from "../toast/ToastProvider";
 import {
     pickPreferredVoice,
     setVoicePrefs,
@@ -109,6 +117,18 @@ export default function SessionPage() {
     // flashed. A single latch set-at-start / cleared-at-reveal has no such gap by construction.
     const [preparing, setPreparing] = useState(false);
 
+    // TIMED INTERVIEW — the limit (null = untimed: no clock) and the time the server says was already
+    // used. A fresh start gets the limit from the producer (used = 0); a resume sets both from its
+    // payload. `timeUp` freezes the controls once the clock runs out; the ref mirrors it for handleSend,
+    // which the voice hook calls from an older render's closure.
+    const [timeLimitMs, setTimeLimitMs] = useState<number | null>(
+        nav.timeLimitSeconds ? nav.timeLimitSeconds * 1000 : null,
+    );
+    const [timeUsedMs, setTimeUsedMs] = useState(0);
+    const [timeUp, setTimeUp] = useState(false);
+    const timeUpRef = useRef(false);
+    const { toast } = useToast();
+
     // CODING QUESTIONS — the coding panel beside the conversation, while the question on the table has
     // one (its TYPE decides, like the diagram canvas, so a Practice interview with a coding question in
     // it shows the editor for that question only). A fresh start knows from the first question; a resume
@@ -152,6 +172,7 @@ export default function SessionPage() {
     // on the producer; the scorecard is fetched once, on end.
     const [submitAnswer, { isLoading: answering }] = useSubmitAnswerMutation();
     const [getScorecard, { isLoading: scoring }] = useGetScorecardMutation();
+    const [submitFinalAnswer] = useSubmitFinalAnswerMutation();
     // Resume — lazy so it fires only when entering in resume mode (see the seed effect below),
     // not on every mount. The backend 409s unless this is the most recent unfinished interview.
     const [triggerResume] = useLazyGetResumeQuery();
@@ -282,6 +303,11 @@ export default function SessionPage() {
                 // Set before the current question is spoken below, so a smart round's mic auto-arms
                 // when that speech ends (the edge effect) and a manual-only round's never does.
                 setVoiceMode(defaultVoiceMode(payload.question?.allows_smart_voice));
+                // A timed interview continues the server's clock (used up already = straight to grading).
+                if (payload.time_limit_seconds) {
+                    setTimeLimitMs(payload.time_limit_seconds * 1000);
+                    setTimeUsedMs(payload.time_used_ms);
+                }
                 const coding = payload.question?.has_code_editor ?? false;
                 const problemText = payload.question?.text;
                 const shown = (text: string) => (coding ? cueProblem(text, problemText, CODING_PROBLEM_CUE) : text);
@@ -355,6 +381,12 @@ export default function SessionPage() {
         const text = (textOverride ?? draft).trim();
         const sentCode = codeChanged ? code : undefined;
         const sentDiagram = diagramChanged ? diagram : undefined;
+        // Time ran out: this is the FINAL answer (the stopped recording's transcript, or the draft /
+        // code / diagram handleTimeUp sent), recorded with no interviewer reply, then graded.
+        if (timeUpRef.current) {
+            await handleFinalAnswer(text, sentCode, sentDiagram);
+            return;
+        }
         // Nothing to send: a pure-silence voice misfire (onCaptureStopped already raised `preparing`),
         // or a terminal state. Release the flag so the "…" doesn't hang, and bail without POSTing.
         if (!interviewId || (!text && !sentCode && !diagramContentChanged) || done || ended) {
@@ -392,6 +424,7 @@ export default function SessionPage() {
                 text,
                 ...(sentCode ? { code: sentCode, language } : {}),
                 ...(sentDiagram ? { diagram: sentDiagram } : {}),
+                ...(timeLimitMs !== null ? { turn_ms: takeTurnMs() } : {}),
             }).unwrap();
         } catch (e) {
             // Surface the failure IN the pending bubble — don't leave it "thinking" forever, and don't
@@ -449,6 +482,67 @@ export default function SessionPage() {
         navigate(`/interviews/${interviewId}`, { replace: true });
     }
 
+    // ── TIME'S UP ─────────────────────────────────────────────────────────────────────────────────
+    // The countdown hit 0 (it only runs on the candidate's turn, so the interviewer is never mid-reply).
+    // Whatever the candidate has in progress is still theirs to be graded on:
+    //   1. freeze the controls (timeUp) and flag handleSend's final-answer path (timeUpRef)
+    //   2. recording? stop it: its transcript arrives through onFinalTranscript -> handleSend
+    //   3. otherwise handleSend() now: it sends the typed draft / changed code / changed diagram, or
+    //      goes straight to grading when there's nothing (see handleFinalAnswer)
+    function handleTimeUp() {
+        if (!interviewId || done || ended) return;
+        timeUpRef.current = true;
+        setTimeUp(true);
+        toast("The interview has ended, submitting your answers...", { variant: "info" });
+        if (listening || confirming) {
+            stop();
+            return;
+        }
+        handleSend();
+    }
+
+    // The final answer of a timed-out interview: show it, record it (POST /final-answer: no LLM call, the
+    // interview ends), then grade via handleEnd. Nothing in progress = straight to grading, since
+    // /scorecard ignores the open turn. A failed record still grades what was already submitted.
+    async function handleFinalAnswer(text: string, sentCode: string | undefined, sentDiagram: DiagramDoc | undefined) {
+        if (!interviewId) return;
+        if (text || sentCode || diagramContentChanged) {
+            setTranscript((t) => [
+                ...t,
+                {
+                    id: nextId(),
+                    who: "you",
+                    text: withCodeFence(text, sentCode, language) || DIAGRAM_ONLY_ANSWER,
+                    diagramUpdated: diagramContentChanged,
+                },
+            ]);
+            setDraft("");
+            try {
+                await submitFinalAnswer({
+                    interview_id: interviewId,
+                    text,
+                    ...(sentCode ? { code: sentCode, language } : {}),
+                    ...(sentDiagram ? { diagram: sentDiagram } : {}),
+                    turn_ms: takeTurnMs(),
+                }).unwrap();
+            } catch (e) {
+                console.error(e);
+                toast("Couldn't record your last answer. Grading the rest.", { variant: "error" });
+            }
+        }
+        await handleEnd();
+    }
+
+    // The countdown itself. `running` = the candidate's turn: the single flow flag (`preparing`, raised
+    // at mic-stop or send) and TTS playback (`speaking`) pause it, so transcription, the LLM and the
+    // interviewer's voice never cost time. Inert when untimed.
+    const { remainingMs, takeTurnMs } = useTurnCountdown({
+        limitMs: timeLimitMs,
+        usedMs: timeUsedMs,
+        running: timeLimitMs !== null && !preparing && !speaking && !done && !ended && !timeUp,
+        onExpire: handleTimeUp,
+    });
+
     // ── Smart-mode: open the mic ONLY on the AI-finished-speaking EDGE ───────────────────────────
     // Trigger on the `speaking` true->false EDGE (not merely "not speaking"): there's a brief gap
     // between an answer submitting and TTS starting where a level check would fire and record over the
@@ -460,13 +554,13 @@ export default function SessionPage() {
         // `mode === "voice"` gate: a text-mode answer's TTS also runs through `speaking`, and without
         // this it would silently re-open the mic behind the composer — the same auto-submit-while-typing
         // path, just re-armed a turn later. The mic auto-arms only when the voice screen is showing.
-        if (voiceMode !== "smart" || mode !== "voice" || !interviewId || done || ended) return;
+        if (voiceMode !== "smart" || mode !== "voice" || !interviewId || done || ended || timeUp) return;
         // `!preparing` is the single flow flag standing in for `!transcribing && !answering` (both run
         // inside its span); `!speaking` still guards the playback half that runs after preparing clears.
         if (wasSpeaking && !speaking && !preparing && !listening && !confirming) {
             start();
         }
-    }, [voiceMode, mode, speaking, preparing, interviewId, done, ended, listening, confirming, start]);
+    }, [voiceMode, mode, speaking, preparing, interviewId, done, ended, timeUp, listening, confirming, start]);
 
     // ── Pause the mic on voice->text, resume it on text->voice ───────────────────────────────────
     // The voice turn-taking (auto-arm + VAD countdown -> stop+submit) must not run while the candidate
@@ -487,12 +581,12 @@ export default function SessionPage() {
             if (listening) cancel();
         } else if (
             voiceMode === "smart" &&
-            interviewId && !done && !ended &&
+            interviewId && !done && !ended && !timeUp &&
             !speaking && !preparing && !listening && !confirming
         ) {
             start();
         }
-    }, [mode, voiceMode, interviewId, done, ended, speaking, preparing, listening, confirming, cancel, start]);
+    }, [mode, voiceMode, interviewId, done, ended, timeUp, speaking, preparing, listening, confirming, cancel, start]);
 
     // ── "Still there?" — any keypress keeps the turn open during the countdown ───────────────────
     useEffect(() => {
@@ -508,9 +602,8 @@ export default function SessionPage() {
     const interviewerLines = useMemo(() => transcript.filter((l) => l.who === "interviewer"), [transcript]);
     const currentQuestion = interviewerLines[interviewerLines.length - 1];
 
-    // A real elapsed-time clock (replaces the mock "08:42"), started at mount — see useElapsedClock.
-    const clock = useElapsedClock();
-
+    // Time's up freezes the controls exactly like ending does (the interview is on its way to grading).
+    const frozen = ended || timeUp;
 
     return (
         <div className="flex h-screen flex-col bg-bg text-ink">
@@ -524,7 +617,10 @@ export default function SessionPage() {
                 </div>
                 <div className="flex items-center gap-[18px] text-[13px] text-neutral-300">
                     {!ended && <NeedHelpButton label="How it works" onClick={() => setTouring(true)} disabled={touring} />}
-                    <span className="font-heading text-[18px] text-ink">{clock}</span>
+                    {/* timed interviews only: an untimed one shows no clock */}
+                    {remainingMs !== null && (
+                        <CountdownClock remainingMs={remainingMs} paused={preparing || speaking || frozen} />
+                    )}
                     <Button
                         variant="ghost"
                         icon
@@ -571,7 +667,7 @@ export default function SessionPage() {
                         countdownMs={countdownMs}
                         noInput={noInput}
                         done={done}
-                        ended={ended}
+                        ended={frozen}
                         onToggleMic={() => (listening ? stop() : start())}
                         onCheckMic={handleCheckMic}
                         onToggleVoiceMode={() => setVoiceMode((m) => (m === "manual" ? "smart" : "manual"))}
@@ -592,7 +688,7 @@ export default function SessionPage() {
                         // with an empty draft (a layout-only move doesn't: the server would 400 it)
                         canSend={draft.trim() !== "" || codeChanged || diagramContentChanged}
                         done={done}
-                        ended={ended}
+                        ended={frozen}
                         onSend={() => handleSend()}
                         onSwitch={() => setMode("voice")}
                         onEnd={handleEnd}
@@ -607,7 +703,7 @@ export default function SessionPage() {
                         language={language}
                         onChangeLanguage={handleChangeLanguage}
                         mode={mode}
-                        readOnly={done || ended}
+                        readOnly={done || frozen}
                     />
                 ) : hasDiagramCanvas ? (
                     // Keyed by the question: a new one remounts the canvas from `diagram` (blank on an
@@ -626,7 +722,7 @@ export default function SessionPage() {
                             initialDiagram={diagram}
                             onChange={setDiagram}
                             mode={mode}
-                            readOnly={done || ended}
+                            readOnly={done || frozen}
                         />
                     </Suspense>
                 ) : (

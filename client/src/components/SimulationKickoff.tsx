@@ -34,6 +34,7 @@ import NewJobModal from "./NewJobModal";
 import OverwriteInterviewModal from "./OverwriteInterviewModal";
 import RoundCard, { RoundCardSkeleton } from "./RoundCard";
 import StartingOverlay from "./StartingOverlay";
+import TimeLimitSelect from "./TimeLimitSelect";
 
 // How many placeholder round cards to show while the job or the round types load — one per seeded
 // round format (behavioral, coding, system design).
@@ -65,6 +66,8 @@ export default function SimulationKickoff() {
         picked ?? (job && job.job_id === defaultJobId ? { value: job.job_id, label: `${job.company} · ${job.title}` } : null);
 
     const startSequence = useStartSequence();
+    // the time limit every round card here starts with (minutes, null = none)
+    const [timeLimit, setTimeLimit] = useState<number | null>(null);
     const hasJobs = newestLoading || Boolean(newestJob);
     const cardsLoading = defaultLoading || roundsLoading || jobFetching || !job;
 
@@ -94,15 +97,21 @@ export default function SimulationKickoff() {
                 </p>
             ) : (
                 <>
-                    <div className="field mt-4 sm:max-w-[420px]">
-                        <label>Job</label>
-                        <AsyncPaginateSelect
-                            fetchPage={triggerJobs}
-                            value={selected}
-                            onChange={(option) => option && setPicked(option)}
-                            placeholder="Search jobs…"
-                            isLoading={!picked && (defaultLoading || jobFetching)}
-                        />
+                    <div className="mt-4 flex flex-col gap-4 sm:flex-row">
+                        <div className="field sm:w-[420px]">
+                            <label>Job</label>
+                            <AsyncPaginateSelect
+                                fetchPage={triggerJobs}
+                                value={selected}
+                                onChange={(option) => option && setPicked(option)}
+                                placeholder="Search jobs…"
+                                isLoading={!picked && (defaultLoading || jobFetching)}
+                            />
+                        </div>
+                        <div className="field sm:w-[220px]">
+                            <label>Time limit</label>
+                            <TimeLimitSelect value={timeLimit} onChange={setTimeLimit} />
+                        </div>
                     </div>
                     <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
                         {cardsLoading
@@ -112,7 +121,7 @@ export default function SimulationKickoff() {
                                       key={round.slug}
                                       round={round}
                                       disabled={startSequence.starting || startSequence.resumableLoading}
-                                      onStart={() => startSequence.startRound(job, round)}
+                                      onStart={() => startSequence.startRound(job, round, timeLimit)}
                                   />
                               ))}
                     </div>

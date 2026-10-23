@@ -31,6 +31,7 @@ import OverwriteInterviewModal from "../components/OverwriteInterviewModal";
 import Pagination from "../components/Pagination";
 import RoundCard, { RoundCardSkeleton } from "../components/RoundCard";
 import StartingOverlay from "../components/StartingOverlay";
+import TimeLimitSelect from "../components/TimeLimitSelect";
 
 export default function JobDetailPage() {
     const { id } = useParams();
@@ -48,6 +49,8 @@ export default function JobDetailPage() {
     const resumableId = resumableData?.items[0]?.interview_id ?? null;
 
     const startSequence = useStartSequence();
+    // the time limit every round card here starts with (minutes, null = none)
+    const [timeLimit, setTimeLimit] = useState<number | null>(null);
 
     const [confirmDelete, setConfirmDelete] = useState(false);
     const [deleteJob, { isLoading: deleting }] = useDeleteJobMutation();
@@ -128,6 +131,10 @@ export default function JobDetailPage() {
                             <p className="mt-1 text-[13px] text-neutral-400">
                                 Each round is written for this job: the questions and how they're graded.
                             </p>
+                            <div className="field mt-4 sm:w-[220px]">
+                                <label>Time limit</label>
+                                <TimeLimitSelect value={timeLimit} onChange={setTimeLimit} />
+                            </div>
                             <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
                                 {roundsLoading
                                     ? Array.from({ length: 3 }).map((_, i) => <RoundCardSkeleton key={i} />)
@@ -136,7 +143,7 @@ export default function JobDetailPage() {
                                               key={round.slug}
                                               round={round}
                                               disabled={startSequence.starting || startSequence.resumableLoading}
-                                              onStart={() => startSequence.startRound(job, round)}
+                                              onStart={() => startSequence.startRound(job, round, timeLimit)}
                                           />
                                       ))}
                             </div>

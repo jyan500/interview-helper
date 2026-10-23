@@ -411,6 +411,18 @@ export function formatTime(iso: string): string {
 }
 
 /**
+ * A timed interview's countdown as "mm:ss", from the milliseconds left. Rounds UP, so the clock reads
+ * 00:01 until time is really up, never 00:00 with time still on it.
+ * e.g. 899_200 -> "15:00", 61_000 -> "01:01", 0 -> "00:00"
+ */
+export function formatCountdown(ms: number): string {
+    const totalSeconds = Math.ceil(Math.max(ms, 0) / 1000);
+    const mm = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
+    const ss = String(totalSeconds % 60).padStart(2, "0");
+    return `${mm}:${ss}`;
+}
+
+/**
  * A scorecard's overall (already round(,2) server-side) as a table cell reads it: always at least one
  * decimal so a whole number shows as "4.0" not "4", but keeping the second decimal when there is one
  * ("4.25"). Matches how the mocks render scores.
