@@ -233,6 +233,24 @@ export const INTERVIEW_KINDS = [
 ] as const;
 export type InterviewKind = (typeof INTERVIEW_KINDS)[number]["value"];
 
+/**
+ * The time limits offered at kickoff (react-select shape), in minutes; null = no limit. Mirrors
+ * TIME_LIMIT_MINUTES in server/api.py, which 400s any other value. The clock runs only during the
+ * candidate's turns (see useTurnCountdown), so LLM and TTS latency never cost them time.
+ */
+export type TimeLimitOption = { value: number | null; label: string };
+export const TIME_LIMIT_OPTIONS: TimeLimitOption[] = [
+    { value: null, label: "No time limit" },
+    { value: 15, label: "15 minutes" },
+    { value: 30, label: "30 minutes" },
+    { value: 45, label: "45 minutes" },
+    { value: 60, label: "60 minutes" },
+];
+export const DEFAULT_TIME_LIMIT_OPTION = TIME_LIMIT_OPTIONS[0];
+
+/** Under this much time left, a timed interview's countdown turns to its warning color. */
+export const TIME_LOW_WARNING_MS = 60_000;
+
 /** How the candidate answers in an interview: speaking (STT) or typing. */
 export type AnswerMode = "voice" | "text";
 

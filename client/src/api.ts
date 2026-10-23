@@ -31,6 +31,8 @@ export interface InterviewResponse {
     plan_size?: number;
     // The plan question on the table (never a probe) — the coding panel's problem statement.
     question?: PlanQuestion;
+    // A timed interview's limit, which the session's countdown starts from (null = untimed).
+    time_limit_seconds?: number | null;
 }
 // A plan question as the start/answer/resume responses carry it: its slug and full text, and its
 // question TYPE's flags: whether it shows the diagram canvas (system design) or the code editor
@@ -75,9 +77,12 @@ export interface DiagramDoc {
 // a levels.slug ("mid"). The backend defaults both, but the picker always sends them.
 // INTERVIEW SIMULATION — or a saved job's slug + a round_types slug, sent together (the backend
 // 400s on one without the other). The job supplies role + level, so the two shapes never mix.
-export type StartInterviewRequest =
+// TIMED INTERVIEW — either shape may carry `time_limit_minutes` (one of TIME_LIMIT_OPTIONS' values),
+// frozen on the interview; absent = untimed.
+export type StartInterviewRequest = (
     | { role: string; seniority: string }
-    | { job: string; round: string };
+    | { job: string; round: string }
+) & { time_limit_minutes?: number };
 // Phase D — the picker's options, from GET /api/roles and GET /api/levels. Each row pairs the
 // slug the client sends back with the name it shows the user (see list_roles/list_levels).
 // The fields every paginated lookup row shares: the `slug` (the app's outward identifier everywhere —
@@ -173,6 +178,8 @@ export interface AnswerResponse {
     done?: boolean; // true once the client-driven loop exhausts the question bank
     question?: PlanQuestion; // present only when the turn ADVANCED to the next plan question
 }
+// One candidate turn, as /answer and /interviews/{id}/final-answer both take it (AnswerBody in
+// server/api.py). The interview_id is in the body for /answer and in the path for final-answer.
 export interface AnswerRequest {
     interview_id: string;
     text: string;
@@ -182,6 +189,8 @@ export interface AnswerRequest {
     // A system-design question's canvas, stored on the open turn. Sent on ANY change (layout included,
     // so positions persist); the server re-reads it to the interviewer only when the design changed.
     diagram?: DiagramDoc;
+    // A timed interview's clock: how long this turn was the candidate's (see useTurnCountdown).
+    turn_ms?: number;
 }
 
 // INTERVIEW SIMULATION — a round FORMAT a job can be simulated in (GET /api/round-types), mirroring
@@ -313,6 +322,8 @@ export interface ResumePayload extends SimulationFields {
     current_question: string | null;
     question: PlanQuestion | null; // the PARENT plan question on the table, even mid-probe (its flags pick the workspace + voice mode)
     diagram: DiagramDoc | null; // that question's latest diagram (reseeds the canvas), or null
+    time_limit_seconds: number | null; // a timed interview's limit (null = untimed)
+    time_used_ms: number; // the candidate-turn time already spent against it
 }
 
 // The dashboard signal panel (GET /api/dashboard) — aggregates over the user's graded interviews,
@@ -559,6 +570,16 @@ export const interviewApi = createApi({
             query: (body) => ({ url: "/answer", method: "POST", body }),
             // each answer bumps updated_at (list order) and the final one flips `done` — both change
             // what the banner surfaces.
+            invalidatesTags: ["Interviews"],
+        }),
+        // A TIMED interview's last word: when the clock runs out mid-answer, record what the candidate
+        // had and end the interview (no interviewer reply, no LLM call). The scorecard follows.
+        submitFinalAnswer: builder.mutation<{ done: boolean }, AnswerRequest>({
+            query: ({ interview_id, ...body }) => ({
+                url: `/interviews/${interview_id}/final-answer`,
+                method: "POST",
+                body,
+            }),
             invalidatesTags: ["Interviews"],
         }),
         // Phase 5 — grade the whole interview. A mutation (not a query): it's a POST that
@@ -828,6 +849,7 @@ export const interviewApi = createApi({
 export const {
     useStartInterviewMutation,
     useSubmitAnswerMutation,
+    useSubmitFinalAnswerMutation,
     useGetScorecardMutation,
     useTranscribeMutation,
     useTtsMutation,

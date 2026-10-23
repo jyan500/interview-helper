@@ -9,7 +9,7 @@
  * on the default's slugs so they re-seed when it changes (e.g. on the Profile page) but never clobber
  * a manual pick — see useSeededSelectFields. "Set as default" saves the current picks as that default.
  */
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 import {
     useGetProfileQuery,
     useLazyGetLevelsQuery,
@@ -24,17 +24,20 @@ import { ControlledAsyncPaginateSelect } from "./ControlledAsyncPaginateSelect";
 import Button from "./Button";
 import OverwriteInterviewModal from "./OverwriteInterviewModal";
 import StartingOverlay from "./StartingOverlay";
+import TimeLimitSelect from "./TimeLimitSelect";
 
 // Each field holds react-select's Option ({ value: slug, label: name }) or null until picked; onStart
-// unwraps `.value` to the slug the backend wants and `.label` for the session header.
+// unwraps `.value` to the slug the backend wants and `.label` for the session header. `timeLimit` is
+// the limit in minutes, null for none (optional, so it never blocks Start).
 type StartFormValues = {
     role: SelectOption | null;
     level: SelectOption | null;
+    timeLimit: number | null;
 };
 
 export default function BankKickoffCard() {
     const { control, handleSubmit, formState, setValue, watch } = useForm<StartFormValues>({
-        defaultValues: { role: null, level: null },
+        defaultValues: { role: null, level: null, timeLimit: null },
         mode: "onChange",
     });
 
@@ -70,10 +73,10 @@ export default function BankKickoffCard() {
 
     // handleSubmit only calls onStart once both required picks are valid, so the narrowing never bails.
     const startSequence = useStartSequence();
-    function onStart({ role, level }: StartFormValues) {
+    function onStart({ role, level, timeLimit }: StartFormValues) {
         if (!role || !level) return;
         startSequence.start(
-            { role: role.value, seniority: level.value },
+            { role: role.value, seniority: level.value, time_limit_minutes: timeLimit ?? undefined },
             { role: role.label, level: level.label }, // human-readable labels for the session header
         );
     }
@@ -117,6 +120,16 @@ export default function BankKickoffCard() {
                             fetchPage={triggerLevels}
                             placeholder="Search levels…"
                             isLoading={profileLoading}
+                        />
+                    </div>
+                    <div className="field">
+                        <label>Time limit</label>
+                        <Controller
+                            control={control}
+                            name="timeLimit"
+                            render={({ field }) => (
+                                <TimeLimitSelect value={field.value} onChange={field.onChange} onBlur={field.onBlur} />
+                            )}
                         />
                     </div>
                 </div>

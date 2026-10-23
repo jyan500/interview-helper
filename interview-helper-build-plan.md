@@ -418,9 +418,14 @@ untimed) + `time_used_ms`. `/api/answer` takes a client-measured `turn_ms`, clam
 writes it on every exit, returning 409 once time is up. New `POST /api/interviews/{id}/final-answer` records the
 in-progress answer with no LLM call and marks the interview done. Answer prep is shared via `_prepare_answer`.
 Resume returns the limit + time used. Verified free (no LLM): clamping, time-up, final answer, untimed unaffected.
-**Next action: Phase 2 (client)**: kickoff `TimeLimitSelect`, `useTurnCountdown`, the SessionPage expiry path
-(stop mic / send draft → final-answer → scorecard), and the header countdown. See the plan in
-`~/.claude/plans/i-would-like-to-cozy-teacup.md`.*
+**Phase 2 (client) DONE, type-checks clean:** a `TimeLimitSelect` on the Practice kickoff, the dashboard job
+kickoff and the Job page; `useTurnCountdown` (hooks.ts) runs only while `!preparing && !speaking` and sends
+`turn_ms` with each answer. `handleTimeUp` in SessionPage stops the mic or sends the draft, then
+`/final-answer` → `/scorecard`. The header shows `CountdownClock` for timed interviews and **no clock at all
+when untimed** (`useElapsedClock` removed).
+**Next action: browser pass.** Check that the clock pauses on the interviewer's turn, that time running out
+mid-draft (text) and mid-recording (voice) gets graded, that a refresh then resume continues the clock, and
+that an untimed interview is unchanged.*
 
 *2026-10-16: **Coding-round variety** (branch `increase-coding-question-variety`). Job coding rounds kept
 producing an intervals problem, then a graph problem. Causes: the coding `question_guidance` used

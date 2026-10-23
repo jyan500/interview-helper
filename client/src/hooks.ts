@@ -135,8 +135,9 @@ export type StartLabels = Pick<SessionNavState, "role" | "level" | "company" | "
  * The interview KICKOFF sequence, shared by every producer (the Questions page's bank start, and the
  * round cards on a Job page and the Dashboard): confirm before overwriting an unfinished interview,
  * POST /api/interview, then hand the fresh interview to /session via route state. We never navigate to
- * /session without a real interview. `startRound(job, round)` is the simulation shorthand — it builds
- * the {job, round} request and the header labels from the two rows, so every round card starts alike.
+ * /session without a real interview. `startRound(job, round, timeLimitMinutes)` is the simulation
+ * shorthand — it builds the {job, round} request (plus the picked time limit, null = none) and the
+ * header labels from the two rows, so every round card starts alike.
  *
  * The caller renders the two pieces of UI this drives: <OverwriteInterviewModal> (open = `confirmOpen`,
  * onConfirm = `confirm`, onClose = `cancel`) and <StartingOverlay> while `starting`. `resumableLoading`
@@ -161,6 +162,7 @@ export function useStartSequence() {
                     interviewId: res.interview_id,
                     firstMessage: res.message,
                     question: res.question ?? null,
+                    timeLimitSeconds: res.time_limit_seconds ?? null,
                     ...labels,
                 };
                 navigate("/session", { state });
@@ -189,9 +191,9 @@ export function useStartSequence() {
     const cancel = useCallback(() => setPending(null), []);
 
     const startRound = useCallback(
-        (job: JobItem, round: RoundTypeItem) =>
+        (job: JobItem, round: RoundTypeItem, timeLimitMinutes: number | null) =>
             start(
-                { job: job.job_id, round: round.slug },
+                { job: job.job_id, round: round.slug, time_limit_minutes: timeLimitMinutes ?? undefined },
                 {
                     role: job.role_name,
                     level: job.level_name,
@@ -375,19 +377,112 @@ export function useSectionFilters(prefix: string): SectionFilters {
 }
 
 /**
- * A running "mm:ss" clock that starts when the hook mounts and ticks every second. Used by the
- * interview session header to show elapsed time. Returns the formatted string directly so callers
- * don't repeat the padding; the interval is cleaned up on unmount.
+ * A TIMED interview's countdown. It does two jobs: it drives the session header's "mm:ss left", and it
+ * MEASURES how long each turn was the candidate's. That measurement is sent with each answer as
+ * `turn_ms`, and the server adds it to `interviews.time_used_ms` (clamped to what's left).
+ *
+ * INPUTS
+ *   limitMs   the limit, or null for an untimed interview (the hook is inert and no clock is shown)
+ *   usedMs    the time already spent per the SERVER: 0 on a fresh start, the resume payload's on a
+ *             resume
+ *   running   whether the clock ticks right now. SessionPage passes "it's the candidate's turn"
+ *             (!preparing && !speaking && !done && !ended && !timeUp), so it pauses by itself while the
+ *             answer is transcribed, the interviewer thinks, and it speaks: latency never costs time.
+ *   onExpire  what to do when time reaches 0 (SessionPage's time's-up path). Fires exactly ONCE.
+ *
+ * STATE
+ *   spentMs        (state) total time spent, what the header renders as remainingMs = limitMs - spentMs
+ *   unreportedRef  (ref)   time spent since the last answer was sent: not yet told to the server
+ *   lastTickRef    (ref)   when the clock last booked time, or null while paused
+ *
+ * RETURNS `remainingMs` (null when untimed) and `takeTurnMs()`: the time accrued since the last take,
+ * reset to 0 as it's taken. handleSend calls it once per answer.
+ *
+ * EXAMPLE, a voice turn in a 15-minute interview:
+ *   - the interviewer finishes speaking -> running = true, the clock ticks
+ *   - the candidate talks for 42s, the mic stops -> onCaptureStopped raises `preparing` -> running =
+ *     false: the clock pauses and books its last partial tick (~42_000ms unreported)
+ *   - transcription takes 2s: not counted (still paused)
+ *   - handleSend -> takeTurnMs() returns ~42_000, sent as turn_ms; the server adds it
+ *   - the LLM and TTS run with the clock still paused; when the speaking ends, it resumes
+ *
+ * TRADEOFFS: a refresh mid-turn loses that turn's unsent seconds (the server only hears about time with
+ * an answer), which errs in the candidate's favor. And the client is trusted to measure (only it knows
+ * when the interviewer stopped talking); the server clamps each turn but can't verify it beyond that.
  */
-export function useElapsedClock(): string {
-    const [elapsed, setElapsed] = useState(0);
-    useEffect(() => {
-        const id = window.setInterval(() => setElapsed((s) => s + 1), 1000);
-        return () => window.clearInterval(id);
+export function useTurnCountdown({
+    limitMs,
+    usedMs,
+    running,
+    onExpire,
+}: {
+    limitMs: number | null;
+    usedMs: number;
+    running: boolean;
+    onExpire: () => void;
+}) {
+    const [spentMs, setSpentMs] = useState(usedMs);
+    const unreportedRef = useRef(0);
+    const lastTickRef = useRef<number | null>(null);
+    // guards onExpire to a single call, however many renders follow with spentMs >= limitMs
+    const expiredRef = useRef(false);
+    // the latest onExpire (a fresh closure each render), so the expiry effect never calls a stale one
+    const onExpireRef = useRef(onExpire);
+    onExpireRef.current = onExpire;
+
+    // BOOK the time since the last tick into both totals, and move the tick mark to now. It adds the
+    // MEASURED gap (Date.now() deltas), not a fixed 250ms per tick, because browsers throttle intervals
+    // in background tabs: ticks may arrive late, but the timestamps stay accurate. No-op while paused.
+    const book = useCallback(() => {
+        if (lastTickRef.current === null) return;
+        const now = Date.now();
+        const delta = now - lastTickRef.current;
+        lastTickRef.current = now;
+        unreportedRef.current += delta;
+        setSpentMs((spent) => spent + delta);
     }, []);
-    const mm = String(Math.floor(elapsed / 60)).padStart(2, "0");
-    const ss = String(elapsed % 60).padStart(2, "0");
-    return `${mm}:${ss}`;
+
+    // RE-BASE on the server's number whenever it changes: on a resume the payload arrives after mount,
+    // so this is what makes a refreshed interview continue from the server's time, not from zero.
+    useEffect(() => {
+        setSpentMs(usedMs);
+        unreportedRef.current = 0;
+    }, [usedMs]);
+
+    // THE TICKING. While running, a 250ms interval books time. When `running` flips false (e.g. the mic
+    // stops and `preparing` rises), the cleanup stops the interval AND books the partial tick since the
+    // last one, so the fraction of a second between ticks isn't dropped. Untimed = never starts.
+    useEffect(() => {
+        if (limitMs === null || !running) return;
+        lastTickRef.current = Date.now();
+        const id = window.setInterval(book, 250);
+        return () => {
+            window.clearInterval(id);
+            book();
+            lastTickRef.current = null;
+        };
+    }, [limitMs, running, book]);
+
+    // EXPIRY. Once the spent time reaches the limit, call onExpire exactly once (expiredRef). On a
+    // resume whose time was already used up, this fires right after the re-base, so the interview goes
+    // straight to grading.
+    useEffect(() => {
+        if (limitMs === null || expiredRef.current || spentMs < limitMs) return;
+        expiredRef.current = true;
+        onExpireRef.current();
+    }, [limitMs, spentMs]);
+
+    // TAKE this turn's time for the answer being sent. It books the partial tick first: handleSend runs
+    // BEFORE React re-renders with `preparing` raised, so the pause cleanup above hasn't booked it yet.
+    const takeTurnMs = useCallback(() => {
+        book();
+        const ms = Math.round(unreportedRef.current);
+        unreportedRef.current = 0;
+        return ms;
+    }, [book]);
+
+    const remainingMs = limitMs === null ? null : Math.max(limitMs - spentMs, 0);
+    return { remainingMs, takeTurnMs };
 }
 
 /**
