@@ -10,6 +10,9 @@ no prose to parse):
                  the round's `guidance`. The STRONGER grader model: these questions and briefs
                  are the whole interview and its answer key, so quality is worth paying for —
                  and it runs once per round, not once per turn.
+    example_check_agent  re-derives each coding question's example results from the inputs alone,
+                 one call per coding question (see check_examples). The round writer states
+                 results in one pass, and a wrong one reads as confidently as a right one.
 
 WHY THE ROLE/LEVEL ARE CONSTRAINED, NOT FREE TEXT. A job's role/level are FKs — they pick the level
 calibration for grading and let simulations sit beside bank interviews. A free-text "Senior Backend
@@ -28,12 +31,13 @@ GEMINI_API_KEY and a seeded DB):
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from typing import Literal
 
 from fastapi_pagination import Params
-from pydantic import BaseModel, Field, create_model
+from pydantic import BaseModel, Field, create_model, field_validator, model_validator
 from pydantic_ai import Agent
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import UsageLimits
@@ -134,6 +138,49 @@ async def extract_job(description: str) -> BaseModel:
 # grading brief. The brief is what keeps grading grounded: a generated question is graded exactly
 # like a bank question with an authored brief (grade_one -> get_reference), so the brief has to be
 # the same house style as data/reference_briefs/*.md. The candidate never sees it.
+#
+# A CODING question comes back in parts, not one prose `text`: the task, its `signature`, its
+# `constraints` and its `examples`. generate_round has the examples checked (check_examples), then
+# renders the parts into the stored text (render_statement, render_examples, then render_constraints
+# under the last example), with the signature and each example's input/result in ``` fences that the
+# client's FormattedText shows as code blocks.
+# Inputs and results are JSON so they're data, not prose (a future code runner can use them as test
+# cases as they are).
+CODING_EXAMPLE_COUNT = 2
+
+
+def _check_json(value: str) -> str:
+    """Field-validator body: `value` must be JSON text. A ValueError is a validation error, which
+    pydantic-ai sends back to the model as a retry."""
+    json.loads(value)
+    return value
+
+
+class _CodingExample(BaseModel):
+    """One worked example of a coding problem. `explanation` comes BEFORE `result` so the model
+    derives the answer before stating it (the same commit-first idea as `technique`)."""
+    input: str = Field(description="the example's arguments as a JSON object mapping each parameter "
+                                   "name in the signature to its value, e.g. "
+                                   "{\"nums\": [2, 7, 11], \"target\": 9}. Keep it small enough to "
+                                   "work out by hand")
+    explanation: str = Field(description="one or two sentences for the candidate stating why the "
+                                         "result follows from the input. A finished, confident "
+                                         "statement, never your own working: do not walk through "
+                                         "candidates, try alternatives, or correct yourself (no "
+                                         "\"wait\", \"ah\", or \"let's look at\")")
+    result: str = Field(description="the expected return value as JSON, e.g. 15, [0, 1], true or "
+                                    "\"abc\". It must be exactly what the explanation derives")
+
+    @field_validator("input")
+    @classmethod
+    def _input_is_json_object(cls, value: str) -> str:
+        if not isinstance(json.loads(value), dict):
+            raise ValueError("input must be a JSON object mapping parameter names to values")
+        return value
+
+    _result_is_json = field_validator("result")(_check_json)
+
+
 class _GeneratedQuestionBase(BaseModel):
     """The free-text half of one generated question. `type_slug` is added per run (see
     _round_output_type), constrained to the live question types like the JD extractor's role.
@@ -146,21 +193,55 @@ class _GeneratedQuestionBase(BaseModel):
                                        "technique). Must differ from the other questions' and from "
                                        "every recently asked question's")
     text: str = Field(description="the question exactly as the interviewer will present it to the "
-                                  "candidate, in plain text (no markdown headings)")
+                                  "candidate, in plain text (no markdown headings). For a coding "
+                                  "question, the task alone: its signature, constraints and examples "
+                                  "go in their own fields and are shown after this text")
+    signature: str = Field(default="", description="CODING questions only: the function signature "
+                                                   "on one line, e.g. twoSum(nums: list of integers, "
+                                                   "target: integer) -> list of two integers. Leave "
+                                                   "empty for every other question type")
+    constraints: list[str] = Field(default_factory=list,
+                                   description="CODING questions only: the input constraints, one "
+                                               "per item, e.g. 'The list has between 1 and 10^5 "
+                                               "elements'. Leave empty for every other question type")
     title: str = Field(description="a short 2-6 word name for the question, shown in lists (e.g. "
                                    "'Rate limiter for a public API'); plain text, no trailing period")
     brief: str = Field(description="the grading brief for this question, in the house style set out "
                                    "in the instructions. Hidden from the candidate — it's the answer key")
+    # AFTER the brief, so the model has written out the optimal approach before it works examples.
+    examples: list[_CodingExample] = Field(
+        default_factory=list,
+        description=f"CODING questions only: exactly {CODING_EXAMPLE_COUNT} worked examples, shown "
+                    "to the candidate after the text. Leave empty for every other question type",
+    )
 
 
-def _round_output_type(type_slugs: list[str], plan_size: int) -> type[BaseModel]:
+def _round_output_type(
+    type_slugs: list[str], coding_slugs: list[str], plan_size: int
+) -> type[BaseModel]:
     """Build the round's output type: exactly `plan_size` questions, each typed from the live
     question-type slugs. Both constraints are in the JSON schema the model sees AND enforced by
     pydantic — a wrong count or an invented type is a validation error pydantic-ai retries, so the
-    plan the interview freezes is always the round's size."""
+    plan the interview freezes is always the round's size.
+
+    `coding_slugs` are the types with a code editor: a question of one of those must carry a
+    signature, constraints and exactly CODING_EXAMPLE_COUNT examples, and any other question none of
+    them (also a retried validation error)."""
+    def check_coding_parts(question):
+        if question.type_slug in coding_slugs:
+            if not question.signature.strip() or not question.constraints:
+                raise ValueError("a coding question needs a signature and its constraints")
+            if len(question.examples) != CODING_EXAMPLE_COUNT:
+                raise ValueError(f"a coding question needs exactly {CODING_EXAMPLE_COUNT} examples")
+        elif question.signature or question.constraints or question.examples:
+            raise ValueError("signature, constraints and examples are for coding questions only; "
+                             "leave them empty")
+        return question
+
     question = create_model(
         "GeneratedQuestion",
         __base__=_GeneratedQuestionBase,
+        __validators__={"check_coding_parts": model_validator(mode="after")(check_coding_parts)},
         type_slug=(
             Literal[tuple(type_slugs)],
             Field(description="the question's type, from the allowed list — the round guidance "
@@ -220,12 +301,127 @@ round_agent = Agent(
 )
 
 
+# --- EXAMPLE CHECK (coding questions) -------------------------------------------------------
+# The round writer settles each example's result in one pass, alongside everything else it writes,
+# and nothing checked it: a 0/1-knapsack example once came back as "taking both crates weighs 3,
+# over the capacity of 2 ... so the answer is 10 + 15 = 25". This second pass re-derives every
+# result from the statement and the INPUTS alone (it never sees the writer's answers, so it can't
+# anchor on them), with THINKING on so it reasons before it commits. A scratch `working` field in the
+# output was tried first: with thinking off, flash-lite still settled the result early (it agreed with
+# the 25 once) and spilled its working into the explanation.
+class _CheckedExample(BaseModel):
+    explanation: str = Field(description="one or two sentences for the candidate stating why the "
+                                         "result follows from the input: the settled reason only, as "
+                                         "a confident statement. Never walk through candidates or "
+                                         "correct yourself (no \"wait\", \"ah\", or \"if we take\")")
+    result: str = Field(description="the correct return value as JSON, e.g. 15, [0, 1], true or "
+                                    "\"abc\"")
+
+    _result_is_json = field_validator("result")(_check_json)
+
+
+class _CheckedExamples(BaseModel):
+    examples: list[_CheckedExample] = Field(
+        min_length=CODING_EXAMPLE_COUNT, max_length=CODING_EXAMPLE_COUNT,
+        description="one checked example per input, in the order given",
+    )
+
+
+example_check_agent = Agent(
+    grader_model,
+    output_type=_CheckedExamples,
+    instructions=(
+        "You check the worked examples of a coding interview problem before a candidate sees them. "
+        "For each example input you are given, work out the correct result yourself from the problem "
+        "statement alone: apply every rule and constraint in it, and for an optimization problem "
+        "consider every valid choice, not the first plausible one. Then write the candidate-facing "
+        "explanation and the result. Return the examples in the order given."
+    ),
+    # max_tokens covers the thinking tokens too (Gemini counts them as output).
+    model_settings=ModelSettings(max_tokens=8000, thinking="medium"),
+)
+
+
+async def check_examples(text: str, examples: list[dict]) -> list[dict]:
+    """Re-derive the results of one coding question's `examples` (dicts of {input, explanation,
+    result}) and return them corrected, in order.
+
+    Where the check agrees with the writer (same JSON value), the writer's example is kept as is;
+    where it disagrees, the check's explanation and result replace the writer's, since the check
+    reasoned before committing and the writer didn't. Inputs are never changed.
+
+        writer:  {"input": '{"values": [10, 15, 40], "weights": [1, 2, 3], "maxCapacity": 2}',
+                  "explanation": "...", "result": "25"}
+        check:   result "15"  ->  returned with the check's explanation and "result": "15"
+    """
+    # 1. the problem and the inputs only, numbered so the answers come back in order
+    inputs = "\n".join(f"{i}. {example['input']}" for i, example in enumerate(examples, start=1))
+    prompt = f"PROBLEM:\n{text}\n\nEXAMPLE INPUTS (JSON objects of the arguments, in order):\n{inputs}"
+    started = time.perf_counter()
+    result = await example_check_agent.run(prompt, usage_limits=UsageLimits(request_limit=3))
+    log_run("example_check", result, started)
+
+    # 2. keep the writer's example where the results agree; take the check's where they don't
+    checked_examples = []
+    for example, checked in zip(examples, result.output.examples):
+        if json.loads(checked.result) == json.loads(example["result"]):
+            checked_examples.append(example)
+        else:
+            log_perf("example_check corrected %s: %s -> %s",
+                     example["input"], example["result"], checked.result)
+            checked_examples.append({"input": example["input"], "explanation": checked.explanation,
+                                     "result": checked.result})
+    return checked_examples
+
+
+def render_statement(question: dict) -> str:
+    """A coding question's task and fenced signature: the start of the stored text.
+
+        {"text": "Return the indices of the two numbers that add up to target.",
+         "signature": "twoSum(nums: list of integers, target: integer) -> list of two integers"}
+        -> 'Return the indices ... target.\\n\\nFunction signature:\\n```\\ntwoSum(...) -> list of two
+           integers\\n```'
+    """
+    return f"{question['text']}\n\nFunction signature:\n```\n{question['signature']}\n```"
+
+
+def render_constraints(constraints: list[str]) -> str:
+    """A coding question's constraints as a bulleted section: the end of the stored text, under the
+    last example.
+
+        ["The list has between 2 and 10^4 elements"]
+        -> 'Constraints:\\n- The list has between 2 and 10^4 elements'
+    """
+    return "Constraints:\n" + "\n".join(f"- {constraint}" for constraint in constraints)
+
+
+def render_examples(examples: list[dict]) -> str:
+    """The examples as the candidate reads them, appended after the statement: each input/result in a
+    ``` fence, the explanation below it. Arguments show as `name = value`, in the order the input's
+    JSON object lists them.
+
+        [{"input": '{"nums": [2, 7], "target": 9}', "explanation": "2 + 7 = 9.", "result": "[0, 1]"}]
+        -> 'Example 1:\\n```\\nInput: nums = [2, 7], target = 9\\nResult: [0, 1]\\n```\\n
+           Explanation: 2 + 7 = 9.'
+    """
+    blocks = []
+    for i, example in enumerate(examples, start=1):
+        arguments = ", ".join(f"{name} = {json.dumps(value)}"
+                              for name, value in json.loads(example["input"]).items())
+        result = json.dumps(json.loads(example["result"]))
+        blocks.append(f"Example {i}:\n```\nInput: {arguments}\nResult: {result}\n```\n"
+                      f"Explanation: {example['explanation']}")
+    return "\n\n".join(blocks)
+
+
 async def generate_round(
     job: dict, round_type, candidate_background: str = "", recent_questions: list[dict] | None = None
 ) -> list[dict]:
     """Write one round's questions for a job. Returns `plan_size` dicts of {text, title, type_slug, brief},
     in ask order — the shape create_interview(generated=...) takes (plain dicts, so the data layer
-    never imports this module's model stack).
+    never imports this module's model stack). A coding question's dict also carries its signature,
+    constraints and checked examples, already rendered into its `text` (the plan insert reads only
+    the text).
 
     `job` is the tools/jobs detail dict (company, title, summary, level); `round_type` is the
     RoundType ORM row, whose `question_guidance` says what to ask and `plan_size` how many. The allowed
@@ -240,7 +436,9 @@ async def generate_round(
     and the model keeps returning its single likeliest pair of problems; with it, the model steers
     away from techniques already used, with no topic list hard-coded anywhere."""
     types = (await list_question_types(Params(page=1, size=100))).items
-    output_type = _round_output_type([t.slug for t in types], round_type.plan_size)
+    output_type = _round_output_type(
+        [t.slug for t in types], [t.slug for t in types if t.has_code_editor], round_type.plan_size
+    )
 
     # The requirement is restated right under the background, not only in the instructions: with it
     # only in the instructions, the model used the background in 1 of 3 test rounds.
@@ -278,7 +476,22 @@ async def generate_round(
     log_run(f"round_generate[{round_type.slug}]", result, started)
     log_perf("round_generate[%s] techniques: %s", round_type.slug,
              " | ".join(q.technique for q in result.output.questions))
-    return [q.model_dump() for q in result.output.questions]
+
+    # Check every coding question's examples against its statement (one call each, concurrently),
+    # then render the parts into its text. Only coding questions carry examples (the output type
+    # enforces it).
+    questions = [q.model_dump() for q in result.output.questions]
+    coding_questions = [q for q in questions if q["examples"]]
+    checked = await asyncio.gather(
+        *(check_examples(f"{render_statement(q)}\n\n{render_constraints(q['constraints'])}",
+                         q["examples"])
+          for q in coding_questions)
+    )
+    for question, examples in zip(coding_questions, checked):
+        question["examples"] = examples
+        question["text"] = (f"{render_statement(question)}\n\n{render_examples(examples)}\n\n"
+                            f"{render_constraints(question['constraints'])}")
+    return questions
 
 
 # --- BRIEF FOR A USER-WRITTEN QUESTION ------------------------------------------------------
