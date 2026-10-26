@@ -139,9 +139,13 @@ async def extract_job(description: str) -> BaseModel:
 # like a bank question with an authored brief (grade_one -> get_reference), so the brief has to be
 # the same house style as data/reference_briefs/*.md. The candidate never sees it.
 #
-# A CODING question's examples are their own typed field, not prose inside `text`: generate_round has
-# them checked (check_examples), then renders them onto the end of the text. Inputs and results are
-# JSON so they're data, not prose (a future code runner can use them as test cases as they are).
+# A CODING question comes back in parts, not one prose `text`: the task, its `signature`, its
+# `constraints` and its `examples`. generate_round has the examples checked (check_examples), then
+# renders the parts into the stored text (render_statement, render_examples, then render_constraints
+# under the last example), with the signature and each example's input/result in ``` fences that the
+# client's FormattedText shows as code blocks.
+# Inputs and results are JSON so they're data, not prose (a future code runner can use them as test
+# cases as they are).
 CODING_EXAMPLE_COUNT = 2
 
 
@@ -190,8 +194,16 @@ class _GeneratedQuestionBase(BaseModel):
                                        "every recently asked question's")
     text: str = Field(description="the question exactly as the interviewer will present it to the "
                                   "candidate, in plain text (no markdown headings). For a coding "
-                                  "question, everything except its examples: those go in `examples` "
-                                  "and are appended to this text")
+                                  "question, the task alone: its signature, constraints and examples "
+                                  "go in their own fields and are shown after this text")
+    signature: str = Field(default="", description="CODING questions only: the function signature "
+                                                   "on one line, e.g. twoSum(nums: list of integers, "
+                                                   "target: integer) -> list of two integers. Leave "
+                                                   "empty for every other question type")
+    constraints: list[str] = Field(default_factory=list,
+                                   description="CODING questions only: the input constraints, one "
+                                               "per item, e.g. 'The list has between 1 and 10^5 "
+                                               "elements'. Leave empty for every other question type")
     title: str = Field(description="a short 2-6 word name for the question, shown in lists (e.g. "
                                    "'Rate limiter for a public API'); plain text, no trailing period")
     brief: str = Field(description="the grading brief for this question, in the house style set out "
@@ -212,20 +224,24 @@ def _round_output_type(
     pydantic — a wrong count or an invented type is a validation error pydantic-ai retries, so the
     plan the interview freezes is always the round's size.
 
-    `coding_slugs` are the types with a code editor: a question of one of those must carry exactly
-    CODING_EXAMPLE_COUNT examples, and any other question none (also a retried validation error)."""
-    def check_example_count(question):
+    `coding_slugs` are the types with a code editor: a question of one of those must carry a
+    signature, constraints and exactly CODING_EXAMPLE_COUNT examples, and any other question none of
+    them (also a retried validation error)."""
+    def check_coding_parts(question):
         if question.type_slug in coding_slugs:
+            if not question.signature.strip() or not question.constraints:
+                raise ValueError("a coding question needs a signature and its constraints")
             if len(question.examples) != CODING_EXAMPLE_COUNT:
                 raise ValueError(f"a coding question needs exactly {CODING_EXAMPLE_COUNT} examples")
-        elif question.examples:
-            raise ValueError("examples are for coding questions only; leave the list empty")
+        elif question.signature or question.constraints or question.examples:
+            raise ValueError("signature, constraints and examples are for coding questions only; "
+                             "leave them empty")
         return question
 
     question = create_model(
         "GeneratedQuestion",
         __base__=_GeneratedQuestionBase,
-        __validators__={"check_example_count": model_validator(mode="after")(check_example_count)},
+        __validators__={"check_coding_parts": model_validator(mode="after")(check_coding_parts)},
         type_slug=(
             Literal[tuple(type_slugs)],
             Field(description="the question's type, from the allowed list — the round guidance "
@@ -358,19 +374,42 @@ async def check_examples(text: str, examples: list[dict]) -> list[dict]:
     return checked_examples
 
 
+def render_statement(question: dict) -> str:
+    """A coding question's task and fenced signature: the start of the stored text.
+
+        {"text": "Return the indices of the two numbers that add up to target.",
+         "signature": "twoSum(nums: list of integers, target: integer) -> list of two integers"}
+        -> 'Return the indices ... target.\\n\\nFunction signature:\\n```\\ntwoSum(...) -> list of two
+           integers\\n```'
+    """
+    return f"{question['text']}\n\nFunction signature:\n```\n{question['signature']}\n```"
+
+
+def render_constraints(constraints: list[str]) -> str:
+    """A coding question's constraints as a bulleted section: the end of the stored text, under the
+    last example.
+
+        ["The list has between 2 and 10^4 elements"]
+        -> 'Constraints:\\n- The list has between 2 and 10^4 elements'
+    """
+    return "Constraints:\n" + "\n".join(f"- {constraint}" for constraint in constraints)
+
+
 def render_examples(examples: list[dict]) -> str:
-    """The examples as the candidate reads them, appended to the problem text. Arguments show as
-    `name = value`, in the order the signature's JSON object lists them.
+    """The examples as the candidate reads them, appended after the statement: each input/result in a
+    ``` fence, the explanation below it. Arguments show as `name = value`, in the order the input's
+    JSON object lists them.
 
         [{"input": '{"nums": [2, 7], "target": 9}', "explanation": "2 + 7 = 9.", "result": "[0, 1]"}]
-        -> 'Example 1:\\nInput: nums = [2, 7], target = 9\\nResult: [0, 1]\\nExplanation: 2 + 7 = 9.'
+        -> 'Example 1:\\n```\\nInput: nums = [2, 7], target = 9\\nResult: [0, 1]\\n```\\n
+           Explanation: 2 + 7 = 9.'
     """
     blocks = []
     for i, example in enumerate(examples, start=1):
         arguments = ", ".join(f"{name} = {json.dumps(value)}"
                               for name, value in json.loads(example["input"]).items())
         result = json.dumps(json.loads(example["result"]))
-        blocks.append(f"Example {i}:\nInput: {arguments}\nResult: {result}\n"
+        blocks.append(f"Example {i}:\n```\nInput: {arguments}\nResult: {result}\n```\n"
                       f"Explanation: {example['explanation']}")
     return "\n\n".join(blocks)
 
@@ -380,8 +419,9 @@ async def generate_round(
 ) -> list[dict]:
     """Write one round's questions for a job. Returns `plan_size` dicts of {text, title, type_slug, brief},
     in ask order — the shape create_interview(generated=...) takes (plain dicts, so the data layer
-    never imports this module's model stack). A coding question's dict also carries its checked
-    `examples`, already rendered onto the end of its `text` (the plan insert reads only the text).
+    never imports this module's model stack). A coding question's dict also carries its signature,
+    constraints and checked examples, already rendered into its `text` (the plan insert reads only
+    the text).
 
     `job` is the tools/jobs detail dict (company, title, summary, level); `round_type` is the
     RoundType ORM row, whose `question_guidance` says what to ask and `plan_size` how many. The allowed
@@ -437,16 +477,20 @@ async def generate_round(
     log_perf("round_generate[%s] techniques: %s", round_type.slug,
              " | ".join(q.technique for q in result.output.questions))
 
-    # Check every coding question's examples (one call each, concurrently), then append them to its
-    # text. Only coding questions carry examples (the output type enforces it).
+    # Check every coding question's examples against its statement (one call each, concurrently),
+    # then render the parts into its text. Only coding questions carry examples (the output type
+    # enforces it).
     questions = [q.model_dump() for q in result.output.questions]
     coding_questions = [q for q in questions if q["examples"]]
     checked = await asyncio.gather(
-        *(check_examples(q["text"], q["examples"]) for q in coding_questions)
+        *(check_examples(f"{render_statement(q)}\n\n{render_constraints(q['constraints'])}",
+                         q["examples"])
+          for q in coding_questions)
     )
     for question, examples in zip(coding_questions, checked):
         question["examples"] = examples
-        question["text"] = f"{question['text']}\n\n{render_examples(examples)}"
+        question["text"] = (f"{render_statement(question)}\n\n{render_examples(examples)}\n\n"
+                            f"{render_constraints(question['constraints'])}")
     return questions
 
 
