@@ -418,7 +418,11 @@ descriptions now require exact conditions and no hedged explanations. `_CheckedE
 the checker report a gap instead of filling it. `generate_round` rewrites the round once with the missing
 rules as feedback, and keeps and logs a second miss rather than failing the kickoff. Verified with the
 checker only (2 calls): the original statement was flagged and the same problem with its rule written out
-passed. **Next action:** a few live coding-round generations, watching PERF_LOG for `underspecified`.*
+passed. Also: example explanations (writer's and checker's) gave the method away ("sorting the intervals ...
+comparing the second interval's start to the first's end"). Both `explanation` descriptions and the checker's
+instructions now ask for WHY the result is correct, never HOW to compute it. The checker was verified with 1
+call; the writer's explanations were not tested separately. **Next action:** a few live coding-round
+generations, watching PERF_LOG for `underspecified` and reading the explanations for leaked techniques.*
 
 *2026-10-21: **Interview time limit** (branch `time-limit-mode`). A per-interview limit picked at kickoff
 (15/30/45/60 min, `TIME_LIMIT_MINUTES` in api.py), and the clock runs only during the candidate's turn.

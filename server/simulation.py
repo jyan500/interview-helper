@@ -164,9 +164,13 @@ class _CodingExample(BaseModel):
                                    "{\"nums\": [2, 7, 11], \"target\": 9}. Keep it small enough to "
                                    "work out by hand")
     explanation: str = Field(description="one or two sentences for the candidate stating why the "
-                                         "result follows from the input, pointing at the specific "
-                                         "elements of the input that produce it (e.g. the substring "
-                                         "\"abc\" at indices 2-4). A finished, confident statement, "
+                                         "result is correct for this input, pointing at the specific "
+                                         "elements of the input that make it so (e.g. the substring "
+                                         "\"abc\" at indices 2-4). Say WHY, never HOW to compute it: "
+                                         "no algorithm, technique or step from the brief's approach "
+                                         "(no sorting, scanning, comparing neighbors, or data "
+                                         "structure), since that gives the solution away. "
+                                         "A finished, confident statement, "
                                          "never your own working: do not walk through candidates, try "
                                          "alternatives, or correct yourself (no \"wait\", \"ah\", or "
                                          "\"let's look at\"), and never hedge between rules (no \"or "
@@ -323,8 +327,11 @@ round_agent = Agent(
 # writer. `missing_rule` gives it a way to say "this can't be worked out" instead.
 class _CheckedExample(BaseModel):
     explanation: str = Field(description="one or two sentences for the candidate stating why the "
-                                         "result follows from the input: the settled reason only, as "
-                                         "a confident statement. Never walk through candidates or "
+                                         "result is correct for this input: the settled reason only, "
+                                         "as a confident statement. Say WHY, never HOW to compute it: "
+                                         "no algorithm, technique or step (no sorting, scanning, "
+                                         "comparing neighbors, or data structure), since that gives "
+                                         "the solution away. Never walk through candidates or "
                                          "correct yourself (no \"wait\", \"ah\", or \"if we take\")")
     result: str = Field(description="the correct return value as JSON, e.g. 15, [0, 1], true or "
                                     "\"abc\"")
@@ -359,7 +366,9 @@ example_check_agent = Agent(
         "For each example input you are given, work out the correct result yourself from the problem "
         "statement alone: apply every rule and constraint in it, and for an optimization problem "
         "consider every valid choice, not the first plausible one. Then write the candidate-facing "
-        "explanation and the result. Return the examples in the order given."
+        "explanation and the result. The explanation says why the result is correct for that input, "
+        "never how you computed it: the candidate has to find the method, so no algorithm or "
+        "technique belongs in it. Return the examples in the order given."
     ),
     # max_tokens covers the thinking tokens too (Gemini counts them as output).
     model_settings=ModelSettings(max_tokens=8000, thinking="medium"),
