@@ -411,6 +411,15 @@ get different questions and level-calibrated feedback).
 
 ## CURRENT STATUS (resume point)
 
+*2026-10-26: **Underspecified coding statements** (branch `coding-example-question-vagueness`). A generated
+"shortest valid window" problem never said what made a window valid. `check_examples` guessed a rule and
+agreed with the writer, so the problem went out. Fixes in `simulation.py`: the writer's `text`/`explanation`
+descriptions now require exact conditions and no hedged explanations. `_CheckedExamples.missing_rule` lets
+the checker report a gap instead of filling it. `generate_round` rewrites the round once with the missing
+rules as feedback, and keeps and logs a second miss rather than failing the kickoff. Verified with the
+checker only (2 calls): the original statement was flagged and the same problem with its rule written out
+passed. **Next action:** a few live coding-round generations, watching PERF_LOG for `underspecified`.*
+
 *2026-10-21: **Interview time limit** (branch `time-limit-mode`). A per-interview limit picked at kickoff
 (15/30/45/60 min, `TIME_LIMIT_MINUTES` in api.py), and the clock runs only during the candidate's turn.
 **Phase 1 (schema + backend) DONE:** migration `a1c3e5f7b9d0` adds `interviews.time_limit_seconds` (NULL =

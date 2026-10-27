@@ -164,10 +164,13 @@ class _CodingExample(BaseModel):
                                    "{\"nums\": [2, 7, 11], \"target\": 9}. Keep it small enough to "
                                    "work out by hand")
     explanation: str = Field(description="one or two sentences for the candidate stating why the "
-                                         "result follows from the input. A finished, confident "
-                                         "statement, never your own working: do not walk through "
-                                         "candidates, try alternatives, or correct yourself (no "
-                                         "\"wait\", \"ah\", or \"let's look at\")")
+                                         "result follows from the input, pointing at the specific "
+                                         "elements of the input that produce it (e.g. the substring "
+                                         "\"abc\" at indices 2-4). A finished, confident statement, "
+                                         "never your own working: do not walk through candidates, try "
+                                         "alternatives, or correct yourself (no \"wait\", \"ah\", or "
+                                         "\"let's look at\"), and never hedge between rules (no \"or "
+                                         "meeting the condition\")")
     result: str = Field(description="the expected return value as JSON, e.g. 15, [0, 1], true or "
                                     "\"abc\". It must be exactly what the explanation derives")
 
@@ -195,7 +198,12 @@ class _GeneratedQuestionBase(BaseModel):
     text: str = Field(description="the question exactly as the interviewer will present it to the "
                                   "candidate, in plain text (no markdown headings). For a coding "
                                   "question, the task alone: its signature, constraints and examples "
-                                  "go in their own fields and are shown after this text")
+                                  "go in their own fields and are shown after this text. A coding "
+                                  "task must state every rule precisely enough that a reader could "
+                                  "work out the result for any input from the text alone: spell out "
+                                  "the exact condition (e.g. 'contains at least k distinct "
+                                  "characters'), never a placeholder like 'the frequency condition' "
+                                  "or 'a valid window'")
     signature: str = Field(default="", description="CODING questions only: the function signature "
                                                    "on one line, e.g. twoSum(nums: list of integers, "
                                                    "target: integer) -> list of two integers. Leave "
@@ -309,6 +317,10 @@ round_agent = Agent(
 # anchor on them), with THINKING on so it reasons before it commits. A scratch `working` field in the
 # output was tried first: with thinking off, flash-lite still settled the result early (it agreed with
 # the 25 once) and spilled its working into the explanation.
+#
+# The same pass catches an UNDERSPECIFIED statement: a "shortest valid window" problem once never said
+# what made a window valid, and the check, made to return a result, guessed one and agreed with the
+# writer. `missing_rule` gives it a way to say "this can't be worked out" instead.
 class _CheckedExample(BaseModel):
     explanation: str = Field(description="one or two sentences for the candidate stating why the "
                                          "result follows from the input: the settled reason only, as "
@@ -321,6 +333,14 @@ class _CheckedExample(BaseModel):
 
 
 class _CheckedExamples(BaseModel):
+    missing_rule: str = Field(default="", description="if the problem statement leaves out a rule "
+                                                      "you need to work out a single correct result "
+                                                      "(an undefined condition such as 'valid' or "
+                                                      "'the constraint', or an unstated tie-break), "
+                                                      "name what is missing in one sentence. Leave "
+                                                      "empty when every result follows from the "
+                                                      "statement alone. Never fill a gap with your "
+                                                      "own guess")
     examples: list[_CheckedExample] = Field(
         min_length=CODING_EXAMPLE_COUNT, max_length=CODING_EXAMPLE_COUNT,
         description="one checked example per input, in the order given",
@@ -332,6 +352,10 @@ example_check_agent = Agent(
     output_type=_CheckedExamples,
     instructions=(
         "You check the worked examples of a coding interview problem before a candidate sees them. "
+        "First decide whether the statement defines every rule a solver needs; if it does not (for "
+        "example it asks for a 'valid' window but never says what makes one valid), report what is "
+        "missing in missing_rule. A candidate can only solve what the statement actually says, so do "
+        "not supply the missing rule yourself. "
         "For each example input you are given, work out the correct result yourself from the problem "
         "statement alone: apply every rule and constraint in it, and for an optimization problem "
         "consider every valid choice, not the first plausible one. Then write the candidate-facing "
@@ -342,9 +366,10 @@ example_check_agent = Agent(
 )
 
 
-async def check_examples(text: str, examples: list[dict]) -> list[dict]:
+async def check_examples(text: str, examples: list[dict]) -> tuple[list[dict], str]:
     """Re-derive the results of one coding question's `examples` (dicts of {input, explanation,
-    result}) and return them corrected, in order.
+    result}) and return them corrected, in order, with the statement's `missing_rule` ("" when the
+    statement is complete).
 
     Where the check agrees with the writer (same JSON value), the writer's example is kept as is;
     where it disagrees, the check's explanation and result replace the writer's, since the check
@@ -352,7 +377,7 @@ async def check_examples(text: str, examples: list[dict]) -> list[dict]:
 
         writer:  {"input": '{"values": [10, 15, 40], "weights": [1, 2, 3], "maxCapacity": 2}',
                   "explanation": "...", "result": "25"}
-        check:   result "15"  ->  returned with the check's explanation and "result": "15"
+        check:   result "15"  ->  ([... "result": "15" with the check's explanation], "")
     """
     # 1. the problem and the inputs only, numbered so the answers come back in order
     inputs = "\n".join(f"{i}. {example['input']}" for i, example in enumerate(examples, start=1))
@@ -371,7 +396,7 @@ async def check_examples(text: str, examples: list[dict]) -> list[dict]:
                      example["input"], example["result"], checked.result)
             checked_examples.append({"input": example["input"], "explanation": checked.explanation,
                                      "result": checked.result})
-    return checked_examples
+    return checked_examples, result.output.missing_rule.strip()
 
 
 def render_statement(question: dict) -> str:
@@ -467,30 +492,49 @@ async def generate_round(
         f"ROUND GUIDANCE: {round_type.question_guidance}{recent_section}\n\n"
         f"Write exactly {round_type.plan_size} question(s), each with its brief."
     )
-    started = time.perf_counter()
-    result = await round_agent.run(
-        prompt,
-        output_type=output_type,
-        usage_limits=UsageLimits(request_limit=3),
-    )
-    log_run(f"round_generate[{round_type.slug}]", result, started)
-    log_perf("round_generate[%s] techniques: %s", round_type.slug,
-             " | ".join(q.technique for q in result.output.questions))
 
-    # Check every coding question's examples against its statement (one call each, concurrently),
-    # then render the parts into its text. Only coding questions carry examples (the output type
-    # enforces it).
-    questions = [q.model_dump() for q in result.output.questions]
-    coding_questions = [q for q in questions if q["examples"]]
-    checked = await asyncio.gather(
-        *(check_examples(f"{render_statement(q)}\n\n{render_constraints(q['constraints'])}",
-                         q["examples"])
-          for q in coding_questions)
-    )
-    for question, examples in zip(coding_questions, checked):
-        question["examples"] = examples
-        question["text"] = (f"{render_statement(question)}\n\n{render_examples(examples)}\n\n"
-                            f"{render_constraints(question['constraints'])}")
+    # 1. write the round, then check every coding question's examples against its statement (one
+    #    call each, concurrently). Only coding questions carry examples (the output type enforces it).
+    # 2. if a check found a statement missing a rule, write the round once more with what was
+    #    missing as feedback. A second miss is kept and logged rather than failing the kickoff.
+    # 3. render each coding question's parts into its text.
+    feedback = ""
+    for attempt in range(2):
+        started = time.perf_counter()
+        result = await round_agent.run(
+            prompt + feedback,
+            output_type=output_type,
+            usage_limits=UsageLimits(request_limit=3),
+        )
+        log_run(f"round_generate[{round_type.slug}]", result, started)
+        log_perf("round_generate[%s] techniques: %s", round_type.slug,
+                 " | ".join(q.technique for q in result.output.questions))
+
+        questions = [q.model_dump() for q in result.output.questions]
+        coding_questions = [q for q in questions if q["examples"]]
+        checks = await asyncio.gather(
+            *(check_examples(f"{render_statement(q)}\n\n{render_constraints(q['constraints'])}",
+                             q["examples"])
+              for q in coding_questions)
+        )
+        missing_rules = []
+        for question, (examples, missing_rule) in zip(coding_questions, checks):
+            question["examples"] = examples
+            if missing_rule:
+                missing_rules.append(f"- {question['title']}: {missing_rule}")
+        if not missing_rules:
+            break
+        log_perf("round_generate[%s] attempt %s underspecified:\n%s",
+                 round_type.slug, attempt + 1, "\n".join(missing_rules))
+        feedback = (
+            "\n\nA previous draft of this round was rejected because a coding statement left out a "
+            "rule needed to work out its results:\n" + "\n".join(missing_rules) + "\n"
+            "Every coding task must define its conditions exactly, in the text itself."
+        )
+
+    for question in coding_questions:
+        question["text"] = (f"{render_statement(question)}\n\n{render_examples(question['examples'])}"
+                            f"\n\n{render_constraints(question['constraints'])}")
     return questions
 
 
