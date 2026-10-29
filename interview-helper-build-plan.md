@@ -411,6 +411,20 @@ get different questions and level-calibrated feedback).
 
 ## CURRENT STATUS (resume point)
 
+*2026-10-29: **Resume import** (branch `new-account-and-resume-prefill`). Upload a resume on the Profile
+page and get pre-filled roles + skills to review; nothing is saved until the candidate confirms, and the
+file itself is never stored. **Phase 1 (backend) DONE:** `server/resume_import.py` + `POST
+/api/profile/resume/parse` (wallet-gated, 5 MB cap, type sniffed from magic bytes: `%PDF-` / `PK`). A PDF
+goes to Gemini through the **Files API** and is deleted in a `finally` (Gemini's 48h TTL is the backstop).
+A .docx is converted to text with `python-docx` (new dep) and sent inline. Skills: a ~200-slug `Literal`
+enum in the schema is a Gemini 400 (20 passes), so the prompt asks only for common named technologies by
+canonical name. `match_vocab_skills` then cross-checks them against the vocab with
+`functions.skill_key`, against both name and slug. Verified: free (7 route rejections, no key collisions in
+the vocab) and 3 live flash-lite runs (PDF, .docx, non-resume). Roles and dates were right, with no
+leftover Gemini files. The skills misses were model wording, like "Spring Framework" vs. our "Spring".
+**Next action: Phase 2 (client)** per `~/.claude/plans/indexed-coalescing-biscuit.md`: ResumeImportCard,
+ResumeReviewModal (useFieldArray) and an importedSkills slice unioned into SkillsCard.*
+
 *2026-10-26: **Underspecified coding statements** (branch `coding-example-question-vagueness`). A generated
 "shortest valid window" problem never said what made a window valid. `check_examples` guessed a rule and
 agreed with the writer, so the problem went out. Fixes in `simulation.py`: the writer's `text`/`explanation`

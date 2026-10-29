@@ -108,6 +108,8 @@ from pydantic_ai.usage import UsageLimits
 from grading import AnswerGrade, aggregate, grade_one, turn_agent
 # Interview simulation — the JD extractor and the round generator.
 from simulation import extract_job, generate_brief, generate_round
+# Resume import — pre-fill the Profile page's roles + skills from an uploaded resume (nothing stored).
+from resume_import import ResumeFileError, parse_resume_file
 
 # --- THE DATA LAYER + THE TEMPLATES, imported directly (see point 2 above). ------------
 # Note the asymmetry, and that it's intentional: `record_answer` is a legitimate interview
@@ -332,6 +334,21 @@ class SkillOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     slug: str
     name: str
+
+
+# POST /api/profile/resume/parse response: SUGGESTIONS for the Profile page to review, not saved rows
+# (so no slug). `start` may be None when the resume gives no date; `end = None` is a current role.
+class ImportedExperienceOut(BaseModel):
+    title: str
+    company: str
+    start: str | None
+    end: str | None
+    description: str
+
+
+class ResumeParseOut(BaseModel):
+    experiences: list[ImportedExperienceOut]
+    skills: list[SkillOut]
 
 
 # Phase F — the /api/tts request. Unlike /api/transcribe (whose request is raw multipart audio,
@@ -1975,6 +1992,41 @@ async def skills(
     user_id: str = Depends(require_user),
 ):
     return await list_skills(params, search=q)
+
+
+# POST /api/profile/resume/parse : read an uploaded resume and return roles + skills for the Profile
+# page to PRE-FILL (resume_import.py). Writes nothing: the candidate reviews and saves through the
+# routes above. The file is never persisted either: the bytes live in this request only (Starlette's
+# auto-deleted spool), and a PDF's Gemini Files API copy is deleted as soon as the parse ends.
+#
+# Wallet-gated behind require_user like /api/transcribe: every call is a paid Gemini run.
+RESUME_MAX_MB = 5
+
+
+@app.post("/api/profile/resume/parse", response_model=ResumeParseOut)
+async def parse_resume(file: UploadFile = File(...), user_id: str = Depends(require_user)):
+    # 1. size checks
+    data = await file.read()
+    if len(data) == 0:
+        raise HTTPException(status_code=400, detail="The file is empty")
+    if len(data) > RESUME_MAX_MB * 1024**2:
+        raise HTTPException(status_code=413, detail=f"Resumes can be up to {RESUME_MAX_MB} MB")
+
+    # 2. the type comes from the file's own first bytes, not the client's content-type or extension
+    if data.startswith(b"%PDF-"):
+        kind = "pdf"
+    elif data.startswith(b"PK\x03\x04"):
+        kind = "docx"   # a zip; resume_import confirms it's really a Word document
+    else:
+        raise HTTPException(status_code=415, detail="Upload a PDF or Word (.docx) resume")
+
+    # 3. parse
+    try:
+        return await parse_resume_file(data, kind)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    except ResumeFileError as error:
+        raise HTTPException(status_code=502, detail=str(error))
 
 
 @app.get("/api/dashboard")
