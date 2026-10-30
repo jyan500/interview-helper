@@ -337,7 +337,8 @@ class SkillOut(BaseModel):
 
 
 # POST /api/profile/resume/parse response: SUGGESTIONS for the Profile page to review, not saved rows
-# (so no slug). `start` may be None when the resume gives no date; `end = None` is a current role.
+# (so no slug). `start` may be None when the resume gives no date; `end = None` is a current role; a
+# project's `url` is None when the resume has no usable link.
 class ImportedExperienceOut(BaseModel):
     title: str
     company: str
@@ -346,8 +347,15 @@ class ImportedExperienceOut(BaseModel):
     description: str
 
 
+class ImportedProjectOut(BaseModel):
+    name: str
+    url: str | None
+    description: str
+
+
 class ResumeParseOut(BaseModel):
     experiences: list[ImportedExperienceOut]
+    projects: list[ImportedProjectOut]
     skills: list[SkillOut]
 
 
@@ -1994,8 +2002,8 @@ async def skills(
     return await list_skills(params, search=q)
 
 
-# POST /api/profile/resume/parse : read an uploaded resume and return roles + skills for the Profile
-# page to PRE-FILL (resume_import.py). Writes nothing: the candidate reviews and saves through the
+# POST /api/profile/resume/parse : read an uploaded resume and return roles, projects and skills for
+# the Profile page to PRE-FILL (resume_import.py). Writes nothing: the candidate reviews and saves through the
 # routes above. The file is never persisted either: the bytes live in this request only (Starlette's
 # auto-deleted spool), and a PDF's Gemini Files API copy is deleted as soon as the parse ends.
 #
