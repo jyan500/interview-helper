@@ -231,6 +231,16 @@ async def list_skills(params: Params, search: str | None = None):
         return await apaginate(db, stmt, params)
 
 
+async def list_skill_vocab() -> list[dict]:
+    """The WHOLE skill vocab as [{slug, name}, ...], unpaginated. For the resume importer, which
+    constrains its output to these slugs (see resume_import.py). The vocab is ~200 rows."""
+    async with get_session() as db:
+        rows = (await db.execute(
+            select(Skill.slug, Skill.name).order_by(func.lower(Skill.name), Skill.id)
+        )).all()
+        return [{"slug": row.slug, "name": row.name} for row in rows]
+
+
 async def list_profile_skills(profile_id: str) -> list[dict]:
     async with get_session() as db:
         rows = (await db.execute(

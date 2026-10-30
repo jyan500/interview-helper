@@ -26,6 +26,9 @@ fastapi-pagination>=0.15,<0.16
 # is exactly the kind of thing that works locally and breaks on a clean Phase G deploy.
 pyjwt[crypto]>=2.8
 
+# Resume import — .docx resumes are converted to text in memory (Gemini reads PDFs itself, not Word).
+python-docx>=1.1
+
 # Phase 4 (audio) — add when you get there; keep them OUT of the text-only skeleton:
 # faster-whisper      # STT (offline)
 # piper-tts           # TTS (offline)  — or pyttsx3 for a zero-download fallback
