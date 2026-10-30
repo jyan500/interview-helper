@@ -425,9 +425,31 @@ leftover Gemini files. The skills misses were model wording, like "Spring Framew
 **Projects** were added after that (name, url, description; same caps as ProjectBody). `project_url`
 adds a missing https:// and lowercases the scheme, and drops non-web links. 2 more live runs (PDF +
 .docx) got all 3 sample projects right, with links normalized.
-**Next action: Phase 2 (client)** per `~/.claude/plans/indexed-coalescing-biscuit.md`: ResumeImportCard,
-ResumeReviewModal (roles AND projects, useFieldArray each) and an importedSkills slice unioned into
-SkillsCard.*
+**Phase 2 (client) DONE, type-checks clean:**
+- **ResumeImportCard** (above Experience on the Profile page) uploads the file, with the privacy line
+  "Your resume is not saved after it is uploaded."
+- **ResumeReviewModal** is one RHF form with three sections:
+  - roles (`ImportedRoleFields`) and projects (`ImportedProjectFields`), each a `useFieldArray` with
+    include checkboxes, rules that only apply to checked rows, likely duplicates starting unchecked,
+    and free-slot caps
+  - skills (`ImportedSkillsField`): a react-select multi of only the NEW skills; Add PUTs saved + kept,
+    capped at MAX_SKILLS in total
+- Defaults come from `buildResumeDrafts` (helpers.ts), built once. On a partial failure the saved
+  entries leave the form and the failed ones stay with the reasons.
+- The planned importedSkills slice was dropped: skills are reviewed in the modal instead.
+- Backend: imported roles now carry `current`, since `end: null` alone can't tell current from undated.
+- **5-page cap** (`RESUME_MAX_PAGES`, checked before any upload or LLM call; 400 with the count):
+  - a PDF gets an exact count via `pypdf` (new dep), from the page tree with no text extraction;
+    password-protected and corrupt PDFs are rejected too
+  - a .docx is rejected if Word's saved count (`docProps/app.xml <Pages>`) is over 5 OR its text is
+    over 2,500 words (5 x 500), since the saved count can be missing or stale
+  - verified free (one stray flash-lite call from a test bug, since fixed)
+
+**Next action: browser pass.**
+- PDF and .docx upload, edit/uncheck, then Add; the Experience/Projects/Skills cards refresh
+- re-import the same file: duplicates start unchecked, and saved skills aren't offered
+- a .png is rejected client-side; a non-resume shows the "couldn't find" toast
+- the caps hold with 14 saved roles*
 
 *2026-10-26: **Underspecified coding statements** (branch `coding-example-question-vagueness`). A generated
 "shortest valid window" problem never said what made a window valid. `check_examples` guessed a rule and

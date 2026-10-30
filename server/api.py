@@ -337,13 +337,15 @@ class SkillOut(BaseModel):
 
 
 # POST /api/profile/resume/parse response: SUGGESTIONS for the Profile page to review, not saved rows
-# (so no slug). `start` may be None when the resume gives no date; `end = None` is a current role; a
-# project's `url` is None when the resume has no usable link.
+# (so no slug). `start`/`end` may be None when the resume gives no date, so unlike ExperienceOut a None
+# `end` doesn't by itself mean "current": `current` says that. A project's `url` is None when the resume
+# has no usable link.
 class ImportedExperienceOut(BaseModel):
     title: str
     company: str
     start: str | None
     end: str | None
+    current: bool
     description: str
 
 

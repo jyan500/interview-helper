@@ -6,7 +6,16 @@ import type { FetchPage, PageAdditional, SelectOption } from "./components/Async
 import type { Edge, Node } from "@xyflow/react";
 import type { GroupBase } from "react-select";
 import type { LoadOptions } from "react-select-async-paginate";
-import type { BasePageItem, DiagramDoc, DiagramNodeKind } from "./api";
+import type {
+    BasePageItem,
+    DiagramDoc,
+    DiagramNodeKind,
+    Experience,
+    ImportedExperience,
+    ImportedProject,
+    Project,
+    SkillItem,
+} from "./api";
 import type { TtsEngine, TurnMode } from "./voice/speech";
 import {
     ANSWER_MODE_STORAGE_KEY,
@@ -22,6 +31,8 @@ import {
     EDITOR_SETTINGS_STORAGE_KEY,
     IGNORED_INTERVIEWS_STORAGE_KEY,
     MIC_DEVICE_STORAGE_KEY,
+    RESUME_ACCEPTED_EXTENSIONS,
+    RESUME_MAX_BYTES,
     TTS_ENGINE_STORAGE_KEY,
     type AnswerMode,
     type CodeLanguage,
@@ -68,6 +79,134 @@ export function validateAvatarFile(file: File): string | null {
         return `Image must be under ${Math.round(AVATAR_MAX_BYTES / (1024 * 1024))} MB.`;
     }
     return null;
+}
+
+/**
+ * Pre-flight validation for a chosen resume file: a human error string, or null when it's acceptable.
+ * Checks the EXTENSION (a .docx often arrives with an empty `file.type`); the server re-checks the
+ * file's real bytes, so this only saves a paid round trip on an obvious mistake.
+ */
+export function validateResumeFile(file: File): string | null {
+    const name = file.name.toLowerCase();
+    if (!RESUME_ACCEPTED_EXTENSIONS.some((extension) => name.endsWith(extension))) {
+        return "Please choose a PDF or Word (.docx) file.";
+    }
+    if (file.size > RESUME_MAX_BYTES) {
+        return `Resumes must be under ${Math.round(RESUME_MAX_BYTES / (1024 * 1024))} MB.`;
+    }
+    return null;
+}
+
+/**
+ * A count with its noun, pluralized by a trailing "s" unless a plural is given.
+ *   countLabel(1, "role") -> "1 role"     countLabel(3, "role") -> "3 roles"
+ */
+export function countLabel(count: number, singular: string, plural = `${singular}s`): string {
+    return `${count} ${count === 1 ? singular : plural}`;
+}
+
+/**
+ * The key two background entries are compared on to flag a likely duplicate: each part trimmed and
+ * lowercased, joined. ("Backend Engineer", "Acme ") and ("backend engineer", "acme") match.
+ */
+export function duplicateKey(...parts: string[]): string {
+    return parts.map((part) => part.trim().toLowerCase()).join("|");
+}
+
+/**
+ * The resume review form's values (ResumeReviewModal): a row per role and project, plus the NEW skills.
+ * Form values are strings, so a missing date or link is "". `duplicate` rides in the values (it's never
+ * an input) so it stays with its row when saved rows are removed from the array. `skills` holds only
+ * skills the profile doesn't have yet; saving sends them together with the saved ones.
+ */
+export type RoleDraft = {
+    include: boolean;
+    duplicate: boolean;
+    title: string;
+    company: string;
+    start: string;
+    end: string;
+    current: boolean;
+    description: string;
+};
+export type ProjectDraft = {
+    include: boolean;
+    duplicate: boolean;
+    name: string;
+    url: string;
+    description: string;
+};
+export type ResumeReviewFields = {
+    roles: RoleDraft[];
+    projects: ProjectDraft[];
+    skills: SelectOption[];
+};
+
+/**
+ * The resume review form's default values: one draft per imported role and project, and the new skills.
+ *
+ * 1. Flag likely duplicates of what's already saved: same title + company for a role, same name for a
+ *    project (duplicateKey, so case and stray spaces don't matter).
+ * 2. Check the rest in the resume's order until the free slots (`remaining`) run out; duplicates and
+ *    anything past the cap start unchecked.
+ * 3. Turn nulls into "" for the inputs.
+ * 4. Keep only the skills the profile doesn't already have, as picker options.
+ *
+ *   buildResumeDrafts(
+ *       { experiences: [Backend Engineer @ Acme, Intern @ Foo], projects: [], skills: [Go, Python] },
+ *       { experiences: [backend engineer @ acme], projects: [], skills: [Python] },
+ *       { roles: 14, projects: 15 },
+ *   ) -> roles: [{ ...Acme, include: false, duplicate: true }, { ...Foo, include: true, duplicate: false }],
+ *      skills: [{ value: "go", label: "Go" }]
+ */
+export function buildResumeDrafts(
+    imported: { experiences: ImportedExperience[]; projects: ImportedProject[]; skills: SkillItem[] },
+    saved: { experiences: Experience[]; projects: Project[]; skills: SkillItem[] },
+    remaining: { roles: number; projects: number },
+): ResumeReviewFields {
+    // 1. what's already on the profile
+    const savedRoleKeys = new Set(saved.experiences.map((role) => duplicateKey(role.title, role.company)));
+    const savedProjectKeys = new Set(saved.projects.map((project) => duplicateKey(project.name)));
+
+    // 2 + 3. check in order while slots last
+    let roleSlots = remaining.roles;
+    const roles = imported.experiences.map((role) => {
+        const duplicate = savedRoleKeys.has(duplicateKey(role.title, role.company));
+        const include = !duplicate && roleSlots > 0;
+        if (include) roleSlots--;
+        return {
+            include,
+            duplicate,
+            title: role.title,
+            company: role.company,
+            start: role.start ?? "",
+            end: role.end ?? "",
+            current: role.current,
+            description: role.description,
+        };
+    });
+
+    let projectSlots = remaining.projects;
+    const projects = imported.projects.map((project) => {
+        const duplicate = savedProjectKeys.has(duplicateKey(project.name));
+        const include = !duplicate && projectSlots > 0;
+        if (include) projectSlots--;
+        return {
+            include,
+            duplicate,
+            name: project.name,
+            url: project.url ?? "",
+            description: project.description,
+        };
+    });
+
+    // 4. the parsed skills that aren't in the saved set (in the first list but not the second)
+    const savedSkillSlugs = new Set(saved.skills.map((skill) => skill.slug));
+    const skills = imported.skills
+        .filter((skill) => !savedSkillSlugs.has(skill.slug))
+        .map((skill) => ({ value: skill.slug, label: skill.name }));
+
+    return { roles, projects, skills };
 }
 
 /**

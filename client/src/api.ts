@@ -383,12 +383,15 @@ export interface ProfileUpdate {
 // THE CANDIDATE'S BACKGROUND (the Profile page) — mirrors tools/background.py. The *Base shapes are the
 // request bodies (POST, and the full-replace PUT /{slug}); the row adds the slug the server minted.
 // Months travel as "YYYY-MM"; `end: null` means a current role.
-export interface ExperienceBase {
+// ExperienceShape is what a saved role and a resume-imported one share; they differ on `start`.
+interface ExperienceShape {
     title: string;
     company: string;
-    start: string;
     end: string | null;
     description: string;
+}
+export interface ExperienceBase extends ExperienceShape {
+    start: string;
 }
 export interface Experience extends ExperienceBase {
     slug: string;
@@ -403,6 +406,20 @@ export interface Project extends ProjectBase {
 }
 // A skill from the curated vocab (GET /api/skills, GET /api/profile/skills) — just {slug, name}.
 export type SkillItem = BasePageItem;
+
+// The resume import (POST /api/profile/resume/parse, a multipart FormData upload like /transcribe):
+// SUGGESTIONS to review, not saved rows, so no slugs. A role's dates may be missing (null), so a null
+// `end` doesn't alone mean "current" here: `current` says that. Skills are already vocab entries.
+export interface ImportedExperience extends ExperienceShape {
+    start: string | null;
+    current: boolean;
+}
+export type ImportedProject = ProjectBase;
+export interface ResumeParseResponse {
+    experiences: ImportedExperience[];
+    projects: ImportedProject[];
+    skills: SkillItem[];
+}
 
 // Phase 5 robust STT — the /api/transcribe response. The REQUEST is a FormData (the recorded
 // audio blob), not a JSON body, so there's no matching request interface: fetchBaseQuery detects
@@ -750,6 +767,12 @@ export const interviewApi = createApi({
         getSkills: builder.query<Page<SkillItem>, OptionPageQuery>({
             query: ({ q = "", page = 1 }) => `/skills?q=${encodeURIComponent(q)}&page=${page}`,
         }),
+        // Read an uploaded resume (FormData, field "file") into roles/projects/skills to PRE-FILL the
+        // Profile page. A mutation (a paid POST), and it invalidates nothing: nothing is saved until the
+        // candidate reviews and adds the entries through the endpoints above.
+        parseResumeFile: builder.mutation<ResumeParseResponse, FormData>({
+            query: (body) => ({ url: "/profile/resume/parse", method: "POST", body }),
+        }),
         getLevel: builder.query<LevelPageItem, string>({
             query: (slug) => `/levels/${encodeURIComponent(slug)}`,
         }),
@@ -881,6 +904,7 @@ export const {
     useGetProfileSkillsQuery,
     useSaveProfileSkillsMutation,
     useLazyGetSkillsQuery,
+    useParseResumeFileMutation,
     useGetQuestionsQuery,
     useSaveQuestionsMutation,
     useGetCustomQuestionQuery,

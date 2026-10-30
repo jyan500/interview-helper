@@ -36,10 +36,13 @@ import re
 import sys
 import time
 import uuid
+import zipfile
 from typing import Literal
+from xml.etree import ElementTree
 
 import docx
 from pydantic import BaseModel, Field
+from pypdf import PdfReader
 from pydantic_ai import Agent, UploadedFile
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import UsageLimits
@@ -62,6 +65,15 @@ URL_MAX = 512
 
 # How long to wait for an uploaded PDF to leave PROCESSING. PDFs are normally ACTIVE on upload.
 FILE_READY_TIMEOUT_S = 10
+
+# THE PAGE CAP. A resume is a few pages; anything longer is either not a resume or a needlessly big
+# paid call. A PDF's page count is exact (pypdf reads the page tree, no text extraction). A .docx HAS
+# no page count until Word lays it out, so it gets two checks, and failing either rejects it:
+#   - Word's own count from the last save (docProps/app.xml <Pages>), when the file has one; and
+#   - the extracted text's word count against MAX_PAGES * WORDS_PER_PAGE (~500 words is a dense resume
+#     page). This one also covers files with no or edited page metadata, so it's what bounds the cost.
+RESUME_MAX_PAGES = 5
+DOCX_WORDS_PER_PAGE = 500
 
 
 class ResumeFileError(Exception):
@@ -245,16 +257,65 @@ async def _delete_file(name: str) -> None:
         logger.exception("resume import: failed to delete Gemini file %s", name)
 
 
+def pdf_page_count(data: bytes) -> int:
+    """The number of pages in a PDF, from its page tree (no text is extracted). Raises ValueError for a
+    PDF that can't be opened or is password-protected (Gemini couldn't read either)."""
+    try:
+        reader = PdfReader(io.BytesIO(data))
+        # an owner-password-only PDF still opens with an empty password; a real user password doesn't
+        if reader.is_encrypted and not reader.decrypt(""):
+            raise ValueError("That PDF is password-protected. Upload a copy without a password.")
+        return len(reader.pages)
+    except ValueError:
+        raise
+    except Exception as error:
+        raise ValueError("Couldn't read that PDF") from error
+
+
+def docx_saved_page_count(data: bytes) -> int | None:
+    """Word's page count from the document's last save (docProps/app.xml <Pages>), or None when the file
+    has none (Google Docs exports and generated files often don't) or it isn't a number."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            root = ElementTree.fromstring(archive.read("docProps/app.xml"))
+    except (KeyError, zipfile.BadZipFile, ElementTree.ParseError):
+        return None
+    for element in root:
+        # tags come namespaced: "{http://...extended-properties}Pages"
+        if element.tag.endswith("}Pages") and element.text and element.text.strip().isdigit():
+            return int(element.text.strip())
+    return None
+
+
+def check_resume_length(data: bytes, kind: ResumeKind, text: str) -> None:
+    """Raise ValueError (the route -> 400) when a resume is over RESUME_MAX_PAGES. `text` is a .docx's
+    extracted text (unused for a PDF). See RESUME_MAX_PAGES for why a .docx gets two checks."""
+    too_long = f"Resumes can only be up to {RESUME_MAX_PAGES} pages."
+    if kind == "pdf":
+        pages = pdf_page_count(data)
+        if pages > RESUME_MAX_PAGES:
+            raise ValueError(f"{too_long}")
+        return
+    saved_pages = docx_saved_page_count(data)
+    if (
+        saved_pages is not None and saved_pages > RESUME_MAX_PAGES
+    ) or (
+        len(text.split()) > RESUME_MAX_PAGES * DOCX_WORDS_PER_PAGE
+    ):
+        raise ValueError(f"{too_long}")
+
+
 async def parse_resume_file(data: bytes, kind: ResumeKind) -> dict:
     """Extract roles, projects and skills from one resume file. Returns
-        {"experiences": [{title, company, start, end, description}, ...],
+        {"experiences": [{title, company, start, end, current, description}, ...],
          "projects": [{name, url, description}, ...],
          "skills": [{slug, name}, ...]}
-    where `end` is None for a current role (the background routes' convention), `start` may be None
-    when the resume gives no date (the review form asks for it), and `url` is None when there's no
-    usable link.
+    where `start`/`end` are None when the resume gives no date (the review form asks for them),
+    `current` marks a role the resume calls current (its `end` is then None too), and `url` is None
+    when there's no usable link.
 
-    0. A .docx is turned into text first (fail fast on an unreadable one).
+    0. A .docx is turned into text first (fail fast on an unreadable one), then the page cap is
+       checked (check_resume_length), all before any upload or LLM call.
     1. Build the prompt: a PDF is uploaded to the Files API and passed as a document; a DOCX's text
        goes inline.
     2. Run the agent; for a PDF, delete the uploaded file whatever happens.
@@ -262,17 +323,17 @@ async def parse_resume_file(data: bytes, kind: ResumeKind) -> dict:
     4. Tidy the projects: cap counts and lengths, normalize the link (project_url).
     5. Cross-check the skill names against the curated vocab (match_vocab_skills).
 
-    Raises ValueError for a .docx we can't read (the route -> 400) and ResumeFileError when Gemini
-    can't process the PDF (-> 502).
+    Raises ValueError for a file we can't read or that's over RESUME_MAX_PAGES (the route -> 400), and
+    ResumeFileError when Gemini can't process the PDF (-> 502).
 
     Example (shape only):
         {"experiences": [{"title": "Backend Engineer", "company": "Acme", "start": "2022-01",
-                          "end": None, "description": "Built the billing API ..."}],
+                          "end": None, "current": True, "description": "Built the billing API ..."}],
          "projects": [{"name": "Ledger", "url": "https://github.com/jlee/ledger",
                        "description": "A CLI budgeting tool ..."}],
          "skills": [{"slug": "python", "name": "Python"}]}
     """
-    # 0. a .docx is read FIRST, so an unreadable one fails before any LLM work
+    # 0. a .docx is read FIRST, and the page cap checked, so a bad or long file fails before any LLM work
     text = ""
     if kind == "docx":
         try:
@@ -282,6 +343,7 @@ async def parse_resume_file(data: bytes, kind: ResumeKind) -> dict:
             raise ValueError("Couldn't read that Word document") from error
         if not text.strip():
             raise ValueError("That Word document has no text in it")
+    check_resume_length(data, kind, text)
 
     # 1 + 2. prompt and run
     started = time.perf_counter()
@@ -326,6 +388,8 @@ async def parse_resume_file(data: bytes, kind: ResumeKind) -> dict:
             "company": company,
             "start": item.start,
             "end": end,
+            # explicit, because end=None alone can't tell "current" from "no end date given" here
+            "current": item.end_is_present,
             "description": item.description.strip()[:DESCRIPTION_MAX],
         })
 
