@@ -212,6 +212,19 @@ export const MAX_PROJECTS = 15;
 export const MAX_SKILLS = 50;
 
 /**
+ * The resume import on the Profile page (POST /api/profile/resume/parse). RESUME_MAX_BYTES mirrors
+ * RESUME_MAX_MB in server/api.py, so an oversized file is caught before the upload. The server decides
+ * the real type from the file's own bytes; these are the courtesy check and the <input accept> list.
+ * Extensions as well as MIME types, since some browsers report an empty `type` for a .docx.
+ */
+export const RESUME_MAX_BYTES = 5 * 1024 * 1024;
+export const RESUME_ACCEPTED_EXTENSIONS = [".pdf", ".docx"];
+export const RESUME_ACCEPTED_TYPES = [
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+];
+
+/**
  * A candidate's own question's length caps — mirror CUSTOM_QUESTION_TITLE_MAX / CUSTOM_QUESTION_TEXT_MAX /
  * CUSTOM_QUESTION_NOTES_MAX in server/api.py. Checked in the question form so the paid grading-guide call
  * is never sent with input the server would reject.
