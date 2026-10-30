@@ -7,17 +7,17 @@
  * row isn't being saved, so a missing date on it mustn't block the rest. An unchecked row collapses to
  * its header. `canInclude` is false once the free slots are used up, which locks an unchecked box.
  */
-import { useFormContext, useWatch } from "react-hook-form";
+import { useFormContext } from "react-hook-form";
 import { BACKGROUND_DESCRIPTION_MAX_CHARS, BACKGROUND_NAME_MAX_CHARS } from "../../constants";
 import type { ResumeReviewFields } from "../../helpers";
 
 export default function ImportedRoleFields({ index, canInclude }: { index: number; canInclude: boolean }) {
     const {
         register,
-        control,
+        watch,
         formState: { errors },
     } = useFormContext<ResumeReviewFields>();
-    const role = useWatch({ control, name: `roles.${index}` });
+    const role = watch(`roles.${index}`);
     const rowErrors = errors.roles?.[index];
     const descriptionLength = role.description.trim().length;
 

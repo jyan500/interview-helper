@@ -15,7 +15,7 @@
  * stays, with the reasons in the root error, so a retry only re-sends what's left.
  */
 import { useState } from "react";
-import { FormProvider, useFieldArray, useForm, useWatch } from "react-hook-form";
+import { FormProvider, useFieldArray, useForm } from "react-hook-form";
 import {
     useCreateExperienceMutation,
     useCreateProjectMutation,
@@ -72,14 +72,16 @@ export default function ResumeReviewModal({
         setError,
         setValue,
         clearErrors,
+        watch,
         formState: { errors, isSubmitting },
     } = form;
     const { fields: roleFields, remove: removeRoles } = useFieldArray({ control, name: "roles" });
     const { fields: projectFields, remove: removeProjects } = useFieldArray({ control, name: "projects" });
 
-    const roles = useWatch({ control, name: "roles" });
-    const projectRows = useWatch({ control, name: "projects" });
-    const keptSkills = useWatch({ control, name: "skills" });
+    // watch() re-renders this modal (and so every row) on any change; fine at <= 15 roles + 15 projects
+    const roles = watch("roles");
+    const projectRows = watch("projects");
+    const keptSkills = watch("skills");
     const includedRoles = roles.filter((role) => role.include).length;
     const includedProjects = projectRows.filter((project) => project.include).length;
 

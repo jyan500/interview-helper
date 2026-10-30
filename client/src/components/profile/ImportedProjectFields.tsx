@@ -7,7 +7,7 @@
  * checked, an unchecked row collapses to its header, and `canInclude` locks an unchecked box once the
  * free slots are used up.
  */
-import { useFormContext, useWatch } from "react-hook-form";
+import { useFormContext } from "react-hook-form";
 import {
     BACKGROUND_DESCRIPTION_MAX_CHARS,
     BACKGROUND_NAME_MAX_CHARS,
@@ -18,10 +18,10 @@ import type { ResumeReviewFields } from "../../helpers";
 export default function ImportedProjectFields({ index, canInclude }: { index: number; canInclude: boolean }) {
     const {
         register,
-        control,
+        watch,
         formState: { errors },
     } = useFormContext<ResumeReviewFields>();
-    const project = useWatch({ control, name: `projects.${index}` });
+    const project = watch(`projects.${index}`);
     const rowErrors = errors.projects?.[index];
     const descriptionLength = project.description.trim().length;
 
