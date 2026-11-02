@@ -6,8 +6,8 @@
  * skeleton). The voice logic (useSmartVoiceTurn + useSpeak), the RTK Query mutations
  * (submitAnswer / getScorecard) and the two turn-taking effects moved here verbatim; the design's
  * mock content is replaced by the real transcript/draft/voice state. What is NOT here is the
- * KICKOFF: /api/interview is fired by the producer (Dashboard "Start interview" / Interviews
- * "New interview"), which then navigates here with the fresh interview in route state.
+ * KICKOFF: /api/interview is fired by the producer (the job interview card on Dashboard / Jobs, or
+ * Questions' practice card), which then navigates here with the fresh interview in route state.
  *
  * ACCESS IS GUARDED BY SessionLayout (the parent layout route): by the time this renders, a valid
  * interview is guaranteed and arrives via useSessionNav() — no missing-interview case to defend

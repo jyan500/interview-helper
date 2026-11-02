@@ -232,13 +232,13 @@ export type OnboardingStepId = "defaults" | "background" | "practice" | "intervi
  *   { done: { defaults: true, background: false, practice: true, interview: false }, doneCount: 2, allDone: false }
  */
 export function useOnboardingSteps() {
-    const { data: profile, isLoading: profileLoading } = useGetProfileQuery();
-    const { data: experiences, isLoading: experiencesLoading } = useGetExperiencesQuery();
-    const { data: projects, isLoading: projectsLoading } = useGetProjectsQuery();
-    const { data: skills, isLoading: skillsLoading } = useGetProfileSkillsQuery();
-    const { data: jobs, isLoading: jobsLoading } = useGetJobsQuery({ size: 1 });
-    const { data: savedQuestions, isLoading: questionsLoading } = useGetQuestionsQuery({ saved: true, size: 1 });
-    const { data: graded, isLoading: gradedLoading } = useGetMyInterviewsQuery({ size: DASHBOARD_ROWS, scored: true });
+    const { data: profile, isFetching: profileFetching } = useGetProfileQuery();
+    const { data: experiences, isFetching: experiencesFetching } = useGetExperiencesQuery();
+    const { data: projects, isFetching: projectsFetching } = useGetProjectsQuery();
+    const { data: skills, isFetching: skillsFetching } = useGetProfileSkillsQuery();
+    const { data: jobs, isFetching: jobsFetching } = useGetJobsQuery({ size: 1 });
+    const { data: savedQuestions, isFetching: questionsFetching } = useGetQuestionsQuery({ saved: true, size: 1 });
+    const { data: graded, isFetching: gradedFetching } = useGetMyInterviewsQuery({ size: DASHBOARD_ROWS, scored: true });
 
     const done: Record<OnboardingStepId, boolean> = {
         defaults: Boolean(profile?.role && profile?.level),
@@ -248,7 +248,7 @@ export function useOnboardingSteps() {
     };
     const doneCount = Object.values(done).filter(Boolean).length;
     const loading =
-        profileLoading || experiencesLoading || projectsLoading || skillsLoading || jobsLoading || questionsLoading || gradedLoading;
+        profileFetching || experiencesFetching || projectsFetching || skillsFetching || jobsFetching || questionsFetching || gradedFetching;
 
     return { done, doneCount, allDone: doneCount === Object.keys(done).length, loading };
 }

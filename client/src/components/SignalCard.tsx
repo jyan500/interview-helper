@@ -13,25 +13,25 @@ import Tooltip from "./Tooltip";
  * Pass `help` and the kicker row gets a help icon in the top-right corner that shows it as a tooltip,
  * for explaining what the card's number means without spending body space on it.
  *
- * `skeletonTitle` swaps the kicker row for a bar, for the panel's first load (a re-fetch keeps the title).
+ * `loading` swaps the kicker row for a bar, so a loading card shows no text.
  */
 export default function SignalCard({
     title,
     help,
-    skeletonTitle = false,
+    loading = false,
     children,
 }: {
     title: string;
     help?: ReactNode;
-    skeletonTitle?: boolean;
+    loading?: boolean;
     children: ReactNode;
 }) {
     return (
         <div className="rounded-md border border-divider px-5 py-[18px]">
             <div className="flex items-center justify-between gap-2">
-                {skeletonTitle ? <Skeleton className="h-3.5 w-24" /> : <div className="kicker">{title}</div>}
+                {loading ? <Skeleton className="h-3.5 w-24" /> : <div className="kicker">{title}</div>}
                 {/* align="end" opens the bubble leftward, since the icon sits at the card's right edge */}
-                {help && !skeletonTitle && (
+                {help && !loading && (
                     <Tooltip align="end" content={help}>
                         <button
                             type="button"

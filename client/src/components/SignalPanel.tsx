@@ -21,8 +21,8 @@
  * effective kind (the most-recently-graded answer's) and we seed the form's picker LABEL from what it
  * chose — so the draft shows the kind actually on screen before the first Apply.
  *
- * FIRST LOAD vs RE-FETCH: on the first load the card titles and the scope controls are bars too, so the
- * panel is text-free. A re-fetch (Apply, a new grade) only swaps the card bodies, and keeps the controls.
+ * LOADING: on every fetch (first load, Apply, a new grade) the whole panel is text-free bars, card titles
+ * and scope controls included. The form's values live in react-hook-form, so they survive the swap.
  */
 import { useState } from "react";
 import { useForm, Controller } from "react-hook-form";
@@ -73,7 +73,7 @@ export default function SignalPanel() {
 
     const [triggerQuestionTypes] = useLazyGetQuestionTypesQuery();
     const [triggerJobs] = useLazyGetGradedJobOptionsQuery();
-    const { data, isFetching, isLoading: firstLoad } = useGetDashboardQuery({
+    const { data, isFetching } = useGetDashboardQuery({
         question_type: applied.questionType,
         job: applied.job,
         period: applied.period,
@@ -99,12 +99,6 @@ export default function SignalPanel() {
         },
     ]);
 
-    // Show the kind picker's loading spinner while the query is (re)fetching AND no explicit kind is
-    // applied — that's exactly when the picker's value is the backend-RESOLVED one (cold load, or a
-    // refetch after a new grade), so it would otherwise sit empty/stale with no indication. Once the
-    // user has APPLIED a kind, its value is their own pick and won't change on a refetch.
-    const questionTypeLoading = isFetching && applied.questionType === undefined;
-
     function onApply(values: SignalFilters) {
         setApplied({
             questionType: values.questionType?.value,
@@ -116,8 +110,8 @@ export default function SignalPanel() {
     return (
         <div className="flex flex-col gap-5">
             {/* Scope controls — which kind, which job, over what window; applied together on submit */}
-            <SignalCard title="Signal" skeletonTitle={firstLoad}>
-                {firstLoad ? (
+            <SignalCard title="Signal" loading={isFetching}>
+                {isFetching ? (
                     <div className="mt-3 flex flex-col gap-2.5">
                         <Skeleton className="h-[38px] w-full" />
                         <Skeleton className="h-[38px] w-full" />
@@ -131,7 +125,6 @@ export default function SignalPanel() {
                         name="questionType"
                         fetchPage={triggerQuestionTypes}
                         placeholder="Select a question type…"
-                        isLoading={questionTypeLoading}
                     />
                     <ControlledAsyncPaginateSelect
                         control={control}
@@ -154,21 +147,16 @@ export default function SignalPanel() {
                             />
                         )}
                     />
-                    <Button
-                        type="submit"
-                        block
-                        disabled={isFetching}
-                        className="text-[13px] disabled:opacity-50"
-                    >
-                        {isFetching ? "Applying…" : "Apply"}
+                    <Button type="submit" block className="text-[13px]">
+                        Apply
                     </Button>
                 </form>
                 )}
             </SignalCard>
 
-            <ReadinessCard readiness={data?.readiness ?? EMPTY_READINESS} loading={isFetching} skeletonTitle={firstLoad} />
-            <SkillBreakdownCard skills={data?.skill_breakdown ?? []} loading={isFetching} skeletonTitle={firstLoad} />
-            <WorkOnNextCard items={data?.work_on_next ?? []} loading={isFetching} skeletonTitle={firstLoad} />
+            <ReadinessCard readiness={data?.readiness ?? EMPTY_READINESS} loading={isFetching} />
+            <SkillBreakdownCard skills={data?.skill_breakdown ?? []} loading={isFetching} />
+            <WorkOnNextCard items={data?.work_on_next ?? []} loading={isFetching} />
         </div>
     );
 }

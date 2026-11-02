@@ -9,7 +9,7 @@
  * the profile flag, so it holds on every device, and the nav's "Getting started" button brings it back.
  *
  * Self-contained like QuestionBankCard: it reads its own data and owns the Hide call. While that data
- * first loads, the whole card is a text-free skeleton in the same shape.
+ * loads or reloads, the whole card is a text-free skeleton in the same shape.
  */
 import { useUpdateProfileMutation } from "../api";
 import { useOnboardingSteps } from "../hooks";

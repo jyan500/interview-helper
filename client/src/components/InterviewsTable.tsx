@@ -13,9 +13,8 @@
  * Dashboard slices to a few recent ones; the Interviews page passes the full list) plus the
  * resumable id. Error state lives with the caller too, since their surrounding chrome differs;
  * this renders the table, a short empty line when there are no rows, or — while `loading` — a
- * shimmer skeleton in the same shape, so a re-fetch (page/filter change) doesn't flash stale rows.
- * `skeletonHeader` also turns the column headers into bars, for a caller's first load (a re-fetch keeps
- * the real headers).
+ * shimmer skeleton in the same shape, column headers included, so a re-fetch (page/filter change)
+ * doesn't flash stale rows.
  */
 import { useNavigate } from "react-router";
 import type { InterviewSummary } from "../api";
@@ -37,7 +36,6 @@ export default function InterviewsTable({
     resumableId = null,
     loading = false,
     skeletonRows = 8,
-    skeletonHeader = false,
     sort = null,
     order = "desc",
     onSort,
@@ -47,7 +45,6 @@ export default function InterviewsTable({
     resumableId?: string | null;
     loading?: boolean;
     skeletonRows?: number;
-    skeletonHeader?: boolean;
     emptyMessage?: string;
     // Sort is opt-in: only the standalone Interviews page passes `onSort`, so its Date/Score
     // headers become clickable arrows. The Dashboard card omits it and keeps plain headers — it
@@ -57,6 +54,7 @@ export default function InterviewsTable({
     onSort?: (field: SortField) => void;
 }) {
     const navigate = useNavigate();
+    const header = (label: string) => (loading ? <Skeleton inline className="h-3 w-12" /> : label);
 
     // Redraw an in-progress interview: hand /session the same route state the resume banner does
     // (role/level are the human-readable names for the header; `resume: true`, no firstMessage, so
@@ -99,17 +97,17 @@ export default function InterviewsTable({
                 </colgroup>
                 <thead>
                     <tr>
-                        <th>{skeletonHeader ? <Skeleton inline className="h-3 w-12" /> : "Type"}</th>
-                        <th>{skeletonHeader ? <Skeleton inline className="h-3 w-12" /> : "Interview"}</th>
-                        {onSort ? (
+                        <th>{header("Type")}</th>
+                        <th>{header("Interview")}</th>
+                        {onSort && !loading ? (
                             <>
                                 <SortableHeader label="Date" field="date" activeField={sort} order={order} onSort={onSort} />
                                 <SortableHeader label="Score" field="score" activeField={sort} order={order} onSort={onSort} />
                             </>
                         ) : (
                             <>
-                                <th>{skeletonHeader ? <Skeleton inline className="h-3 w-12" /> : "Date"}</th>
-                                <th>{skeletonHeader ? <Skeleton inline className="h-3 w-12" /> : "Score"}</th>
+                                <th>{header("Date")}</th>
+                                <th>{header("Score")}</th>
                             </>
                         )}
                         <th></th>

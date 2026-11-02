@@ -425,10 +425,13 @@ a bool can't collide with the None = don't-touch convention. Verified free again
 - `DashboardPage`: the checklist shows while not dismissed. With no graded interview yet, a one-column
   first-run layout (resume banner, checklist, and Start a job interview once there's a job or the
   checklist is hidden) replaces the empty Past interviews / question bank / signal panel. On first load
-  the normal layout shows until the interviews query answers, with every dashboard card as a text-free
-  skeleton (headings, labels and table headers are bars too). Only first loads do this: a re-fetch keeps
-  the real text.
+  the normal layout shows until the interviews query answers. Every dashboard card is a text-free
+  skeleton (headings, labels and table headers are bars too) on every fetch, not just the first, via
+  `isFetching`. The shared tables' headers do the same on the Interviews, Job and Questions pages.
 - `AppNav`: a "Getting started" button (NeedHelpButton) on every page clears the flag and goes to "/".
+- The Interviews page's "New interview" button is gone (it pointed at a dashboard card a new user may not
+  have). `SimulationKickoff` is also on the Jobs page, above the search and table, so job interviews start
+  from Jobs and practice ones from Questions.
 - `DASHBOARD_ROWS` moved to constants.ts so the hook shares the dashboard's cached interviews query.
 
 **Bug fixed alongside it:** signing out and into another account on the same tab showed the first

@@ -18,11 +18,9 @@ const SKELETON_ROWS = 4;
 export default function SkillBreakdownCard({
     skills,
     loading,
-    skeletonTitle,
 }: {
     skills: SkillScore[];
     loading?: boolean;
-    skeletonTitle?: boolean;
 }) {
     // the weakest bar (lowest average) reads as the low bar; ties all get the treatment, which is fine.
     const weakest = skills.length ? Math.min(...skills.map((s) => s.average)) : null;
@@ -30,7 +28,7 @@ export default function SkillBreakdownCard({
     return (
         <SignalCard
             title="Skill breakdown"
-            skeletonTitle={skeletonTitle}
+            loading={loading}
             help="Your average score on each skill this question type is graded on, out of 5, across every answer in the selected period. Your weakest skill is highlighted."
         >
             {loading ? (

@@ -20,11 +20,9 @@ import type { Readiness } from "../api";
 export default function ReadinessCard({
     readiness,
     loading,
-    skeletonTitle,
 }: {
     readiness: Readiness;
     loading?: boolean;
-    skeletonTitle?: boolean;
 }) {
     const { series, latest, average, delta, count } = readiness;
 
@@ -44,7 +42,7 @@ export default function ReadinessCard({
     );
 
     return (
-        <SignalCard title="Readiness" help={help} skeletonTitle={skeletonTitle}>
+        <SignalCard title="Readiness" help={help} loading={loading}>
             {loading ? (
                 <>
                     <div className="mt-1.5 flex items-end gap-2.5">

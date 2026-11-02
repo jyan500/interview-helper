@@ -19,16 +19,14 @@ const SKELETON_ROWS = 3;
 export default function WorkOnNextCard({
     items,
     loading,
-    skeletonTitle,
 }: {
     items: string[];
     loading?: boolean;
-    skeletonTitle?: boolean;
 }) {
     return (
         <SignalCard
             title="Work on next"
-            skeletonTitle={skeletonTitle}
+            loading={loading}
             help="The improvement suggestions from your most recently graded answers of this type, newest first. Pick one to focus on in your next interview."
         >
             {loading ? (

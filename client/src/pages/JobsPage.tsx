@@ -1,20 +1,20 @@
 /**
- * Jobs — the candidate's saved job descriptions, each one a source of tailored interview rounds.
- * "New job" opens NewJobModal (paste a posting → the extractor saves it → its page opens).
+ * Jobs — the candidate's saved job descriptions, each one a source of tailored interview rounds. Job
+ * interviews start here too (SimulationKickoff, which also holds "New job"), as practice ones do on the
+ * Questions page.
  *
  * THE URL IS THE SOURCE OF TRUTH, same as the Interviews page: `q` (matched against company or title
  * server-side) and `page` are read from the query string every render, and the search form only WRITES
  * the URL on submit — never auto-applied on change.
  */
-import { useState } from "react";
 import { useSearchParams } from "react-router";
 import { useForm } from "react-hook-form";
 import { useGetJobsQuery } from "../api";
 import { PAGE_SIZE } from "../constants";
 import AppNav from "../components/AppNav";
 import JobsTable from "../components/JobsTable";
-import NewJobModal from "../components/NewJobModal";
 import Pagination from "../components/Pagination";
+import SimulationKickoff from "../components/SimulationKickoff";
 import Button from "../components/Button";
 
 type SearchForm = {
@@ -27,7 +27,6 @@ export default function JobsPage() {
     const page = Number(searchParams.get("page")) || 1;
 
     const { data, isFetching, error } = useGetJobsQuery({ q, page, size: PAGE_SIZE });
-    const [newOpen, setNewOpen] = useState(false);
 
     const { register, handleSubmit, reset } = useForm<SearchForm>({ defaultValues: { q: q ?? "" } });
 
@@ -51,24 +50,16 @@ export default function JobsPage() {
 
     return (
         <div className="min-h-screen bg-bg text-ink">
-            {newOpen && <NewJobModal onClose={() => setNewOpen(false)} />}
-
             <AppNav />
 
             <div className="mx-auto max-w-[1280px]">
                 <div className="px-7 pb-3 pt-[26px]">
-                    <div className="flex items-end justify-between gap-5">
-                        <div>
-                            <h1 className="font-heading text-[30px] font-medium leading-[1.1] tracking-[-0.02em]">
-                                Jobs
-                            </h1>
-                            <p className="mt-1.5 text-[13.5px] text-neutral-400">
-                                Save a job posting, then practice the interview rounds that company would run.
-                            </p>
-                        </div>
-                        <Button variant="primary" className="text-sm" onClick={() => setNewOpen(true)}>
-                            New job
-                        </Button>
+                    <h1 className="font-heading text-[30px] font-medium leading-[1.1] tracking-[-0.02em]">
+                        Jobs
+                    </h1>
+
+                    <div className="mb-8 mt-5">
+                        <SimulationKickoff alwaysShowDescription />
                     </div>
 
                     <form onSubmit={handleSubmit(applySearch)} className="mt-5 flex flex-wrap items-center gap-2.5">
