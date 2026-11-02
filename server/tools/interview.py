@@ -1267,16 +1267,26 @@ async def get_profile(profile_id: str) -> dict:
                      if profile.role is not None else None),
             "level": ({"slug": profile.level.slug, "name": profile.level.name}
                       if profile.level is not None else None),
+            # the dashboard's "Getting started" checklist shows while this is False
+            "onboarding_dismissed": profile.onboarding_dismissed_at is not None,
         }
 
 
 async def set_profile_defaults(
-    profile_id: str, role_slug: str | None = None, level_slug: str | None = None
+    profile_id: str,
+    role_slug: str | None = None,
+    level_slug: str | None = None,
+    onboarding_dismissed: bool | None = None,
 ) -> dict:
-    """Set this user's default role and/or level — backs PATCH /api/profile. Each arg is a SLUG
-    the route received; None means "leave this one alone" (same don't-touch convention as
-    save_interview_state), so the caller can update role, level, or both. Resolves the slug to a
-    row and refuses an unknown one rather than storing a dangling id.
+    """Set this user's default role and/or level, and hide or restore the dashboard's onboarding
+    checklist — backs PATCH /api/profile. role/level are SLUGS the route received; None on any arg
+    means "leave this one alone" (same don't-touch convention as save_interview_state), so the
+    caller can update any subset. Resolves a slug to a row and refuses an unknown one rather than
+    storing a dangling id.
+
+    `onboarding_dismissed` is a plain bool, so None can't collide with a real value: True stamps
+    `onboarding_dismissed_at` (only if it isn't set yet, so the first dismissal's time is kept) and
+    False clears it, which brings the checklist back.
 
     Returns {"ok": True} or {"ok": False, "error": ...}."""
     async with get_session() as db:
@@ -1299,6 +1309,10 @@ async def set_profile_defaults(
             if level is None:
                 return {"ok": False, "error": f"unknown level: {level_slug}"}
             profile.level_id = level.id
+        if onboarding_dismissed is True and profile.onboarding_dismissed_at is None:
+            profile.onboarding_dismissed_at = datetime.now(timezone.utc)
+        elif onboarding_dismissed is False:
+            profile.onboarding_dismissed_at = None
         await db.commit()
         return {"ok": True}
 

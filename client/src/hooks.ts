@@ -10,7 +10,13 @@ import type { Edge, Node } from "@xyflow/react";
 import hark from "hark";
 import { audioConstraints } from "./voice/helpers";
 import {
+    useGetExperiencesQuery,
+    useGetJobsQuery,
     useGetMyInterviewsQuery,
+    useGetProfileQuery,
+    useGetProfileSkillsQuery,
+    useGetProjectsQuery,
+    useGetQuestionsQuery,
     useSaveQuestionsMutation,
     useStartInterviewMutation,
     type JobItem,
@@ -30,6 +36,7 @@ import {
     saveStoredTtsEngine,
 } from "./helpers";
 import {
+    DASHBOARD_ROWS,
     DEFAULT_MIC_OPTION,
     DIAGRAM_HISTORY_LIMIT,
     HARK_POLL_INTERVAL_MS,
@@ -205,6 +212,45 @@ export function useStartSequence() {
     );
 
     return { start, startRound, starting, resumableLoading, confirmOpen: pending !== null, confirm, cancel };
+}
+
+/** The dashboard "Getting started" checklist's steps, in order (see GettingStartedCard). */
+export type OnboardingStepId = "defaults" | "background" | "practice" | "interview";
+
+/**
+ * Which "Getting started" steps are done, read from the data each step produces, so a tick lands on
+ * its own when that query's tag invalidates (a saved default, an added role, a new job, a graded
+ * interview). No onboarding endpoint: every query here is one the app already makes, and the
+ * interviews one is the dashboard's own arg, so on the dashboard it's a cache hit.
+ *
+ *   defaults   -> a default role AND level on the profile
+ *   background -> any experience, project or skill
+ *   practice   -> a saved job, or a saved "My questions" question
+ *   interview  -> a graded interview of either kind
+ *
+ * Example: a profile with a default and one saved job, nothing graded ->
+ *   { done: { defaults: true, background: false, practice: true, interview: false }, doneCount: 2, allDone: false }
+ */
+export function useOnboardingSteps() {
+    const { data: profile, isLoading: profileLoading } = useGetProfileQuery();
+    const { data: experiences, isLoading: experiencesLoading } = useGetExperiencesQuery();
+    const { data: projects, isLoading: projectsLoading } = useGetProjectsQuery();
+    const { data: skills, isLoading: skillsLoading } = useGetProfileSkillsQuery();
+    const { data: jobs, isLoading: jobsLoading } = useGetJobsQuery({ size: 1 });
+    const { data: savedQuestions, isLoading: questionsLoading } = useGetQuestionsQuery({ saved: true, size: 1 });
+    const { data: graded, isLoading: gradedLoading } = useGetMyInterviewsQuery({ size: DASHBOARD_ROWS, scored: true });
+
+    const done: Record<OnboardingStepId, boolean> = {
+        defaults: Boolean(profile?.role && profile?.level),
+        background: (experiences?.length ?? 0) > 0 || (projects?.length ?? 0) > 0 || (skills?.length ?? 0) > 0,
+        practice: (jobs?.total ?? 0) > 0 || (savedQuestions?.total ?? 0) > 0,
+        interview: (graded?.total ?? 0) > 0,
+    };
+    const doneCount = Object.values(done).filter(Boolean).length;
+    const loading =
+        profileLoading || experiencesLoading || projectsLoading || skillsLoading || jobsLoading || questionsLoading || gradedLoading;
+
+    return { done, doneCount, allDone: doneCount === Object.keys(done).length, loading };
 }
 
 /**

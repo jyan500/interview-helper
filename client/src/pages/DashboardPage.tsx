@@ -16,23 +16,34 @@
  *
  * Fluid, not fixed: the mock's 1440px frame becomes a max-width container, and the two-column body
  * collapses to one column below ~1024px (lg:).
+ *
+ * NEW USERS get two things, decided independently:
+ *   1. The "Getting started" checklist (GettingStartedCard) at the top of the left column, while the
+ *      profile's `onboarding_dismissed` is false. The nav's "Getting started" button brings it back.
+ *   2. The FIRST-RUN layout, while there's no graded interview yet: one column with just the resume
+ *      banner, the checklist and "Start a job interview" (once there's a job, or if the checklist is
+ *      hidden, so the page is never blank). Past interviews, the question bank and the signal panel
+ *      would all be empty boxes, so they wait for the first graded interview. While the interviews
+ *      query first loads, the normal layout (with its skeletons) shows, so a returning user never sees
+ *      the first-run layout flash.
  */
 import { Link } from "react-router";
 import { useAuth } from "../auth/AuthProvider";
-import { useGetMyInterviewsQuery } from "../api";
+import { useGetJobsQuery, useGetMyInterviewsQuery, useGetProfileQuery } from "../api";
+import { DASHBOARD_ROWS } from "../constants";
 import AppNav from "../components/AppNav";
+import GettingStartedCard from "../components/GettingStartedCard";
 import ResumeBanner from "../components/ResumeBanner";
 import InterviewsTable from "../components/InterviewsTable";
 import QuestionBankCard from "../components/QuestionBankCard";
 import SignalPanel from "../components/SignalPanel";
 import SimulationKickoff from "../components/SimulationKickoff";
 
-// How many recent interviews the dashboard card shows before "View all" takes over. Sent as the page
-// `size` so the server returns just this many (page 1, newest first) rather than the whole history.
-const DASHBOARD_ROWS = 5;
-
 export default function DashboardPage() {
     const { session } = useAuth();
+    const { data: profile } = useGetProfileQuery();
+    // the same arg SimulationKickoff and the checklist use, so all three share one cached request
+    const { data: newestJobs } = useGetJobsQuery({ size: 1 });
 
     // Past interviews — the newest few GRADED interviews of BOTH kinds (scored: true hides
     // in-progress/abandoned ones, whose Score column would be blank; each row's Type tag tells Job from
@@ -47,6 +58,11 @@ export default function DashboardPage() {
     const interviews = interviewsData?.items ?? [];
     const resumableId = resumableData?.items[0]?.interview_id ?? null;
 
+    // see the header comment: the checklist and the first-run layout are two separate rules
+    const showChecklist = profile !== undefined && !profile.onboarding_dismissed;
+    const firstRun = interviewsData !== undefined && interviewsData.total === 0;
+    const hasJobs = (newestJobs?.total ?? 0) > 0;
+
     return (
         <div className="min-h-screen bg-bg text-ink">
             <AppNav />
@@ -59,44 +75,56 @@ export default function DashboardPage() {
                     </h1>
                 </div>
 
-                {/* Two-column body — collapses to one column below lg */}
-                <div className="grid grid-cols-1 gap-6 px-7 pb-[30px] pt-[22px] lg:grid-cols-[1fr_372px]">
-                    {/* ── Left column ─────────────────────────────────────────── */}
-                    <div className="flex min-w-0 flex-col gap-5">
-                        {/* Unfinished session banner — self-contained: renders only when the user has
-                            a resumable interview (the most-recent unfinished one), else nothing. */}
+                {firstRun ? (
+                    // First run: one column, only what a new user can act on
+                    <div className="flex max-w-[860px] flex-col gap-5 px-7 pb-[30px] pt-[22px]">
                         <ResumeBanner />
+                        {showChecklist && <GettingStartedCard />}
+                        {(hasJobs || !showChecklist) && <SimulationKickoff />}
+                    </div>
+                ) : (
+                    // Two-column body — collapses to one column below lg
+                    <div className="grid grid-cols-1 gap-6 px-7 pb-[30px] pt-[22px] lg:grid-cols-[1fr_372px]">
+                        {/* ── Left column ─────────────────────────────────────────── */}
+                        <div className="flex min-w-0 flex-col gap-5">
+                            {/* Unfinished session banner — self-contained: renders only when the user has
+                                a resumable interview (the most-recent unfinished one), else nothing. */}
+                            <ResumeBanner />
 
-                        {/* Start a job interview — pick a job, start one of its rounds. Self-contained. */}
-                        <SimulationKickoff />
+                            {/* Getting started — until the user hides it (see the header comment) */}
+                            {showChecklist && <GettingStartedCard />}
 
-                        {/* Past interviews — the newest few graded ones (both kinds), sharing
-                            InterviewsTable with the full Interviews page. "View all" routes to that page. */}
-                        <div className="rounded-md border border-divider px-[22px] pb-2 pt-[18px]">
-                            <div className="mb-2 flex items-baseline justify-between">
-                                <h2 className="font-heading text-[23px] font-medium">Past interviews</h2>
-                                <Link to="/interviews" className="text-[13px] text-accent-300">
-                                    View all
-                                </Link>
+                            {/* Start a job interview — pick a job, start one of its rounds. Self-contained. */}
+                            <SimulationKickoff />
+
+                            {/* Past interviews — the newest few graded ones (both kinds), sharing
+                                InterviewsTable with the full Interviews page. "View all" routes to that page. */}
+                            <div className="rounded-md border border-divider px-[22px] pb-2 pt-[18px]">
+                                <div className="mb-2 flex items-baseline justify-between">
+                                    <h2 className="font-heading text-[23px] font-medium">Past interviews</h2>
+                                    <Link to="/interviews" className="text-[13px] text-accent-300">
+                                        View all
+                                    </Link>
+                                </div>
+                                <InterviewsTable
+                                    interviews={interviews}
+                                    resumableId={resumableId}
+                                    loading={isFetching}
+                                    skeletonRows={DASHBOARD_ROWS}
+                                    emptyMessage="No graded interviews yet. Start a job interview above, or a practice one from the Questions page."
+                                />
                             </div>
-                            <InterviewsTable
-                                interviews={interviews}
-                                resumableId={resumableId}
-                                loading={isFetching}
-                                skeletonRows={DASHBOARD_ROWS}
-                                emptyMessage="No graded interviews yet. Start a job interview above, or a practice one from the Questions page."
-                            />
+
+                            {/* Your question bank — a read-only call-back to bank practice (Questions page),
+                                previewing the saved questions for the default role + level. Self-contained. */}
+                            <QuestionBankCard />
                         </div>
 
-                        {/* Your question bank — a read-only call-back to bank practice (Questions page),
-                            previewing the saved questions for the default role + level. Self-contained. */}
-                        <QuestionBankCard />
+                        {/* ── Right column (signal) — job-interview readiness / skill breakdown / work on next,
+                            scoped by round (+ optional job) and window; self-contained. ─────────────── */}
+                        <SignalPanel />
                     </div>
-
-                    {/* ── Right column (signal) — job-interview readiness / skill breakdown / work on next,
-                        scoped by round (+ optional job) and window; self-contained. ─────────────── */}
-                    <SignalPanel />
-                </div>
+                )}
             </div>
         </div>
     );

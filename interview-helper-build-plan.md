@@ -411,6 +411,28 @@ get different questions and level-calibrated feedback).
 
 ## CURRENT STATUS (resume point)
 
+*2026-10-31: **Dashboard "Getting started" for new users** (branch `prefill-signup-flow`). A brand-new
+account used to land on empty boxes. **Phase 1 (backend) DONE:** migration `b3d5f7a9c1e2` adds
+`profiles.onboarding_dismissed_at` (NULL = showing) and backfills existing profiles to now(), so only new
+signups see it. `GET /api/profile` returns `onboarding_dismissed`. `PATCH /api/profile` takes
+`onboarding_dismissed: bool` (true stamps it, keeping the first time; false clears it). No new endpoint:
+a bool can't collide with the None = don't-touch convention. Verified free against the DB.
+**Phase 2 (client) DONE, type-checks clean:**
+- `GettingStartedCard` (+ `OnboardingStepRow`): what the app does, then 4 steps that tick off from data
+  the app already fetches (`useOnboardingSteps` in hooks.ts): default role/level · any background ·
+  a job or a saved question · a graded interview. "Hide" PATCHes the flag. All done reads "You're all
+  set." and stays until hidden.
+- `DashboardPage`: the checklist shows while not dismissed. With no graded interview yet, a one-column
+  first-run layout (resume banner, checklist, and Start a job interview once there's a job or the
+  checklist is hidden) replaces the empty Past interviews / question bank / signal panel.
+- `AppNav`: a "Getting started" button (NeedHelpButton) on every page clears the flag and goes to "/".
+- `DASHBOARD_ROWS` moved to constants.ts so the hook shares the dashboard's cached interviews query.
+
+**Next action: browser pass.** Set your `onboarding_dismissed_at` to NULL (or sign up fresh):
+- the one-column view with 0 of 4; each step ticks as you set a default, add a role, save a question/job
+- finish an interview: the two-column dashboard returns
+- Hide holds after reload; the nav button brings it back from any page*
+
 *2026-10-29: **Resume import** (branch `new-account-and-resume-prefill`). Upload a resume on the Profile
 page and get pre-filled roles, projects and skills to review; nothing is saved until the candidate confirms, and the
 file itself is never stored. **Phase 1 (backend) DONE:** `server/resume_import.py` + `POST
