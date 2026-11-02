@@ -30,9 +30,17 @@
  * a refresh `session` is null and indistinguishable from "signed out". Without this flag,
  * <ProtectedRoute> would bounce a signed-in user to /login on every refresh. Anything that
  * gates on auth must wait for `loading` to be false first.
+ *
+ * THE RTK QUERY CACHE BELONGS TO ONE USER. Its keys are endpoint + args, with nothing about who asked
+ * (GET /api/profile is the same key for everyone), and it lives in memory across sign-out. So when a
+ * user leaves, this wipes it, or the next account to sign in on this tab is served the last one's
+ * data. Keyed on the user ID, not the session, because a token refresh changes the session and must
+ * not throw away the cache.
  */
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { Session } from "@supabase/supabase-js";
+import { interviewApi } from "../api";
+import { useAppDispatch } from "../store";
 import { supabase } from "../supabase";
 
 type AuthState = {
@@ -71,6 +79,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         //    without this you'd have two live subscriptions after the first render.
         return () => subscription.unsubscribe();
     }, []);
+
+    // Wipe the cache when a user leaves. A null -> user change is skipped, since a signed-out app has
+    // nothing cached to wipe. It runs here rather than in the auth callback so the pages have already
+    // unmounted on sign-out, and nothing refetches without a token. The reset also aborts in-flight
+    // requests, so a late response can't land afterwards.
+    //
+    // WHY A LAYOUT EFFECT: the direct swap, from user A to user B with no signed-out state in between
+    // (e.g. another tab signing in as a different account). The page stays mounted through that swap,
+    // so its first render under B still holds A's cached data. A layout effect runs before the browser
+    // paints, so that render never reaches the screen; useEffect could show it for a frame.
+    const dispatch = useAppDispatch();
+    const userId = session?.user.id ?? null;
+    const previousUserId = useRef<string | null>(null);
+    useLayoutEffect(() => {
+        if (previousUserId.current && previousUserId.current !== userId) {
+            dispatch(interviewApi.util.resetApiState());
+        }
+        previousUserId.current = userId;
+    }, [userId, dispatch]);
 
     const value: AuthState = {
         session,

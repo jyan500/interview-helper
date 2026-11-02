@@ -5,7 +5,7 @@
  *
  * WHY A LAYOUT ROUTE AND NOT AN INLINE GUARD IN SessionPage:
  *   - The interview id only ever reaches /session as `location.state`, handed over by the producer
- *     (Dashboard "Start interview" / Interviews "New interview") right after POST /api/interview.
+ *     (the job interview card on Dashboard / Jobs, or Questions' practice card) right after POST /api/interview.
  *     A typed URL, a refresh that dropped state, or a stale bookmark arrives with NO interview —
  *     and that case wants its own screen, separate from the running session.
  *   - Keeping the check here means SessionPage never has to defend against a missing interview: by

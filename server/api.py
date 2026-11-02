@@ -254,12 +254,14 @@ class ScorecardRequest(BaseModel):
     role: str | None = None
 
 
-# PATCH /api/profile body — the dashboard default. Both OPTIONAL slugs: sending only one updates
-# only that column (the None = don't-touch convention set_profile_defaults follows), so the client
-# can save role + level together (the usual case) or either alone.
+# PATCH /api/profile body — the dashboard default, plus the onboarding checklist's hidden flag. All
+# OPTIONAL: sending only some updates only those columns (the None = don't-touch convention
+# set_profile_defaults follows), so the client can save role + level together (the usual case),
+# either alone, or just hide (true) / restore (false) the "Getting started" checklist.
 class ProfileUpdate(BaseModel):
     role: str | None = None
     level: str | None = None
+    onboarding_dismissed: bool | None = None
 
 
 # PUT /api/profile/avatar body — the profile picture's public URL, uploaded client-direct to the
@@ -1859,7 +1861,12 @@ async def update_profile(
     body: ProfileUpdate,
     user_id: str = Depends(require_user),
 ) -> dict:
-    result = await set_profile_defaults(user_id, role_slug=body.role, level_slug=body.level)
+    result = await set_profile_defaults(
+        user_id,
+        role_slug=body.role,
+        level_slug=body.level,
+        onboarding_dismissed=body.onboarding_dismissed,
+    )
     if not result["ok"]:
         raise HTTPException(status_code=400, detail=result["error"])
     return result

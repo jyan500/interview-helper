@@ -50,6 +50,7 @@ export default function QuestionsTable({
     const hasActions = editable || Boolean(onView);
     // Edit is only for your own questions, and not ones saved from an interview (those are read-only)
     const canEdit = (q: QuestionItem) => editable && q.is_custom && !q.is_claimed;
+    const header = (label: string) => (loading ? <Skeleton inline className="h-3 w-12" /> : label);
 
     // Empty line only when settled with no rows — never mid-fetch, when the skeleton shows.
     if (!loading && questions.length === 0) {
@@ -74,9 +75,9 @@ export default function QuestionsTable({
                     <tr>
                         {/* narrow checkbox column; the header is intentionally blank (per-row control) */}
                         {selectable && <th></th>}
-                        <th>Question</th>
-                        <th>Type</th>
-                        <th>Level</th>
+                        <th>{header("Question")}</th>
+                        <th>{header("Type")}</th>
+                        <th>{header("Level")}</th>
                         {hasActions && <th></th>}
                     </tr>
                 </thead>

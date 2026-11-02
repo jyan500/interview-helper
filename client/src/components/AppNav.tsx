@@ -6,10 +6,13 @@
  * DESIGN/LAYOUT ONLY: `signOut` is wired (it already worked pre-redesign), but the
  * links are plain routes — the nav itself carries no interview state.
  */
-import { NavLink } from "react-router";
+import { NavLink, useNavigate } from "react-router";
 import { useAuth } from "../auth/AuthProvider";
+import { useGetProfileQuery, useUpdateProfileMutation } from "../api";
+import { useToast } from "../toast/ToastProvider";
 import AccountMenu from "./AccountMenu";
 import Button from "./Button";
+import NeedHelpButton from "./tour/NeedHelpButton";
 
 // NavLink hands its className a { isActive } flag; the active link takes ink + an accent
 // underline, the inactive one the muted neutral-400 — matching the mock exactly.
@@ -25,6 +28,24 @@ function navLinkClass({ isActive }: { isActive: boolean }) {
 
 export default function AppNav() {
     const { session, signOut } = useAuth();
+    const navigate = useNavigate();
+    const { toast } = useToast();
+    const { data: profile } = useGetProfileQuery();
+    const [updateProfile, { isLoading: restoring }] = useUpdateProfileMutation();
+
+    // "Getting started": the way back to the dashboard's checklist after Hide. Restores it if it's
+    // hidden (the profile flag), then goes to the dashboard, where it lives.
+    async function onGettingStarted() {
+        if (profile?.onboarding_dismissed) {
+            try {
+                await updateProfile({ onboarding_dismissed: false }).unwrap();
+            } catch {
+                toast("Couldn't bring back the checklist. Try again.", { variant: "error" });
+                return;
+            }
+        }
+        navigate("/");
+    }
 
     return (
         <nav className="nav flex h-[58px] items-center justify-between border-b border-divider px-7">
@@ -49,6 +70,7 @@ export default function AppNav() {
             </div>
 
             <div className="flex items-center gap-[14px] text-[13px] text-neutral-300">
+                <NeedHelpButton label="Getting started" onClick={onGettingStarted} disabled={restoring} />
                 {/* The account avatar opens a dropdown to the Profile and Settings pages. */}
                 <AccountMenu />
                 <span>{session?.user?.user_metadata?.display_name ?? ""}</span>

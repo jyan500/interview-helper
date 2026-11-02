@@ -155,6 +155,14 @@ export const IGNORED_INTERVIEWS_STORAGE_KEY = "ih.ignoredInterviewIds";
 export const SAVE_QUESTIONS_BANNER_DISMISSED_KEY = "ih.saveQuestionsBannerDismissed";
 
 /**
+ * How many recent interviews the dashboard's "Past interviews" card shows before "View all" takes over.
+ * Sent as the page `size` so the server returns just this many (page 1, newest first). Shared with
+ * useOnboardingSteps, which asks the SAME query ({ size, scored: true }) so its "first interview" check
+ * is a cache hit on the dashboard.
+ */
+export const DASHBOARD_ROWS = 5;
+
+/**
  * Tunables for the Settings modal's live mic-test meter (useMicLevel). The meter is driven by `hark`
  * (the same loudness library useSpeaking uses), whose volume_change reports the input level in dBFS
  * (~-100 silent .. 0 loud). We map that dB range onto the bar's 0..1 width, so it sits left when you're

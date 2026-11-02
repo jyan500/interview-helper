@@ -224,6 +224,14 @@ class Profile(Base, TimestampMixin):
         ForeignKey("levels.id", ondelete="SET NULL"), nullable=True
     )
 
+    # THE DASHBOARD'S ONBOARDING CHECKLIST ("Getting started") — when the user hid it, or NULL while
+    # it's showing. A new profile starts NULL (the signup trigger doesn't set it), so every new user
+    # sees the checklist; the migration that added this backfilled existing profiles to now(), so
+    # accounts from before it never did. Cleared again by the nav's "Getting started" button.
+    onboarding_dismissed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     interviews: Mapped[list[Interview]] = relationship(
         back_populates="profile", lazy="raise"
     )

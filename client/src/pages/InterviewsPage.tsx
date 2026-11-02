@@ -23,7 +23,7 @@
  * same interview, stored as one text transcript.
  */
 import { useEffect } from "react";
-import { useNavigate, useSearchParams } from "react-router";
+import { useSearchParams } from "react-router";
 import { Controller, useForm } from "react-hook-form";
 import Select from "react-select";
 import { skipToken } from "@reduxjs/toolkit/query/react";
@@ -72,7 +72,6 @@ type FiltersForm = {
 };
 
 export default function InterviewsPage() {
-    const navigate = useNavigate();
     const [searchParams, setSearchParams] = useSearchParams();
 
     const [triggerRoles] = useLazyGetRolesQuery();
@@ -201,21 +200,9 @@ export default function InterviewsPage() {
             <div className="mx-auto max-w-[1280px]">
                 {/* Header */}
                 <div className="px-7 pb-3 pt-[26px]">
-                    <div className="flex items-end justify-between gap-5">
-                        <div>
-                            <h1 className="font-heading text-[30px] font-medium leading-[1.1] tracking-[-0.02em]">
-                                Past interviews
-                            </h1>
-                        </div>
-                        {/* Starting an interview needs a job + round (the Dashboard's "Start a job
-                            interview" card) or a role + level (the Questions page's practice kickoff) — so
-                            send the user to the Dashboard rather than duplicate a kickoff here (or POST
-                            with guessed defaults). The interview is created there, then /session is
-                            entered with it in route state. */}
-                        <Button variant="primary" className="text-sm" onClick={() => navigate("/")}>
-                            New interview
-                        </Button>
-                    </div>
+                    <h1 className="font-heading text-[30px] font-medium leading-[1.1] tracking-[-0.02em]">
+                        Past interviews
+                    </h1>
 
                     {/* Unfinished session banner — the same affordance as the Dashboard, so a user
                         landing here can resume without a detour home. Renders only when one exists. */}

@@ -20,6 +20,9 @@
  * WHICH KIND IS QUERIED FIRST: `applied.questionType` starts undefined, so the backend resolves the
  * effective kind (the most-recently-graded answer's) and we seed the form's picker LABEL from what it
  * chose — so the draft shows the kind actually on screen before the first Apply.
+ *
+ * LOADING: on every fetch (first load, Apply, a new grade) the whole panel is text-free bars, card titles
+ * and scope controls included. The form's values live in react-hook-form, so they survive the swap.
  */
 import { useState } from "react";
 import { useForm, Controller } from "react-hook-form";
@@ -27,6 +30,7 @@ import Select from "react-select";
 import type { SelectOption } from "./AsyncPaginateSelect";
 import { ControlledAsyncPaginateSelect } from "./ControlledAsyncPaginateSelect";
 import SignalCard from "./SignalCard";
+import { Skeleton } from "./Skeleton";
 import ReadinessCard from "./ReadinessCard";
 import SkillBreakdownCard from "./SkillBreakdownCard";
 import WorkOnNextCard from "./WorkOnNextCard";
@@ -95,12 +99,6 @@ export default function SignalPanel() {
         },
     ]);
 
-    // Show the kind picker's loading spinner while the query is (re)fetching AND no explicit kind is
-    // applied — that's exactly when the picker's value is the backend-RESOLVED one (cold load, or a
-    // refetch after a new grade), so it would otherwise sit empty/stale with no indication. Once the
-    // user has APPLIED a kind, its value is their own pick and won't change on a refetch.
-    const questionTypeLoading = isFetching && applied.questionType === undefined;
-
     function onApply(values: SignalFilters) {
         setApplied({
             questionType: values.questionType?.value,
@@ -112,14 +110,21 @@ export default function SignalPanel() {
     return (
         <div className="flex flex-col gap-5">
             {/* Scope controls — which kind, which job, over what window; applied together on submit */}
-            <SignalCard title="Signal">
+            <SignalCard title="Signal" loading={isFetching}>
+                {isFetching ? (
+                    <div className="mt-3 flex flex-col gap-2.5">
+                        <Skeleton className="h-[38px] w-full" />
+                        <Skeleton className="h-[38px] w-full" />
+                        <Skeleton className="h-[38px] w-full" />
+                        <Skeleton className="h-[34px] w-full" />
+                    </div>
+                ) : (
                 <form onSubmit={handleSubmit(onApply)} className="mt-3 flex flex-col gap-2.5">
                     <ControlledAsyncPaginateSelect
                         control={control}
                         name="questionType"
                         fetchPage={triggerQuestionTypes}
                         placeholder="Select a question type…"
-                        isLoading={questionTypeLoading}
                     />
                     <ControlledAsyncPaginateSelect
                         control={control}
@@ -142,15 +147,11 @@ export default function SignalPanel() {
                             />
                         )}
                     />
-                    <Button
-                        type="submit"
-                        block
-                        disabled={isFetching}
-                        className="text-[13px] disabled:opacity-50"
-                    >
-                        {isFetching ? "Applying…" : "Apply"}
+                    <Button type="submit" block className="text-[13px]">
+                        Apply
                     </Button>
                 </form>
+                )}
             </SignalCard>
 
             <ReadinessCard readiness={data?.readiness ?? EMPTY_READINESS} loading={isFetching} />

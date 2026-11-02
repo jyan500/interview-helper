@@ -13,12 +13,14 @@
  * Dashboard slices to a few recent ones; the Interviews page passes the full list) plus the
  * resumable id. Error state lives with the caller too, since their surrounding chrome differs;
  * this renders the table, a short empty line when there are no rows, or — while `loading` — a
- * shimmer skeleton in the same shape, so a re-fetch (page/filter change) doesn't flash stale rows.
+ * shimmer skeleton in the same shape, column headers included, so a re-fetch (page/filter change)
+ * doesn't flash stale rows.
  */
 import { useNavigate } from "react-router";
 import type { InterviewSummary } from "../api";
 import { formatShortDate, formatScore, interviewTitle } from "../helpers";
 import { PAGE_SIZE } from "../constants"
+import { Skeleton } from "./Skeleton"
 import { SkeletonRow } from "./SkeletonRow"
 import SortableHeader from "./SortableHeader"
 import Button from "./Button"
@@ -52,6 +54,7 @@ export default function InterviewsTable({
     onSort?: (field: SortField) => void;
 }) {
     const navigate = useNavigate();
+    const header = (label: string) => (loading ? <Skeleton inline className="h-3 w-12" /> : label);
 
     // Redraw an in-progress interview: hand /session the same route state the resume banner does
     // (role/level are the human-readable names for the header; `resume: true`, no firstMessage, so
@@ -94,17 +97,17 @@ export default function InterviewsTable({
                 </colgroup>
                 <thead>
                     <tr>
-                        <th>Type</th>
-                        <th>Interview</th>
-                        {onSort ? (
+                        <th>{header("Type")}</th>
+                        <th>{header("Interview")}</th>
+                        {onSort && !loading ? (
                             <>
                                 <SortableHeader label="Date" field="date" activeField={sort} order={order} onSort={onSort} />
                                 <SortableHeader label="Score" field="score" activeField={sort} order={order} onSort={onSort} />
                             </>
                         ) : (
                             <>
-                                <th>Date</th>
-                                <th>Score</th>
+                                <th>{header("Date")}</th>
+                                <th>{header("Score")}</th>
                             </>
                         )}
                         <th></th>

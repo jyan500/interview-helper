@@ -1,7 +1,8 @@
 /**
  * The trigger for a tour: "Need help?" beside a workspace's heading, or another label where two tours
  * share a page (the session header's "How it works"). It only opens the tour; the owner keeps the
- * `touring` flag and mounts GuidedTour while it's set.
+ * `touring` flag and mounts GuidedTour while it's set. The nav's "Getting started" (back to the
+ * dashboard checklist) reuses it as the same help-styled trigger.
  */
 import { Question } from "@phosphor-icons/react";
 import Button from "../Button";

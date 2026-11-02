@@ -28,6 +28,7 @@ export default function SkillBreakdownCard({
     return (
         <SignalCard
             title="Skill breakdown"
+            loading={loading}
             help="Your average score on each skill this question type is graded on, out of 5, across every answer in the selected period. Your weakest skill is highlighted."
         >
             {loading ? (

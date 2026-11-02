@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Question } from "@phosphor-icons/react";
+import { Skeleton } from "./Skeleton";
 import Tooltip from "./Tooltip";
 
 /**
@@ -11,22 +12,26 @@ import Tooltip from "./Tooltip";
  *
  * Pass `help` and the kicker row gets a help icon in the top-right corner that shows it as a tooltip,
  * for explaining what the card's number means without spending body space on it.
+ *
+ * `loading` swaps the kicker row for a bar, so a loading card shows no text.
  */
 export default function SignalCard({
     title,
     help,
+    loading = false,
     children,
 }: {
     title: string;
     help?: ReactNode;
+    loading?: boolean;
     children: ReactNode;
 }) {
     return (
         <div className="rounded-md border border-divider px-5 py-[18px]">
             <div className="flex items-center justify-between gap-2">
-                <div className="kicker">{title}</div>
+                {loading ? <Skeleton className="h-3.5 w-24" /> : <div className="kicker">{title}</div>}
                 {/* align="end" opens the bubble leftward, since the icon sits at the card's right edge */}
-                {help && (
+                {help && !loading && (
                     <Tooltip align="end" content={help}>
                         <button
                             type="button"

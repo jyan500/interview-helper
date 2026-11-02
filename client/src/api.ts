@@ -373,11 +373,14 @@ export interface ProfileData {
     avatar_url: string | null; // the profile picture's public URL, or null => render initials
     role: BasePageItem | null; // the default role as {slug, name}
     level: BasePageItem | null; // the default level as {slug, name}
+    onboarding_dismissed: boolean; // the dashboard's "Getting started" checklist shows while false
 }
-// PATCH /api/profile — set the default. Both optional slugs; omit one to leave it unchanged.
+// PATCH /api/profile — set the default, and/or hide (true) / restore (false) the "Getting started"
+// checklist. All optional; omit one to leave it unchanged.
 export interface ProfileUpdate {
     role?: string;
     level?: string;
+    onboarding_dismissed?: boolean;
 }
 
 // THE CANDIDATE'S BACKGROUND (the Profile page) — mirrors tools/background.py. The *Base shapes are the

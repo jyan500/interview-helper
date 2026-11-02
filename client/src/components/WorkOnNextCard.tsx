@@ -26,6 +26,7 @@ export default function WorkOnNextCard({
     return (
         <SignalCard
             title="Work on next"
+            loading={loading}
             help="The improvement suggestions from your most recently graded answers of this type, newest first. Pick one to focus on in your next interview."
         >
             {loading ? (
