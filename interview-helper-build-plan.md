@@ -424,11 +424,20 @@ a bool can't collide with the None = don't-touch convention. Verified free again
   set." and stays until hidden.
 - `DashboardPage`: the checklist shows while not dismissed. With no graded interview yet, a one-column
   first-run layout (resume banner, checklist, and Start a job interview once there's a job or the
-  checklist is hidden) replaces the empty Past interviews / question bank / signal panel.
+  checklist is hidden) replaces the empty Past interviews / question bank / signal panel. On first load
+  the normal layout shows until the interviews query answers, with every dashboard card as a text-free
+  skeleton (headings, labels and table headers are bars too). Only first loads do this: a re-fetch keeps
+  the real text.
 - `AppNav`: a "Getting started" button (NeedHelpButton) on every page clears the flag and goes to "/".
 - `DASHBOARD_ROWS` moved to constants.ts so the hook shares the dashboard's cached interviews query.
 
-**Next action: browser pass.** Set your `onboarding_dismissed_at` to NULL (or sign up fresh):
+**Bug fixed alongside it:** signing out and into another account on the same tab showed the first
+account's dashboard, because the RTK Query cache (keyed by endpoint + args, not user) survived sign-out.
+`AuthProvider` now calls `resetApiState` when the user ID changes (not on token refresh), and
+`IdentitySync` clears the avatar slice on unmount. Type-checks clean, not yet tried in a browser.
+
+**Next action: browser pass.** Sign out of one account and into another: nothing from the first should show.
+Then set your `onboarding_dismissed_at` to NULL (or sign up fresh):
 - the one-column view with 0 of 4; each step ticks as you set a default, add a role, save a question/job
 - finish an interview: the two-column dashboard returns
 - Hide holds after reload; the nav button brings it back from any page*

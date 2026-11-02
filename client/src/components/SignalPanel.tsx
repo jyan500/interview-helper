@@ -20,6 +20,9 @@
  * WHICH KIND IS QUERIED FIRST: `applied.questionType` starts undefined, so the backend resolves the
  * effective kind (the most-recently-graded answer's) and we seed the form's picker LABEL from what it
  * chose — so the draft shows the kind actually on screen before the first Apply.
+ *
+ * FIRST LOAD vs RE-FETCH: on the first load the card titles and the scope controls are bars too, so the
+ * panel is text-free. A re-fetch (Apply, a new grade) only swaps the card bodies, and keeps the controls.
  */
 import { useState } from "react";
 import { useForm, Controller } from "react-hook-form";
@@ -27,6 +30,7 @@ import Select from "react-select";
 import type { SelectOption } from "./AsyncPaginateSelect";
 import { ControlledAsyncPaginateSelect } from "./ControlledAsyncPaginateSelect";
 import SignalCard from "./SignalCard";
+import { Skeleton } from "./Skeleton";
 import ReadinessCard from "./ReadinessCard";
 import SkillBreakdownCard from "./SkillBreakdownCard";
 import WorkOnNextCard from "./WorkOnNextCard";
@@ -69,7 +73,7 @@ export default function SignalPanel() {
 
     const [triggerQuestionTypes] = useLazyGetQuestionTypesQuery();
     const [triggerJobs] = useLazyGetGradedJobOptionsQuery();
-    const { data, isFetching } = useGetDashboardQuery({
+    const { data, isFetching, isLoading: firstLoad } = useGetDashboardQuery({
         question_type: applied.questionType,
         job: applied.job,
         period: applied.period,
@@ -112,7 +116,15 @@ export default function SignalPanel() {
     return (
         <div className="flex flex-col gap-5">
             {/* Scope controls — which kind, which job, over what window; applied together on submit */}
-            <SignalCard title="Signal">
+            <SignalCard title="Signal" skeletonTitle={firstLoad}>
+                {firstLoad ? (
+                    <div className="mt-3 flex flex-col gap-2.5">
+                        <Skeleton className="h-[38px] w-full" />
+                        <Skeleton className="h-[38px] w-full" />
+                        <Skeleton className="h-[38px] w-full" />
+                        <Skeleton className="h-[34px] w-full" />
+                    </div>
+                ) : (
                 <form onSubmit={handleSubmit(onApply)} className="mt-3 flex flex-col gap-2.5">
                     <ControlledAsyncPaginateSelect
                         control={control}
@@ -151,11 +163,12 @@ export default function SignalPanel() {
                         {isFetching ? "Applying…" : "Apply"}
                     </Button>
                 </form>
+                )}
             </SignalCard>
 
-            <ReadinessCard readiness={data?.readiness ?? EMPTY_READINESS} loading={isFetching} />
-            <SkillBreakdownCard skills={data?.skill_breakdown ?? []} loading={isFetching} />
-            <WorkOnNextCard items={data?.work_on_next ?? []} loading={isFetching} />
+            <ReadinessCard readiness={data?.readiness ?? EMPTY_READINESS} loading={isFetching} skeletonTitle={firstLoad} />
+            <SkillBreakdownCard skills={data?.skill_breakdown ?? []} loading={isFetching} skeletonTitle={firstLoad} />
+            <WorkOnNextCard items={data?.work_on_next ?? []} loading={isFetching} skeletonTitle={firstLoad} />
         </div>
     );
 }

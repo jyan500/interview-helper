@@ -29,8 +29,13 @@ const userSlice = createSlice({
             state.initials = action.payload.initials;
             state.avatarUrl = action.payload.avatarUrl;
         },
+        // Back to the placeholder when the authenticated subtree unmounts (sign-out), so the next account
+        // to sign in on this tab never renders the last one's picture.
+        clearUserIdentity() {
+            return initialState;
+        },
     },
 });
 
-export const { setUserIdentity } = userSlice.actions;
+export const { setUserIdentity, clearUserIdentity } = userSlice.actions;
 export default userSlice.reducer;

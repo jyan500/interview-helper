@@ -9,7 +9,8 @@
  * a "+N more" count from the page `total`. No saved questions → the interview's fallback is spelled
  * out (3 of increasing difficulty). No default role/level → a prompt to set one, since there's no
  * scope to preview. Row actions match the Questions page: your own questions get Edit / Delete, bank
- * and from-interview ones get View (the read-only QuestionViewModal for the full text).
+ * and from-interview ones get View (the read-only QuestionViewModal for the full text). On first load
+ * the whole card is a skeleton, its heading and link included; a later re-fetch only swaps the rows.
  *
  * Self-contained (fetches its own data), like SignalPanel and SimulationKickoff.
  */
@@ -36,23 +37,31 @@ export default function QuestionBankCard() {
     const [viewing, setViewing] = useState<QuestionItem | null>(null);
     const [pendingDelete, setPendingDelete] = useState<QuestionItem | null>(null);
 
-    const { data: saved, isFetching } = useGetQuestionsQuery(
+    const { data: saved, isFetching, isLoading: savedLoading } = useGetQuestionsQuery(
         role && level ? { role: role.slug, level: level.slug, saved: true, page: 1, size: PREVIEW_ROWS } : skipToken,
     );
     const more = saved ? saved.total - saved.items.length : 0;
+    const firstLoad = profileLoading || savedLoading;
 
     return (
         <section className="rounded-md border border-divider px-[22px] pb-3 pt-[18px]">
             <div className="flex items-baseline justify-between gap-3">
-                <h2 className="font-heading text-[23px] font-medium">Your question bank</h2>
-                <Link to="/questions" className="text-[13px] text-accent-300">
-                    Practice &amp; manage
-                </Link>
+                {firstLoad ? (
+                    <>
+                        <Skeleton className="h-6 w-48" />
+                        <Skeleton className="h-3.5 w-24" />
+                    </>
+                ) : (
+                    <>
+                        <h2 className="font-heading text-[23px] font-medium">Your question bank</h2>
+                        <Link to="/questions" className="text-[13px] text-accent-300">
+                            Practice &amp; manage
+                        </Link>
+                    </>
+                )}
             </div>
 
-            {profileLoading ? (
-                <Skeleton className="mt-2 h-3.5 w-3/4" />
-            ) : !role || !level ? (
+            {!firstLoad && (!role || !level) ? (
                 <p className="mt-2 pb-3 text-[13.5px] text-neutral-400">
                     Besides job interviews, you can practice general questions for a role and level. Pick a
                     default role and level on the{" "}
@@ -61,16 +70,21 @@ export default function QuestionBankCard() {
                 </p>
             ) : (
                 <>
-                    <p className="mt-1 mb-2 text-[13px] text-neutral-400">
-                        General practice outside a job: the saved questions a {role.name} · {level.name}{" "}
-                        interview asks.
-                    </p>
+                    {firstLoad ? (
+                        <Skeleton className="mb-2 mt-2 h-3.5 w-3/4" />
+                    ) : (
+                        <p className="mt-1 mb-2 text-[13px] text-neutral-400">
+                            General practice outside a job: the saved questions a {role?.name} · {level?.name}{" "}
+                            interview asks.
+                        </p>
+                    )}
                     <QuestionsTable
                         questions={saved?.items ?? []}
                         onEdit={(q) => setEditing(q.slug)}
                         onView={setViewing}
                         onDelete={setPendingDelete}
-                        loading={isFetching}
+                        loading={firstLoad || isFetching}
+                        skeletonHeader={firstLoad}
                         skeletonRows={PREVIEW_ROWS}
                         emptyMessage="No saved questions yet. A practice interview will pick 3 of increasing difficulty for you."
                     />

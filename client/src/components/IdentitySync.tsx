@@ -6,13 +6,14 @@
  * Mounted inside the AUTHENTICATED subtree only (ProtectedRoute, next to <Outlet/>), so the profile
  * query never fires for a signed-out visitor. When the profile query invalidates after an avatar
  * upload/removal (the Profile tag), `profile` changes, this effect re-runs, and the slice — hence
- * every avatar on screen — updates without any manual refetch or prop plumbing.
+ * every avatar on screen — updates without any manual refetch or prop plumbing. Unmounting (sign-out)
+ * clears the slice.
  */
 import { useEffect } from "react";
 import { useAuth } from "../auth/AuthProvider";
 import { useGetProfileQuery } from "../api";
 import { initialsFrom } from "../helpers";
-import { setUserIdentity } from "../userSlice";
+import { clearUserIdentity, setUserIdentity } from "../userSlice";
 import { useAppDispatch } from "../store";
 
 export default function IdentitySync() {
@@ -24,6 +25,13 @@ export default function IdentitySync() {
         const initials = initialsFrom(session?.user?.user_metadata?.display_name, session?.user?.email);
         dispatch(setUserIdentity({ initials, avatarUrl: profile?.avatar_url ?? null }));
     }, [session, profile, dispatch]);
+
+    // Unmounting means signed out: don't leave this user's identity behind for the next one.
+    useEffect(() => {
+        return () => {
+            dispatch(clearUserIdentity());
+        };
+    }, [dispatch]);
 
     return null;
 }

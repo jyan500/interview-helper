@@ -23,9 +23,10 @@
  *   2. The FIRST-RUN layout, while there's no graded interview yet: one column with just the resume
  *      banner, the checklist and "Start a job interview" (once there's a job, or if the checklist is
  *      hidden, so the page is never blank). Past interviews, the question bank and the signal panel
- *      would all be empty boxes, so they wait for the first graded interview. While the interviews
- *      query first loads, the normal layout (with its skeletons) shows, so a returning user never sees
- *      the first-run layout flash.
+ *      would all be empty boxes, so they wait for the first graded interview.
+ *
+ * ON FIRST LOAD the normal layout shows until the interviews query answers, every card as a text-free
+ * skeleton (headings and labels included), so a new user never reads the titles of cards they won't have.
  */
 import { Link } from "react-router";
 import { useAuth } from "../auth/AuthProvider";
@@ -38,6 +39,7 @@ import InterviewsTable from "../components/InterviewsTable";
 import QuestionBankCard from "../components/QuestionBankCard";
 import SignalPanel from "../components/SignalPanel";
 import SimulationKickoff from "../components/SimulationKickoff";
+import { Skeleton } from "../components/Skeleton";
 
 export default function DashboardPage() {
     const { session } = useAuth();
@@ -50,7 +52,7 @@ export default function DashboardPage() {
     // Practice), and, separately, the one resumable interview so the table can show its Resume button.
     // Filtering by kind lives on the full Interviews page ("View all"). The unfinished interview isn't
     // lost from this page — the ResumeBanner above surfaces it.
-    const { data: interviewsData, isFetching } = useGetMyInterviewsQuery({
+    const { data: interviewsData, isFetching, isLoading: interviewsLoading } = useGetMyInterviewsQuery({
         size: DASHBOARD_ROWS,
         scored: true,
     });
@@ -101,15 +103,25 @@ export default function DashboardPage() {
                                 InterviewsTable with the full Interviews page. "View all" routes to that page. */}
                             <div className="rounded-md border border-divider px-[22px] pb-2 pt-[18px]">
                                 <div className="mb-2 flex items-baseline justify-between">
-                                    <h2 className="font-heading text-[23px] font-medium">Past interviews</h2>
-                                    <Link to="/interviews" className="text-[13px] text-accent-300">
-                                        View all
-                                    </Link>
+                                    {interviewsLoading ? (
+                                        <>
+                                            <Skeleton className="h-6 w-44" />
+                                            <Skeleton className="h-3.5 w-14" />
+                                        </>
+                                    ) : (
+                                        <>
+                                            <h2 className="font-heading text-[23px] font-medium">Past interviews</h2>
+                                            <Link to="/interviews" className="text-[13px] text-accent-300">
+                                                View all
+                                            </Link>
+                                        </>
+                                    )}
                                 </div>
                                 <InterviewsTable
                                     interviews={interviews}
                                     resumableId={resumableId}
                                     loading={isFetching}
+                                    skeletonHeader={interviewsLoading}
                                     skeletonRows={DASHBOARD_ROWS}
                                     emptyMessage="No graded interviews yet. Start a job interview above, or a practice one from the Questions page."
                                 />

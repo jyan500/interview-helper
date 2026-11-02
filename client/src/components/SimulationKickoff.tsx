@@ -16,6 +16,9 @@
  * interview row only carries the job's slug + company, not its title).
  *
  * No saved jobs → an empty state that points at "New job" instead of three dead round cards.
+ *
+ * On first load the whole card is a text-free skeleton (heading, button and labels included). Picking
+ * another job later only swaps the round cards.
  */
 import { useState } from "react";
 import { skipToken } from "@reduxjs/toolkit/query/react";
@@ -33,6 +36,7 @@ import Button from "./Button";
 import NewJobModal from "./NewJobModal";
 import OverwriteInterviewModal from "./OverwriteInterviewModal";
 import RoundCard, { RoundCardSkeleton } from "./RoundCard";
+import { Skeleton } from "./Skeleton";
 import StartingOverlay from "./StartingOverlay";
 import TimeLimitSelect from "./TimeLimitSelect";
 
@@ -58,7 +62,7 @@ export default function SimulationKickoff() {
     const selectedId = picked?.value ?? defaultJobId;
 
     const [triggerJobs] = useLazyGetJobOptionsQuery();
-    const { data: job, isFetching: jobFetching } = useGetJobQuery(selectedId ?? skipToken);
+    const { data: job, isFetching: jobFetching, isLoading: jobLoading } = useGetJobQuery(selectedId ?? skipToken);
     const { data: roundsData, isLoading: roundsLoading } = useGetRoundTypesQuery();
 
     // the picker's value: the user's pick as-is, or the default labelled from its fetched row.
@@ -70,6 +74,8 @@ export default function SimulationKickoff() {
     const [timeLimit, setTimeLimit] = useState<number | null>(null);
     const hasJobs = newestLoading || Boolean(newestJob);
     const cardsLoading = defaultLoading || roundsLoading || jobFetching || !job;
+
+    if (defaultLoading || roundsLoading || jobLoading) return <SimulationKickoffSkeleton />;
 
     return (
         <section className="rounded-md border border-divider px-[22px] pb-[22px] pt-5">
@@ -127,6 +133,33 @@ export default function SimulationKickoff() {
                     </div>
                 </>
             )}
+        </section>
+    );
+}
+
+// The first-load placeholder in the same shape: heading + button, the two fields, the round cards.
+function SimulationKickoffSkeleton() {
+    return (
+        <section className="rounded-md border border-divider px-[22px] pb-[22px] pt-5">
+            <div className="flex items-center justify-between gap-3">
+                <Skeleton className="h-6 w-56" />
+                <Skeleton className="h-8 w-20" />
+            </div>
+            <div className="mt-4 flex flex-col gap-4 sm:flex-row">
+                <div className="flex flex-col gap-2 sm:w-[420px]">
+                    <Skeleton className="h-3 w-10" />
+                    <Skeleton className="h-[38px] w-full" />
+                </div>
+                <div className="flex flex-col gap-2 sm:w-[220px]">
+                    <Skeleton className="h-3 w-16" />
+                    <Skeleton className="h-[38px] w-full" />
+                </div>
+            </div>
+            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+                {Array.from({ length: ROUND_SKELETONS }).map((_, i) => (
+                    <RoundCardSkeleton key={i} />
+                ))}
+            </div>
         </section>
     );
 }

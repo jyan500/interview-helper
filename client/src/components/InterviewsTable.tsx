@@ -14,11 +14,14 @@
  * resumable id. Error state lives with the caller too, since their surrounding chrome differs;
  * this renders the table, a short empty line when there are no rows, or — while `loading` — a
  * shimmer skeleton in the same shape, so a re-fetch (page/filter change) doesn't flash stale rows.
+ * `skeletonHeader` also turns the column headers into bars, for a caller's first load (a re-fetch keeps
+ * the real headers).
  */
 import { useNavigate } from "react-router";
 import type { InterviewSummary } from "../api";
 import { formatShortDate, formatScore, interviewTitle } from "../helpers";
 import { PAGE_SIZE } from "../constants"
+import { Skeleton } from "./Skeleton"
 import { SkeletonRow } from "./SkeletonRow"
 import SortableHeader from "./SortableHeader"
 import Button from "./Button"
@@ -34,6 +37,7 @@ export default function InterviewsTable({
     resumableId = null,
     loading = false,
     skeletonRows = 8,
+    skeletonHeader = false,
     sort = null,
     order = "desc",
     onSort,
@@ -43,6 +47,7 @@ export default function InterviewsTable({
     resumableId?: string | null;
     loading?: boolean;
     skeletonRows?: number;
+    skeletonHeader?: boolean;
     emptyMessage?: string;
     // Sort is opt-in: only the standalone Interviews page passes `onSort`, so its Date/Score
     // headers become clickable arrows. The Dashboard card omits it and keeps plain headers — it
@@ -94,8 +99,8 @@ export default function InterviewsTable({
                 </colgroup>
                 <thead>
                     <tr>
-                        <th>Type</th>
-                        <th>Interview</th>
+                        <th>{skeletonHeader ? <Skeleton inline className="h-3 w-12" /> : "Type"}</th>
+                        <th>{skeletonHeader ? <Skeleton inline className="h-3 w-12" /> : "Interview"}</th>
                         {onSort ? (
                             <>
                                 <SortableHeader label="Date" field="date" activeField={sort} order={order} onSort={onSort} />
@@ -103,8 +108,8 @@ export default function InterviewsTable({
                             </>
                         ) : (
                             <>
-                                <th>Date</th>
-                                <th>Score</th>
+                                <th>{skeletonHeader ? <Skeleton inline className="h-3 w-12" /> : "Date"}</th>
+                                <th>{skeletonHeader ? <Skeleton inline className="h-3 w-12" /> : "Score"}</th>
                             </>
                         )}
                         <th></th>

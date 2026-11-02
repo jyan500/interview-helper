@@ -8,7 +8,8 @@
  * every step doesn't hide it: it reads "You're all set." and Hide is the way out. Hide is a PATCH of
  * the profile flag, so it holds on every device, and the nav's "Getting started" button brings it back.
  *
- * Self-contained like QuestionBankCard: it reads its own data and owns the Hide call.
+ * Self-contained like QuestionBankCard: it reads its own data and owns the Hide call. While that data
+ * first loads, the whole card is a text-free skeleton in the same shape.
  */
 import { useUpdateProfileMutation } from "../api";
 import { useOnboardingSteps } from "../hooks";
@@ -66,6 +67,25 @@ export default function GettingStartedCard() {
         }
     }
 
+    if (loading) {
+        return (
+            <section className="rounded-md border border-divider px-[22px] pb-3 pt-[18px]">
+                <div className="flex items-baseline justify-between gap-3">
+                    <Skeleton className="h-6 w-44" />
+                    <Skeleton className="h-3.5 w-10" />
+                </div>
+                <Skeleton className="mt-2 h-3.5 w-full" />
+                <Skeleton className="mt-1.5 h-3.5 w-2/3" />
+                <Skeleton className="mt-2 h-3 w-1/2" />
+                <ul className="mt-2 divide-y divide-divider">
+                    {STEPS.map((step) => (
+                        <OnboardingStepRowSkeleton key={step.id} />
+                    ))}
+                </ul>
+            </section>
+        );
+    }
+
     return (
         <section className="rounded-md border border-divider px-[22px] pb-3 pt-[18px]">
             <div className="flex items-baseline justify-between gap-3">
@@ -84,19 +104,15 @@ export default function GettingStartedCard() {
                 Interview Helper runs mock interviews for a job you're applying to or a role you're practicing
                 for, then grades your answers so you can see what to work on.
             </p>
-            {loading ? (
-                <Skeleton className="mt-2 h-3 w-40" />
-            ) : (
-                <p className="mt-2 text-[13px] text-neutral-500">
-                    {allDone ? "You're all set." : `${doneCount} of ${STEPS.length} done`}
-                    {" · "}You can bring this back from Getting started in the top bar.
-                </p>
-            )}
+            <p className="mt-2 text-[13px] text-neutral-500">
+                {allDone ? "You're all set." : `${doneCount} of ${STEPS.length} done`}
+                {" · "}You can bring this back from Getting started in the top bar.
+            </p>
 
             <ul className="mt-2 divide-y divide-divider">
-                {loading
-                    ? STEPS.map((step) => <OnboardingStepRowSkeleton key={step.id} />)
-                    : STEPS.map((step) => <OnboardingStepRow key={step.id} step={step} done={done[step.id]} />)}
+                {STEPS.map((step) => (
+                    <OnboardingStepRow key={step.id} step={step} done={done[step.id]} />
+                ))}
             </ul>
         </section>
     );

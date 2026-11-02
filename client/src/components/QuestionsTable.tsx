@@ -32,6 +32,7 @@ export default function QuestionsTable({
     onDelete,
     loading = false,
     skeletonRows = 8,
+    skeletonHeader = false,
     emptyMessage = "No questions here yet.",
 }: {
     questions: QuestionItem[];
@@ -42,6 +43,8 @@ export default function QuestionsTable({
     onDelete?: (question: QuestionItem) => void;
     loading?: boolean;
     skeletonRows?: number;
+    // column headers as bars too, for a caller's first load (a re-fetch keeps the real headers)
+    skeletonHeader?: boolean;
     emptyMessage?: string;
 }) {
     const selectable = Boolean(isChecked && onToggle);
@@ -74,9 +77,9 @@ export default function QuestionsTable({
                     <tr>
                         {/* narrow checkbox column; the header is intentionally blank (per-row control) */}
                         {selectable && <th></th>}
-                        <th>Question</th>
-                        <th>Type</th>
-                        <th>Level</th>
+                        <th>{skeletonHeader ? <Skeleton inline className="h-3 w-12" /> : "Question"}</th>
+                        <th>{skeletonHeader ? <Skeleton inline className="h-3 w-12" /> : "Type"}</th>
+                        <th>{skeletonHeader ? <Skeleton inline className="h-3 w-12" /> : "Level"}</th>
                         {hasActions && <th></th>}
                     </tr>
                 </thead>
