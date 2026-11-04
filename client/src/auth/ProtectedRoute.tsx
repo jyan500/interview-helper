@@ -49,12 +49,9 @@ export default function ProtectedRoute() {
     const { session, loading } = useAuth();
     const location = useLocation();
 
+    // The splash screen from index.html is still covering the page here, so there's nothing to draw.
     if (loading){
-        return (
-            <div>
-                Loading...
-            </div>
-        )
+        return null;
     }
     if (!session){
         return <Navigate to="/login" replace state={{from: location.pathname }}/>
