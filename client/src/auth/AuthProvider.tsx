@@ -80,6 +80,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return () => subscription.unsubscribe();
     }, []);
 
+    // Fade out the splash screen (index.html) once we know who's signed in. It waits for this rather
+    // than React's first render so a refresh never shows the login page or an empty frame beneath it.
+    useEffect(() => {
+        if (loading) return;
+        const splash = document.getElementById("splash");
+        if (!splash) return;
+        // 1. remove it from the DOM once the fade has finished
+        splash.addEventListener("transitionend", () => splash.remove(), { once: true });
+        // 2. start the fade, which also stops it from blocking clicks
+        splash.classList.add("is-done");
+    }, [loading]);
+
     // Wipe the cache when a user leaves. A null -> user change is skipped, since a signed-out app has
     // nothing cached to wipe. It runs here rather than in the auth callback so the pages have already
     // unmounted on sign-out, and nothing refetches without a token. The reset also aborts in-flight

@@ -12,8 +12,86 @@
             href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
             rel="stylesheet"
         />
+        <!-- The splash screen's styles. Inline because the splash has to paint before the bundle (and
+             so Tailwind and the Nocturne tokens in index.css) arrives, which means the colors below
+             are copies: --color-bg, --color-ink and --color-accent. Only transform and opacity are
+             animated, so the bars keep moving while the main thread is busy parsing the bundle. -->
+        <style>
+            html {
+                background: #161826;
+            }
+            #splash {
+                position: fixed;
+                top: 0;
+                bottom: 0;
+                left: 0;
+                /* 100vw ignores the scrollbar, so the page rendering beneath can't shift the center. */
+                width: 100vw;
+                z-index: 9999;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                gap: 14px;
+                background: #161826;
+                color: #e9e9ed;
+                font-family: "Inter", system-ui, sans-serif;
+                font-size: 20px;
+                font-weight: 500;
+                letter-spacing: 0.02em;
+                transition: opacity 0.2s ease-out;
+            }
+            #splash.is-done {
+                opacity: 0;
+                pointer-events: none;
+            }
+            .splash-wave {
+                display: flex;
+                align-items: center;
+                gap: 4px;
+                height: 28px;
+            }
+            .splash-wave > span {
+                width: 3px;
+                height: 100%;
+                border-radius: 2px;
+                background: #9184d9;
+                animation: splash-wave 1.1s ease-in-out infinite;
+            }
+            .splash-wave > span:nth-child(1),
+            .splash-wave > span:nth-child(5) {
+                transform: scaleY(0.4);
+                animation-delay: -0.9s;
+            }
+            .splash-wave > span:nth-child(2),
+            .splash-wave > span:nth-child(4) {
+                transform: scaleY(0.7);
+                animation-delay: -0.55s;
+            }
+            .splash-wave > span:nth-child(3) {
+                animation-delay: -0.2s;
+            }
+            @keyframes splash-wave {
+                0%, 100% { transform: scaleY(0.35); }
+                50% { transform: scaleY(1); }
+            }
+            /* Reduced-motion: hold the bars still in the waveform shape set above. */
+            @media (prefers-reduced-motion: reduce) {
+                .splash-wave > span {
+                    animation: none;
+                }
+            }
+        </style>
     </head>
     <body>
+        <!-- Sits beside #root, not inside it, so React's first render doesn't replace it and restart
+             the animation. AuthProvider removes it once the initial session check resolves. -->
+        <div id="splash" role="status" aria-label="Loading Interview Helper">
+            <div class="splash-wave" aria-hidden="true">
+                <span></span><span></span><span></span><span></span><span></span>
+            </div>
+            <div aria-hidden="true">Interview Helper</div>
+        </div>
         <div id="root"></div>
         <script type="module" src="/src/main.tsx"></script>
     </body>
