@@ -254,68 +254,111 @@ export function useOnboardingSteps() {
 }
 
 /**
- * The staged "My questions" selection behind the Questions page's QuestionsTables + SelectionBar.
- * Checkbox toggles are LOCAL until Save —
- * the user reviews a running count first, then commits the whole edit in one batch.
+ * The checked rows on the Questions page, plus the bulk action they feed. A checkbox only ever means
+ * "selected for this table's action": "remove" for the Saved table, "add" for Other questions.
  *
- * WHY TWO DELTA SETS (add / remove) instead of one "checked" set: the table is paginated, so at any
- * moment we've only SEEN some rows — we can't hold "the full set of checked slugs". What we CAN track
- * is what the user CHANGED relative to the server's saved truth: `add` = unsaved questions they ticked,
- * `remove` = saved questions they unticked. By construction `add` only ever holds server-unsaved slugs
- * and `remove` only server-saved ones (see toggle), which is what makes `selectedCount` exact:
- *   selectedCount = savedTotal + add - remove
- * where `savedTotal` is the count of already-saved matching questions (a mine=true query's `total`).
+ * ONE ACTION AT A TIME: the selection belongs to one table, so there's one bar with one action. Selecting
+ * a row in the other table switches `action` and starts a fresh selection, unchecking the first table.
  *
- * `save()` sends the two deltas as one PUT batch, toasts, and clears them; the "Questions" tag
- * invalidation then refetches every mounted list so the checkboxes reflect the new server truth.
+ * The set is a plain list of slugs, so a selection survives paging and `count` includes rows on other
+ * pages. `apply()` sends the slugs as one PUT batch, clears them, and toasts; the "Questions" tag
+ * invalidation then refetches every mounted list, moving the rows to the other table. A failed apply
+ * keeps the selection so the user can retry.
  */
-export function useQuestionSelection(savedTotal: number) {
-    const [add, setAdd] = useState<Set<string>>(new Set());
-    const [remove, setRemove] = useState<Set<string>>(new Set());
-    const [saveQuestions, { isLoading: saving }] = useSaveQuestionsMutation();
+export type QuestionAction = "add" | "remove";
+
+export function useQuestionSelection() {
+    // `action` only means something while `slugs` is non-empty
+    const [selection, setSelection] = useState<{ action: QuestionAction; slugs: Set<string> }>({
+        action: "add",
+        slugs: new Set(),
+    });
+    const { action, slugs: selected } = selection;
+    const [saveQuestions, { isLoading: applying }] = useSaveQuestionsMutation();
     const { toast } = useToast();
 
-    // A row is checked if it's server-saved and NOT staged for removal, or unsaved and staged to add.
-    const isChecked = useCallback(
-        (slug: string, serverSelected: boolean) =>
-            serverSelected ? !remove.has(slug) : add.has(slug),
-        [add, remove],
-    );
+    // A row only ever sits in one table, so its slug alone says whether it's checked.
+    const isChecked = useCallback((slug: string) => selected.has(slug), [selected]);
 
-    // Flip a row. Toggling a server-saved row lives in `remove`; an unsaved row in `add` — so each set
-    // only ever holds slugs of its own kind, keeping selectedCount's arithmetic correct.
-    const toggle = useCallback((slug: string, serverSelected: boolean) => {
-        const setter = serverSelected ? setRemove : setAdd;
-        setter((prev) => {
-            const next = new Set(prev);
+    const toggle = useCallback((rowAction: QuestionAction, slug: string) => {
+        setSelection((prev) => {
+            // the other table's selection is dropped rather than carried over
+            const next = new Set(prev.action === rowAction ? prev.slugs : []);
             if (next.has(slug)) next.delete(slug);
             else next.add(slug);
-            return next;
+            return { action: rowAction, slugs: next };
         });
     }, []);
 
-    const dirty = add.size > 0 || remove.size > 0;
-    const selectedCount = savedTotal + add.size - remove.size;
-
-    const reset = useCallback(() => {
-        setAdd(new Set());
-        setRemove(new Set());
+    // The header checkbox: a fully selected page deselects, anything less selects the whole page.
+    const togglePage = useCallback((rowAction: QuestionAction, slugs: string[]) => {
+        setSelection((prev) => {
+            const next = new Set(prev.action === rowAction ? prev.slugs : []);
+            const allSelected = slugs.every((slug) => next.has(slug));
+            slugs.forEach((slug) => {
+                if (allSelected) next.delete(slug);
+                else next.add(slug);
+            });
+            return { action: rowAction, slugs: next };
+        });
     }, []);
 
-    const save = useCallback(async () => {
+    const deselect = useCallback((slug: string) => {
+        setSelection((prev) => {
+            const next = new Set(prev.slugs);
+            next.delete(slug);
+            return { action: prev.action, slugs: next };
+        });
+    }, []);
+
+    const clear = useCallback(() => {
+        setSelection((prev) => ({ action: prev.action, slugs: new Set() }));
+    }, []);
+
+    // A table's filters changed: drop the selection only if it belongs to that table.
+    const clearFor = useCallback((rowAction: QuestionAction) => {
+        setSelection((prev) => (prev.action === rowAction ? { action: rowAction, slugs: new Set() } : prev));
+    }, []);
+
+    const count = selected.size;
+
+    const apply = useCallback(async () => {
+        const slugs = [...selected];
+        const noun = slugs.length === 1 ? "question" : "questions";
         try {
-            await saveQuestions({ add: [...add], remove: [...remove] }).unwrap();
-            reset();
-            toast("Saved your questions", { variant: "success" });
+            await saveQuestions(action === "add" ? { add: slugs, remove: [] } : { add: [], remove: slugs }).unwrap();
+            clear();
+            toast(
+                action === "add"
+                    ? `Added ${slugs.length} ${noun} to saved`
+                    : `Removed ${slugs.length} ${noun} from saved`,
+                { variant: "success" },
+            );
         } catch {
-            toast("Couldn't save your questions. Try again.", { variant: "error" });
+            toast(
+                action === "add"
+                    ? `Couldn't add these ${noun}. Try again.`
+                    : `Couldn't remove these ${noun}. Try again.`,
+                { variant: "error" },
+            );
         }
-    }, [add, remove, saveQuestions, reset, toast]);
+    }, [action, selected, saveQuestions, clear, toast]);
 
     return useMemo(
-        () => ({ isChecked, toggle, dirty, selectedCount, saving, reset, save }),
-        [isChecked, toggle, dirty, selectedCount, saving, reset, save],
+        () => ({ action, isChecked, toggle, togglePage, deselect, clear, clearFor, count, applying, apply }),
+        [action, isChecked, toggle, togglePage, deselect, clear, clearFor, count, applying, apply],
     );
+}
+
+/**
+ * Step back to the last page when the current one no longer exists. Moving every row off the last page
+ * of a table (a bulk action, say) would otherwise strand it on an empty page. `totalPages` is undefined
+ * until the list loads, and 0 for an empty list, which has no page to step back to.
+ */
+export function useClampPage(page: number, totalPages: number | undefined, goToPage: (p: number) => void) {
+    useEffect(() => {
+        if (totalPages && page > totalPages) goToPage(totalPages);
+    }, [page, totalPages, goToPage]);
 }
 
 /**

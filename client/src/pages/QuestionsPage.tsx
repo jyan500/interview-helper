@@ -6,9 +6,12 @@
  * TWO TABLES so the current selection is obvious at a glance instead of hunting through pages:
  *   Saved            — the questions already in the set (server `saved=true`).
  *   Other questions  — everything else for the role (server `saved=false`).
- * Both share ONE useQuestionSelection + one sticky SelectionBar (stage → Save). A checkbox marks
- * intent; on Save the "Questions" tag invalidates and BOTH tables refetch, so a question ticked in
- * "Other" moves up to "Saved" and an unticked "Saved" one drops back down.
+ * A checkbox only means "selected for this table's action", never "saved": which table a row sits in
+ * says that. The tables share ONE useQuestionSelection + one sticky SelectionBar, and only one table
+ * has a selection at a time: checking a row in the other table unchecks the first and switches the
+ * bar's action ("Remove from saved" / "Add to saved"), which applies right away. The "Questions" tag
+ * then invalidates and BOTH tables refetch, so the rows move across. A selection survives paging, but
+ * clears when its table's filters change, so nothing a new filter hides gets acted on.
  *
  * FILTERS: each table has its OWN filter set (a QuestionFilters row) — a keyword search on the question
  * text, plus role / level / question-type pickers, applied on Search. The two sets are independent and
@@ -17,8 +20,8 @@
  * the interview-plan's at-or-below rule — a browse filter reads more intuitively that way.
  *
  * ROLE is a required scope (the bank is per-role), so with no role filter a section falls back to the
- * profile's default role (else backend-engineer). The SelectionBar's running count is the UNFILTERED
- * saved total for the Saved section's role, so narrowing the Saved filters never skews it.
+ * profile's default role (else backend-engineer). The "Saved (N)" heading is the UNFILTERED saved total
+ * for the Saved section's role, so narrowing the Saved filters never skews it.
  *
  * YOUR OWN QUESTIONS: "Create question" opens QuestionModal; a new question lands in Saved. Your own rows
  * carry a "Custom" tag plus Edit / Delete. Delete archives it server-side, so past interviews that asked
@@ -28,7 +31,7 @@
 import { useState } from "react";
 import { Plus } from "@phosphor-icons/react";
 import { useGetProfileQuery, useGetQuestionsQuery, type QuestionItem } from "../api";
-import { useQuestionSelection, useSectionFilters } from "../hooks";
+import { useClampPage, useQuestionSelection, useSectionFilters } from "../hooks";
 import { PAGE_SIZE } from "../constants";
 import AppNav from "../components/AppNav";
 import BankKickoffCard from "../components/BankKickoffCard";
@@ -85,7 +88,11 @@ export default function QuestionsPage() {
         size: PAGE_SIZE,
     });
 
-    // The SelectionBar's count base = the user's TOTAL saved questions for the Saved section's role,
+    // A bulk action can empty a table's last page, so step back to the new last page.
+    useClampPage(saved.page, savedData?.pages, saved.goToPage);
+    useClampPage(other.page, restData?.pages, other.goToPage);
+
+    // The heading's count = the user's TOTAL saved questions for the Saved section's role,
     // UNAFFECTED by the finer filters (a size-1 query just for `total`). Filtering the Saved table
     // narrows the rows shown, not how many the user has saved, so this stays the honest count.
     const { data: savedTotalData } = useGetQuestionsQuery({
@@ -95,7 +102,7 @@ export default function QuestionsPage() {
         size: 1,
     });
     const savedTotal = savedTotalData?.total ?? 0;
-    const selection = useQuestionSelection(savedTotal);
+    const selection = useQuestionSelection();
 
     return (
         <div className="min-h-screen bg-bg text-ink">
@@ -108,8 +115,8 @@ export default function QuestionsPage() {
                             Questions
                         </h1>
                         <p className="mt-2 text-[13.5px] text-neutral-400">
-                            Check off the questions you want to practice, then Save. Your next practice interview asks your saved
-                            questions. If you don't save any, the interview will ask three questions of increasing difficulty instead.
+                            Select questions below to add them to your saved questions or remove them. Your next practice interview
+                            asks your saved questions. If you don't save any, the interview will ask three questions of increasing difficulty instead.
                             You can also write your own questions using the "Create Question" button.
                         </p>
                     </div>
@@ -128,8 +135,8 @@ export default function QuestionsPage() {
                         <BankKickoffCard />
                     </div>
 
-                    {/* Saved — the current set (server truth). Unticking one stages a removal; on Save
-                        it drops into "Other questions" below. */}
+                    {/* Saved — the current set (server truth). Selected rows can be removed, which drops
+                        them into "Other questions" below. */}
                     <h2 className="mb-4 font-heading text-[19px] font-medium">
                         Saved <span className="text-neutral-400">{savedTotal > 0 ? `(${savedTotal})` : ""}</span>
                     </h2>
@@ -141,13 +148,20 @@ export default function QuestionsPage() {
                         authored={saved.authored}
                         defaultRole={defaultRole}
                         showClear={saved.hasFilters}
-                        onApply={saved.apply}
-                        onClear={saved.clear}
+                        onApply={(values) => {
+                            saved.apply(values);
+                            selection.clearFor("remove");
+                        }}
+                        onClear={() => {
+                            saved.clear();
+                            selection.clearFor("remove");
+                        }}
                     />
                     <QuestionsTable
                         questions={savedData?.items ?? []}
                         isChecked={selection.isChecked}
-                        onToggle={selection.toggle}
+                        onToggle={(slug) => selection.toggle("remove", slug)}
+                        onTogglePage={(slugs) => selection.togglePage("remove", slugs)}
                         onEdit={(q) => setEditing(q.slug)}
                         onView={setViewing}
                         onDelete={setPendingDelete}
@@ -156,7 +170,7 @@ export default function QuestionsPage() {
                         emptyMessage={
                             saved.hasFilters
                                 ? "No saved questions match these filters."
-                                : "No saved questions yet. Tick some below, or start and we'll pick 3 for you."
+                                : "No saved questions yet. Add some from below, or start and we'll pick 3 for you."
                         }
                     />
                     <Pagination
@@ -165,7 +179,7 @@ export default function QuestionsPage() {
                         onPageChange={saved.goToPage}
                     />
 
-                    {/* Everything else for this role. Ticking one stages an add; on Save it moves up. */}
+                    {/* Everything else for this role. Selected rows can be added, which moves them up. */}
                     <h2 className="mb-4 mt-8 font-heading text-[19px] font-medium">Other questions</h2>
                     <QuestionFilters
                         roleSlug={otherRoleSlug}
@@ -175,13 +189,20 @@ export default function QuestionsPage() {
                         authored={other.authored}
                         defaultRole={defaultRole}
                         showClear={other.hasFilters}
-                        onApply={other.apply}
-                        onClear={other.clear}
+                        onApply={(values) => {
+                            other.apply(values);
+                            selection.clearFor("add");
+                        }}
+                        onClear={() => {
+                            other.clear();
+                            selection.clearFor("add");
+                        }}
                     />
                     <QuestionsTable
                         questions={restData?.items ?? []}
                         isChecked={selection.isChecked}
-                        onToggle={selection.toggle}
+                        onToggle={(slug) => selection.toggle("add", slug)}
+                        onTogglePage={(slugs) => selection.togglePage("add", slugs)}
                         onEdit={(q) => setEditing(q.slug)}
                         onView={setViewing}
                         onDelete={setPendingDelete}
@@ -200,11 +221,12 @@ export default function QuestionsPage() {
                     />
 
                     <SelectionBar
-                        count={selection.selectedCount}
-                        dirty={selection.dirty}
-                        saving={selection.saving}
-                        onSave={selection.save}
-                        onReset={selection.reset}
+                        count={selection.count}
+                        actionLabel={selection.action === "add" ? "Add to saved" : "Remove from saved"}
+                        busyLabel={selection.action === "add" ? "Adding…" : "Removing…"}
+                        busy={selection.applying}
+                        onAction={selection.apply}
+                        onClear={selection.clear}
                     />
 
                     {editing && (
@@ -217,7 +239,11 @@ export default function QuestionsPage() {
 
                     {viewing && <QuestionViewModal question={viewing} onClose={() => setViewing(null)} />}
 
-                    <DeleteQuestionModal question={pendingDelete} onClose={() => setPendingDelete(null)} />
+                    <DeleteQuestionModal
+                        question={pendingDelete}
+                        onClose={() => setPendingDelete(null)}
+                        onDeleted={selection.deselect}
+                    />
                 </div>
             </div>
         </div>

@@ -2,14 +2,13 @@
  * The question-bank table — the Questions page's Saved and Other sections, and the dashboard's
  * read-only "Your question bank" preview. Modelled on InterviewsTable (same `.table` chrome, same
  * shape-matching shimmer while `loading`), with ONE addition: a leading checkbox column for
- * curating the saved "My questions" set. Selection is OPTIONAL — omit `isChecked`/`onToggle` and the
+ * picking rows for a bulk action. Selection is OPTIONAL — omit `isChecked`/`onToggle` and the
  * checkbox column is dropped, leaving a plain read-only list.
  *
  * PURE PRESENTATION, exactly like InterviewsTable: the caller owns the fetch and the selection
- * state. A row's checked state is NOT its raw server `selected` flag — the caller (via
- * useQuestionSelection) may have staged an unsaved toggle — so we ask through `isChecked(slug,
- * serverSelected)` and report clicks back through `onToggle(slug, serverSelected)`. Whether a click
- * saves immediately or stages until a Save button is the caller's business.
+ * state. A checkbox means "selected for the caller's action", NOT "saved" (which table a row sits in
+ * says that), so we ask through `isChecked(slug)` and report clicks back through `onToggle(slug)`. Pass
+ * `onTogglePage` as well to get a select-all checkbox in the header, scoped to the rows on this page.
  *
  * The candidate's OWN questions (`is_custom`) carry a "Custom" tag. Pass `onEdit`/`onDelete` and those
  * rows also get Edit / Delete icon buttons in a trailing actions column. A question saved from a job
@@ -27,6 +26,7 @@ export default function QuestionsTable({
     questions,
     isChecked,
     onToggle,
+    onTogglePage,
     onEdit,
     onView,
     onDelete,
@@ -35,8 +35,9 @@ export default function QuestionsTable({
     emptyMessage = "No questions here yet.",
 }: {
     questions: QuestionItem[];
-    isChecked?: (slug: string, serverSelected: boolean) => boolean;
-    onToggle?: (slug: string, serverSelected: boolean) => void;
+    isChecked?: (slug: string) => boolean;
+    onToggle?: (slug: string) => void;
+    onTogglePage?: (slugs: string[]) => void;
     onEdit?: (question: QuestionItem) => void;
     onView?: (question: QuestionItem) => void;
     onDelete?: (question: QuestionItem) => void;
@@ -51,6 +52,10 @@ export default function QuestionsTable({
     // Edit is only for your own questions, and not ones saved from an interview (those are read-only)
     const canEdit = (q: QuestionItem) => editable && q.is_custom && !q.is_claimed;
     const header = (label: string) => (loading ? <Skeleton inline className="h-3 w-12" /> : label);
+    // the header checkbox's state, for the rows on this page only
+    const checkedOnPage = questions.filter((q) => isChecked?.(q.slug)).length;
+    const allOnPageChecked = questions.length > 0 && checkedOnPage === questions.length;
+    const someOnPageChecked = checkedOnPage > 0 && !allOnPageChecked;
 
     // Empty line only when settled with no rows — never mid-fetch, when the skeleton shows.
     if (!loading && questions.length === 0) {
@@ -73,8 +78,25 @@ export default function QuestionsTable({
                 </colgroup>
                 <thead>
                     <tr>
-                        {/* narrow checkbox column; the header is intentionally blank (per-row control) */}
-                        {selectable && <th></th>}
+                        {/* narrow checkbox column; the header selects this page's rows when the caller
+                            supports it. `indeterminate` has no HTML attribute, so it's set via the ref. */}
+                        {selectable && (
+                            <th className="align-middle">
+                                {loading && onTogglePage && <Skeleton inline className="h-3.5 w-3.5" />}
+                                {!loading && onTogglePage && (
+                                    <input
+                                        type="checkbox"
+                                        className="h-4 w-4 cursor-pointer accent-accent"
+                                        checked={allOnPageChecked}
+                                        ref={(el) => {
+                                            if (el) el.indeterminate = someOnPageChecked;
+                                        }}
+                                        onChange={() => onTogglePage(questions.map((q) => q.slug))}
+                                        aria-label="Select all questions on this page"
+                                    />
+                                )}
+                            </th>
+                        )}
                         <th>{header("Question")}</th>
                         <th>{header("Type")}</th>
                         <th>{header("Level")}</th>
@@ -98,7 +120,7 @@ export default function QuestionsTable({
                         ))}
                     {!loading &&
                         questions.map((q) => {
-                            const toggle = () => onToggle?.(q.slug, q.selected);
+                            const toggle = () => onToggle?.(q.slug);
                             return (
                                 <tr key={q.slug}>
                                     {selectable && (
@@ -106,7 +128,7 @@ export default function QuestionsTable({
                                             <input
                                                 type="checkbox"
                                                 className="h-4 w-4 cursor-pointer accent-accent"
-                                                checked={isChecked!(q.slug, q.selected)}
+                                                checked={isChecked?.(q.slug)}
                                                 onChange={toggle}
                                                 aria-label={`Select "${q.title}"`}
                                             />
@@ -149,12 +171,12 @@ export default function QuestionsTable({
                                                     </Button>
                                                 )}
                                                 {canEdit(q) && (
-                                                    <Button variant="ghost" icon aria-label={`Edit "${q.title}"`} title="Edit" onClick={() => onEdit!(q)}>
+                                                    <Button variant="ghost" icon aria-label={`Edit "${q.title}"`} title="Edit" onClick={() => onEdit?.(q)}>
                                                         <PencilSimple size={17} weight="regular" />
                                                     </Button>
                                                 )}
                                                 {editable && q.is_custom && (
-                                                    <Button variant="ghost" icon aria-label={`Delete "${q.title}"`} title="Delete" onClick={() => onDelete!(q)}>
+                                                    <Button variant="ghost" icon aria-label={`Delete "${q.title}"`} title="Delete" onClick={() => onDelete?.(q)}>
                                                         <Trash size={17} weight="regular" />
                                                     </Button>
                                                 )}
