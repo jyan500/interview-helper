@@ -244,7 +244,7 @@ export default function QuestionForm({
                 </label>
                 <textarea
                     className="input min-h-[110px] leading-[1.5]"
-                    placeholder="What a strong answer covers, or what you want to be judged on. Leave it blank and we'll write a grading guide from the question."
+                    placeholder="What a strong answer covers, or what you want to be judged on. If this is left blank, we'll write a grading guide from the question."
                     {...register("gradingNotes", {
                         validate: (value) =>
                             value.trim().length <= CUSTOM_QUESTION_NOTES_MAX_CHARS ||

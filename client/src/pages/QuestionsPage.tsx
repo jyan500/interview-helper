@@ -108,9 +108,9 @@ export default function QuestionsPage() {
                             Questions
                         </h1>
                         <p className="mt-2 text-[13.5px] text-neutral-400">
-                            Tick the ones you want to practice, then Save. Your next interview asks your saved
-                            questions. If you don't save any, we'll choose 3 of increasing difficulty for you.
-                            You can also write your own.
+                            Check off the questions you want to practice, then Save. Your next practice interview asks your saved
+                            questions. If you don't save any, the interview will ask three questions of increasing difficulty instead.
+                            You can also write your own questions using the "Create Question" button.
                         </p>
                     </div>
                     <Button
