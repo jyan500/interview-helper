@@ -11,9 +11,11 @@ import ConfirmDeleteModal from "../ConfirmDeleteModal";
 export default function DeleteQuestionModal({
     question,
     onClose,
+    onDeleted,
 }: {
     question: QuestionItem | null;
     onClose: () => void;
+    onDeleted?: (slug: string) => void;
 }) {
     const { toast } = useToast();
     const [deleteQuestion, { isLoading: deleting }] = useDeleteCustomQuestionMutation();
@@ -23,6 +25,7 @@ export default function DeleteQuestionModal({
         try {
             await deleteQuestion(question.slug).unwrap();
             toast("Question deleted", { variant: "success" });
+            onDeleted?.(question.slug);
             onClose();
         } catch {
             toast("Couldn't delete this question. Try again.", { variant: "error" });

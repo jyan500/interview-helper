@@ -22,21 +22,21 @@ const STEPS: OnboardingStep[] = [
     {
         id: "defaults",
         title: "Set your default role and level",
-        description: "Practice interviews start from it, and the dashboard opens scoped to it.",
+        description: "Your default role and level will automatically prefill settings to make it easier to begin your practice interviews.",
         links: [{ to: "/settings/profile", label: "Go to Profile" }],
     },
     {
         id: "background",
         title: "Add your background",
         description:
-            "Import your resume, or add your experience, projects and skills. Behavioral interviews ask about them.",
+            "Import your resume, or add your experience, projects and skills.",
         links: [{ to: "/settings/profile", label: "Go to Profile" }],
     },
     {
         id: "practice",
         title: "Add a job or save practice questions",
         description:
-            "Paste a job posting and we'll write interview rounds for it, or pick the questions a practice interview asks.",
+            "Paste a job posting and we'll create questions for each interview round, or pick questions to begin a practice interview.",
         links: [
             { to: "/jobs", label: "Add a job" },
             { to: "/questions", label: "Browse questions" },
@@ -106,7 +106,6 @@ export default function GettingStartedCard() {
             </p>
             <p className="mt-2 text-[13px] text-neutral-500">
                 {allDone ? "You're all set." : `${doneCount} of ${STEPS.length} done`}
-                {" · "}You can bring this back from Getting started in the top bar.
             </p>
 
             <ul className="mt-2 divide-y divide-divider">

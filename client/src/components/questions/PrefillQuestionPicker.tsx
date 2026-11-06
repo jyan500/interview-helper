@@ -51,7 +51,6 @@ export default function PrefillQuestionPicker({
                 isDisabled={isDisabled || isFetching}
                 formatOptionLabel={(option) => <QuestionOptionLabel option={option} />}
             />
-            <span className="mt-1 text-[12.5px] text-neutral-500">Copies everything except the title.</span>
         </div>
     );
 }

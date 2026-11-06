@@ -505,10 +505,10 @@ class CustomQuestionOut(BaseModel):
     is_claimed: bool = False
 
 
-# PUT /api/profile/questions body — a staged "My questions" edit committed in one batch. The SPA
-# stages many checkbox toggles and sends the deltas on Save (add/remove lists of question slugs),
-# rather than a per-toggle PUT/DELETE, so a whole selection lands in one transaction. Both default
-# to empty so a body may carry only adds or only removes.
+# PUT /api/profile/questions body — a bulk "My questions" edit committed in one batch. The SPA sends
+# a table's selected rows when its action is applied (add/remove lists of question slugs), rather than
+# a per-row PUT/DELETE, so a whole selection lands in one transaction. Both default to empty so a body
+# may carry only adds or only removes.
 class SaveQuestionsRequest(BaseModel):
     add: list[str] = []
     remove: list[str] = []
@@ -1819,10 +1819,10 @@ async def remove_custom_question(slug: str, user_id: str = Depends(require_user)
     return _envelope_result(await archive_custom_question(user_id, slug))
 
 
-# PUT /api/profile/questions : commit a staged "My questions" edit (add/remove question slugs) in one
+# PUT /api/profile/questions : commit a bulk "My questions" edit (add/remove question slugs) in one
 # batch. Owner-scoped like the rest of /api/profile — the VERIFIED uid is what the saved rows are
 # written under, never an id from the body, so "my saved questions" can't be widened to someone else.
-# A batch (not per-slug PUT/DELETE) because the UI stages many toggles and Saves them together.
+# A batch (not per-slug PUT/DELETE) because the UI applies a whole selection of rows at once.
 @app.put("/api/profile/questions")
 async def save_profile_questions(
     body: SaveQuestionsRequest,

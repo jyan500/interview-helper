@@ -101,7 +101,7 @@ export default function SimulationKickoff({ alwaysShowDescription = false }: { a
                     {(alwaysShowDescription || !newestJob) && (
                         <p className="mt-3 text-[13.5px] text-neutral-400">
                             Save a job posting and we'll write interview rounds for it: behavioral, coding and
-                            system design, graded against that job.
+                            system design.
                         </p>
                     )}
                     {newestJob && (

@@ -167,8 +167,8 @@ export interface CustomQuestionDetail {
     grading_notes: string | null;
     is_claimed: boolean; // saved from a job interview: read-only, the backend refuses an edit
 }
-// PUT /api/profile/questions body — a staged "My questions" edit, committed in one batch (the SPA
-// stages checkbox toggles and sends the deltas on Save). Mirrors SaveQuestionsRequest in api.py.
+// PUT /api/profile/questions body — a bulk "My questions" edit, committed in one batch (the SPA sends
+// a table's selected rows when its action is applied). Mirrors SaveQuestionsRequest in api.py.
 export interface SaveQuestionsRequest {
     add: string[]; // question slugs to save
     remove: string[]; // question slugs to unsave
@@ -798,7 +798,7 @@ export const interviewApi = createApi({
             query: (params) => ({ url: "/questions", params }),
             providesTags: ["Questions"],
         }),
-        // Commit a staged "My questions" edit (add/remove slugs) in one batch. A mutation (PUT);
+        // Commit a bulk "My questions" edit (add/remove slugs) in one batch. A mutation (PUT);
         // invalidates "Questions" so the `selected` flags + the "My questions" list re-read at once.
         saveQuestions: builder.mutation<{ ok: boolean; added: number; removed: number }, SaveQuestionsRequest>({
             query: (body) => ({ url: "/profile/questions", method: "PUT", body }),
