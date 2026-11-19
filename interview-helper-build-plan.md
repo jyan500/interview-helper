@@ -411,6 +411,22 @@ get different questions and level-calibrated feedback).
 
 ## CURRENT STATUS (resume point)
 
+*2026-11-18: **Google OAuth sign-in / sign-up.** Code DONE, type-checks clean; **not yet run**: needs
+the dashboard config + migration below. Supabase `signInWithOAuth({ provider: "google" })`; the first
+Google sign-in creates the account, so the same button is on Login and Signup. FastAPI unchanged (same
+Supabase JWT).
+- `GoogleSignInButton` (new): `redirectTo = origin + path`; Login passes `from` so "return to where you
+  were" survives the round trip. The dead GitHub stub was removed.
+- Name: Google sets `full_name`/`name`, not our `display_name`. New `displayNameOf()` (helpers.ts) falls
+  back through them at the greeting / nav / initials sites; `deriveName` splits it for the Account card.
+- `UserSettingsPage` hides the Password card for accounts with no "email" identity (`hasPasswordSignIn`).
+- Migration `c4e6a8b0d2f3`: the profile trigger COALESCEs display_name -> full_name -> name. **Not applied.**
+- **Next:** (1) Google Cloud OAuth client (Testing mode, you as test user; JS origin
+  `http://localhost:6173`; redirect URI `https://<ref>.supabase.co/auth/v1/callback`); (2) Supabase:
+  enable Google + paste ID/secret, Site URL + Redirect URLs `http://localhost:6173/**`; (3) `alembic
+  upgrade head`; (4) browser test: new Google user, deep-link return, linking to an existing email user,
+  cancel on consent. At deploy: add the prod origin in both places and publish the consent screen.
+
 *2026-10-31: **Dashboard "Getting started" for new users** (branch `prefill-signup-flow`). A brand-new
 account used to land on empty boxes. **Phase 1 (backend) DONE:** migration `b3d5f7a9c1e2` adds
 `profiles.onboarding_dismissed_at` (NULL = showing) and backfills existing profiles to now(), so only new

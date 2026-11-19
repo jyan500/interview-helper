@@ -33,6 +33,7 @@ import { Link } from "react-router";
 import { useAuth } from "../auth/AuthProvider";
 import { useGetJobsQuery, useGetMyInterviewsQuery, useGetProfileQuery } from "../api";
 import { DASHBOARD_ROWS } from "../constants";
+import { displayNameOf } from "../helpers";
 import AppNav from "../components/AppNav";
 import GettingStartedCard from "../components/GettingStartedCard";
 import ResumeBanner from "../components/ResumeBanner";
@@ -74,7 +75,7 @@ export default function DashboardPage() {
                 {/* Greeting */}
                 <div className="px-7 pt-[22px]">
                     <h1 className="mt-1.5 font-heading text-[34px] font-medium leading-[1.05]">
-                        Hello, {session?.user?.user_metadata?.display_name ?? ""}
+                        Hello, {displayNameOf(session?.user?.user_metadata)}
                     </h1>
                 </div>
 

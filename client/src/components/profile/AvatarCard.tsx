@@ -23,7 +23,7 @@ import { useToast } from "../../toast/ToastProvider";
 import { useDeleteAvatarMutation, useGetProfileQuery, useSetAvatarMutation } from "../../api";
 import { supabase } from "../../supabase";
 import { AVATAR_ACCEPTED_TYPES, AVATAR_BUCKET } from "../../constants";
-import { avatarObjectPath, initialsFrom, validateAvatarFile } from "../../helpers";
+import { avatarObjectPath, displayNameOf, initialsFrom, validateAvatarFile } from "../../helpers";
 import Avatar from "../Avatar";
 import Button from "../Button";
 import SettingsCard from "../settings/SettingsCard";
@@ -56,7 +56,7 @@ export default function AvatarCard() {
         };
     }, [previewUrl]);
 
-    const initials = initialsFrom(session?.user?.user_metadata?.display_name, session?.user?.email);
+    const initials = initialsFrom(displayNameOf(session?.user?.user_metadata), session?.user?.email);
     // The saved picture, unless we've just removed it (in which case treat it as already gone, ahead of
     // the profile refetch confirming it) — the single source both the preview and the button state read.
     const savedAvatar = justRemoved ? null : profile?.avatar_url ?? null;

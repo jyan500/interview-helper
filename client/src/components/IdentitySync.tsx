@@ -12,7 +12,7 @@
 import { useEffect } from "react";
 import { useAuth } from "../auth/AuthProvider";
 import { useGetProfileQuery } from "../api";
-import { initialsFrom } from "../helpers";
+import { displayNameOf, initialsFrom } from "../helpers";
 import { clearUserIdentity, setUserIdentity } from "../userSlice";
 import { useAppDispatch } from "../store";
 
@@ -22,7 +22,7 @@ export default function IdentitySync() {
     const dispatch = useAppDispatch();
 
     useEffect(() => {
-        const initials = initialsFrom(session?.user?.user_metadata?.display_name, session?.user?.email);
+        const initials = initialsFrom(displayNameOf(session?.user?.user_metadata), session?.user?.email);
         dispatch(setUserIdentity({ initials, avatarUrl: profile?.avatar_url ?? null }));
     }, [session, profile, dispatch]);
 

@@ -10,6 +10,7 @@ import { NavLink, useNavigate } from "react-router";
 import { useAuth } from "../auth/AuthProvider";
 import { useGetProfileQuery, useUpdateProfileMutation } from "../api";
 import { useToast } from "../toast/ToastProvider";
+import { displayNameOf } from "../helpers";
 import AccountMenu from "./AccountMenu";
 import Button from "./Button";
 import NeedHelpButton from "./tour/NeedHelpButton";
@@ -73,7 +74,7 @@ export default function AppNav() {
                 <NeedHelpButton label="Getting started" onClick={onGettingStarted} disabled={restoring} />
                 {/* The account avatar opens a dropdown to the Profile and Settings pages. */}
                 <AccountMenu />
-                <span>{session?.user?.user_metadata?.display_name ?? ""}</span>
+                <span>{displayNameOf(session?.user?.user_metadata)}</span>
                 <Button variant="secondary" className="text-[13px]" onClick={() => signOut()}>
                     Sign out
                 </Button>
