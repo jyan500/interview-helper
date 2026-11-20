@@ -21,6 +21,7 @@ import { supabase } from "../supabase";
 import { displayNameFrom, passwordStrength } from "../helpers";
 import AuthCard, { Brand, StrengthMeter } from "../components/AuthCard";
 import Button from "../components/Button";
+import GoogleSignInButton from "../components/GoogleSignInButton";
 
 type SignupFields = {
     email: string;
@@ -167,6 +168,14 @@ export default function SignupPage() {
                     {isSubmitting ? "Creating account…" : "Create account"}
                 </Button>
             </form>
+
+            {/* "or" divider + Google. The first Google sign-in creates the account. */}
+            <div className="my-6 flex items-center gap-3">
+                <span className="h-px flex-1 bg-divider" />
+                <span className="text-[12px] text-neutral-400">or</span>
+                <span className="h-px flex-1 bg-divider" />
+            </div>
+            <GoogleSignInButton redirectPath="/" />
 
             <p className="mt-[22px] text-[12.5px] leading-[1.5] text-neutral-400">
                 By creating an account you agree to the terms and the privacy policy.

@@ -9,13 +9,15 @@
  * signInWithPassword succeeding fires onAuthStateChange, which updates AuthProvider's
  * mirror and lets ProtectedRoute through.
  *
- * The social buttons are DESIGN ONLY (no OAuth wired) — TODO(wire).
+ * "Continue with Google" is Supabase OAuth (see GoogleSignInButton). It also navigates away and comes
+ * back to `from`, so the two paths end in the same place.
  */
 import { useForm } from "react-hook-form";
 import { Link, useLocation, useNavigate } from "react-router";
 import { supabase } from "../supabase";
 import { Brand } from "../components/AuthCard";
 import Button from "../components/Button";
+import GoogleSignInButton from "../components/GoogleSignInButton";
 
 type LoginFields = {
     email: string;
@@ -148,15 +150,8 @@ export default function LoginPage() {
                         <span className="h-px flex-1 bg-divider" />
                     </div>
 
-                    {/* Social sign-in — DESIGN ONLY (TODO(wire): supabase OAuth) */}
-                    <div className="flex flex-col gap-2.5">
-                        <Button variant="secondary" block className="text-sm" style={{ padding: "10px 0" }}>
-                            Continue with Google
-                        </Button>
-                        <Button variant="secondary" block className="text-sm" style={{ padding: "10px 0" }}>
-                            Continue with GitHub
-                        </Button>
-                    </div>
+                    {/* Social sign-in. Lands back on `from`, same as the password path. */}
+                    <GoogleSignInButton redirectPath={from} />
 
                     <p className="mt-[26px] text-[13.5px] text-neutral-400">
                         No account?{" "}

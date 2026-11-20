@@ -6,6 +6,7 @@ import type { FetchPage, PageAdditional, SelectOption } from "./components/Async
 import type { Edge, Node } from "@xyflow/react";
 import type { GroupBase } from "react-select";
 import type { LoadOptions } from "react-select-async-paginate";
+import type { User } from "@supabase/supabase-js";
 import type {
     BasePageItem,
     DiagramDoc,
@@ -678,19 +679,48 @@ export function passwordStrength(pw: string): { score: number; label: string } {
     return { score, label: ["Too short", "Weak", "Fair", "Strong"][score] };
 }
 
+/** The name keys we read out of a Supabase auth `user_metadata` blob. */
+export interface UserNameMeta {
+    first_name?: string;
+    last_name?: string;
+    display_name?: string; // written by our signup form + settings Account card
+    full_name?: string;    // written by Supabase from an OAuth provider (Google)
+    name?: string;         // ditto, some providers only set this one
+}
+
+/**
+ * The user's display name from Supabase auth `user_metadata`, for the greeting, nav and initials.
+ * Our own `display_name` wins (signup / the settings Account card write it); a Google sign-in only
+ * carries the provider's `full_name` / `name`, so fall back to those. "" when none is set.
+ *
+ *   displayNameOf({ display_name: "Ada L" })            -> "Ada L"
+ *   displayNameOf({ full_name: "Ada Lovelace" })        -> "Ada Lovelace"
+ *   displayNameOf(undefined)                            -> ""
+ */
+export function displayNameOf(meta?: UserNameMeta | null): string {
+    return (meta?.display_name || meta?.full_name || meta?.name || "").trim();
+}
+
+/**
+ * Whether this user can sign in with a password, i.e. has an "email" identity. A Google-only account
+ * has none, so there is no current password to verify in the settings Password card.
+ */
+export function hasPasswordSignIn(user?: User | null): boolean {
+    const providers = (user?.app_metadata?.providers as string[] | undefined) ?? [];
+    return providers.includes("email");
+}
+
 /**
  * First/last name out of a Supabase auth `user_metadata` blob, for pre-filling the settings name form.
  * Prefers the explicit `first_name`/`last_name` the settings page writes; falls back to SPLITTING the
- * single `display_name` that signup captured (first word -> first name, the rest -> last name) so a
- * user who only ever set a display name still opens the form pre-filled. Empty strings when unset.
+ * single display name (ours, or a Google `full_name`; see displayNameOf) on the first word -> first
+ * name, the rest -> last name, so the form still opens pre-filled. Empty strings when unset.
  */
-export function deriveName(
-    meta?: { first_name?: string; last_name?: string; display_name?: string } | null,
-): { firstName: string; lastName: string } {
+export function deriveName(meta?: UserNameMeta | null): { firstName: string; lastName: string } {
     if (meta?.first_name || meta?.last_name) {
         return { firstName: meta.first_name ?? "", lastName: meta.last_name ?? "" };
     }
-    const display = (meta?.display_name ?? "").trim();
+    const display = displayNameOf(meta);
     if (!display) return { firstName: "", lastName: "" };
     const parts = display.split(/\s+/);
     return { firstName: parts[0] ?? "", lastName: parts.slice(1).join(" ") };
