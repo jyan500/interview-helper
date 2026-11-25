@@ -1,6 +1,6 @@
 """profile trigger: fall back to the OAuth provider's name for display_name
 
-Revision ID: c4e6a8b0d2f3
+Revision ID: e5a7c9b1d3f6
 Revises: b3d5f7a9c1e2
 Create Date: 2026-11-18
 
@@ -22,7 +22,7 @@ from alembic import op
 
 
 # revision identifiers, used by Alembic.
-revision: str = 'c4e6a8b0d2f3'
+revision: str = 'e5a7c9b1d3f6'
 down_revision: Union[str, Sequence[str], None] = 'b3d5f7a9c1e2'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
