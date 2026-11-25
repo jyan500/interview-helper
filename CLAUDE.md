@@ -30,10 +30,13 @@ SPA. Only the two ends change.
 
 ## Current architecture
 
-- **Backend — `server/` (FastAPI, `api.py`).** The single app. Every turn does
+- **Backend — `server/` (FastAPI).** The single app: `api.py` is the shell (lifespan, CORS, mounting);
+  the routes live in `server/routers/`, one `APIRouter` per area (`interviews`, `audio`, `vocab`,
+  `jobs`, `questions`, `profile`, `background`), each mounted under `/api` and holding its own request
+  and response models. Helpers used by more than one router go in `routers/common.py`. Every turn does
   `load_interview_state → turn_agent.run → save_interview_state`; there is **no process-local state**.
   Routes are gated by `Depends(require_user)` (authentication) plus an ownership check (authorization).
-- **The backend is NOT an MCP client.** `api.py` **imports the tool functions directly** (`from
+- **The backend is NOT an MCP client.** The routers **import the tool functions directly** (`from
   tools.interview import …`, `from grading import …`). The MCP round-trip was earned only when the
   *model* called the tools; the client-driven rewrite removed that caller, so the indirection went with
   it (see the `no-indirection-without-a-consumer` convention).

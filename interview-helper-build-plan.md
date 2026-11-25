@@ -411,6 +411,18 @@ get different questions and level-calibrated feedback).
 
 ## CURRENT STATUS (resume point)
 
+*2026-11-25: **`api.py` split into FastAPI routers** (branch `code-cleanup-and-tests`). `api.py` (2,068
+lines) is now a ~130-line shell (lifespan, CORS, `include_router(..., prefix="/api")`). Routes moved
+verbatim to `server/routers/`: `interviews` (start / answer / final-answer / scorecard / history /
+claim / resume), `audio` (transcribe, tts), `vocab` (roles, levels, question + round types), `jobs`,
+`questions` (bank, custom questions, `PUT /profile/questions`), `profile` (profile, avatar,
+dashboard), `background` (experiences, projects, skills, `/skills`, resume parse). Each holds its own
+models; `routers/common.py` has `envelope_result` + `owned_job` (were `_`-private, now shared).
+Verified free: the OpenAPI schema is byte-identical to before apart from the new per-router `tags`
+(33 paths, 46 operations), no unused imports, and every route still 401s without a token.
+**Next action:** a quick click-through with `fastapi dev api.py` (start + answer one turn), then the
+rest of the code-cleanup list (stale SCAFFOLD/TODO comments, tests + CI).*
+
 *2026-11-18: **Google OAuth sign-in / sign-up.** Code DONE, type-checks clean; **not yet run**: needs
 the dashboard config + migration below. Supabase `signInWithOAuth({ provider: "google" })`; the first
 Google sign-in creates the account, so the same button is on Login and Signup. FastAPI unchanged (same
@@ -420,7 +432,7 @@ Supabase JWT).
 - Name: Google sets `full_name`/`name`, not our `display_name`. New `displayNameOf()` (helpers.ts) falls
   back through them at the greeting / nav / initials sites; `deriveName` splits it for the Account card.
 - `UserSettingsPage` hides the Password card for accounts with no "email" identity (`hasPasswordSignIn`).
-- Migration `c4e6a8b0d2f3`: the profile trigger COALESCEs display_name -> full_name -> name. **Not applied.**
+- Migration `e5a7c9b1d3f6` (renumbered from a duplicate `c4e6a8b0d2f3`): the profile trigger COALESCEs display_name -> full_name -> name. **Not applied.**
 - **Next:** (1) Google Cloud OAuth client (Testing mode, you as test user; JS origin
   `http://localhost:6173`; redirect URI `https://<ref>.supabase.co/auth/v1/callback`); (2) Supabase:
   enable Google + paste ID/secret, Site URL + Redirect URLs `http://localhost:6173/**`; (3) `alembic
