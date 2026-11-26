@@ -734,3 +734,10 @@ export function deriveName(meta?: UserNameMeta | null): { firstName: string; las
 export function displayNameFrom(firstName: string, lastName: string): string {
     return `${firstName.trim()} ${lastName.trim()}`.trim();
 }
+
+// The mic button copy, mirroring App.tsx: manual STOP submits (combined stop+send), smart STOP just
+// stops (the countdown/VAD submits).
+export function micLabel(listening: boolean, voiceMode: TurnMode): string {
+    if (!listening) return "Record your answer";
+    return voiceMode === "manual" ? "Speaking: tap to stop & send" : "Speaking: tap to stop";
+}

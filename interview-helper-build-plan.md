@@ -421,7 +421,13 @@ models; `routers/common.py` has `envelope_result` + `owned_job` (were `_`-privat
 Verified free: the OpenAPI schema is byte-identical to before apart from the new per-router `tags`
 (33 paths, 46 operations), no unused imports, and every route still 401s without a token.
 **Next action:** a quick click-through with `fastapi dev api.py` (start + answer one turn), then the
-rest of the code-cleanup list (stale SCAFFOLD/TODO comments, tests + CI).*
+rest of the code-cleanup list (stale SCAFFOLD/TODO comments, tests + CI).
+**SessionPage split, Phase 1 DONE** (same branch): the inline subcomponents moved verbatim to
+`components/session/` (`VoiceColumn`, `ParticipantCell`, `TextColumn`, `RightRail`) plus a new
+`SessionHeader` (owns the tour state). `micLabel` -> helpers.ts, the `Line` type -> `TranscriptLine` in
+constants.ts. SessionPage 1,220 -> 715 lines; `tsc` + `vite build` clean, not yet tried in a browser.
+**Phase 2 (proposed, not started):** pull SessionPage's state clusters into hooks (code workspace,
+diagram workspace, transcript ids/reveal, the smart-voice mic effects, browser-voice auto-pick).*
 
 *2026-11-18: **Google OAuth sign-in / sign-up.** Code DONE, type-checks clean; **not yet run**: needs
 the dashboard config + migration below. Supabase `signInWithOAuth({ provider: "google" })`; the first

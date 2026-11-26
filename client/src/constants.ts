@@ -275,6 +275,19 @@ export const TIME_LOW_WARNING_MS = 60_000;
 /** How the candidate answers in an interview: speaking (STT) or typing. */
 export type AnswerMode = "voice" | "text";
 
+// A visible transcript line in the interview session. `id` is a STABLE key so a specific interviewer
+// bubble can be revealed later by id (race-safe even if other lines were appended meanwhile); `pending` =
+// an interviewer turn whose audio is still synthesizing — we withhold the real text until useSpeak's
+// onReady fires so text + voice land together.
+// `diagramUpdated` = a "you" turn that changed the design on the canvas (shows a tag under it).
+export type TranscriptLine = {
+    id: number;
+    who: "interviewer" | "you";
+    text: string;
+    pending?: boolean;
+    diagramUpdated?: boolean;
+};
+
 /**
  * The coding round's editor languages — the slug is what POST /api/answer sends as `language` (and so
  * the fence's info string the model and the grader read); the label is the picker's. CodingPanel maps
