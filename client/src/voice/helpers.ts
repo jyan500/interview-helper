@@ -1,6 +1,6 @@
 /**
  * Voice-capture helpers — pure, dependency-free functions shared by the two MediaRecorder-based
- * capture hook in speech.ts (useSmartVoiceTurn). No React, no network,
+ * capture hook in speech.ts (useVoiceTurn). No React, no network,
  * no module state, so they're trivial to reuse and unit-test.
  */
 
@@ -61,7 +61,7 @@ export function filenameFor(mimeType: string): string {
 /**
  * The `audio` value for getUserMedia given a chosen input-device id. A falsy id (null/"" = "system
  * default") yields `true` — let the browser pick — while a real id pins that exact microphone. Used
- * by BOTH the recorder and the smart-mode VAD so the device picker steers the same mic everywhere.
+ * by the recorder and the Settings test meter so the device picker steers the same mic everywhere.
  * `exact` (vs a plain deviceId) makes the request FAIL loudly if that device is gone, rather than
  * silently falling back to another mic — which is the wrong-mic silence we just chased down.
  */

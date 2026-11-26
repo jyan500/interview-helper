@@ -579,12 +579,12 @@ export function useTurnCountdown({
  * analog of the AI's `speaking` (which tracks real TTS playback), so the candidate's mic icon can
  * pulse on actual speech instead of merely on "the mic is armed" (`listening`).
  *
- * hark is a pure OBSERVER: it attaches to the stream we already own (exposed by useSmartVoiceTurn) and
+ * hark is a pure OBSERVER: it attaches to the stream we already own (exposed by useVoiceTurn) and
  * emits speaking / stopped_speaking with its own hysteresis, so no second getUserMedia, no conflict
- * with our recorder/VAD, and no on/off flicker to debounce ourselves. Deliberately NOT the Silero VAD
- * (useVoiceActivity), which does turn-taking and only runs in smart mode.
+ * with our recorder, and no on/off flicker to debounce ourselves. (A Silero-VAD version of this was
+ * tried and rolled back: ~1-2s onset latency.)
  *
- * Pass the stream from useSmartVoiceTurn; pass null while not recording and this resets to false. The
+ * Pass the stream from useVoiceTurn; pass null while not recording and this resets to false. The
  * harker (and its AudioContext) is stopped when the stream changes or on unmount.
  */
 export function useSpeaking(stream: MediaStream | null): boolean {
@@ -616,11 +616,10 @@ export function useSpeaking(stream: MediaStream | null): boolean {
  * within NO_INPUT_TIMEOUT_MS, raise `noInput` — the candidate never started, or (the case this really
  * catches) the wrong/dead mic is selected and their voice isn't being picked up at all.
  *
- * `speaking` is hark's "is any sound coming through THIS mic right now" (useSpeaking) — deliberately
- * hark, NOT the Silero turn-taking VAD: "is the mic hearing anything" is exactly the wrong-mic
- * question, and we must never accuse a working-but-quiet mic. The moment sound is heard the watch is
- * DISARMED for the rest of the recording, so a later thinking-pause can't re-trigger it — smart mode's
- * post-speech silence is the countdown's job, and manual mode's is deliberately nothing. It re-arms
+ * `speaking` is hark's "is any sound coming through THIS mic right now" (useSpeaking): "is the mic
+ * hearing anything" is exactly the wrong-mic question, and we must never accuse a working-but-quiet
+ * mic. The moment sound is heard the watch is DISARMED for the rest of the recording, so a later
+ * thinking-pause can't re-trigger it: post-speech silence never ends or interrupts a turn. It re-arms
  * from scratch each time the mic re-opens (the next `listening` edge).
  *
  * `dismiss` hides the prompt without waiting for speech — wired to its "check mic settings" button, so
@@ -792,7 +791,7 @@ export function useMicLevel(
 
         (async () => {
             try {
-                // `exact` deviceId (falsy -> system default) matches the recorder/VAD, so the meter tests
+                // `exact` deviceId (falsy -> system default) matches the recorder, so the meter tests
                 // the SAME mic the interview will capture from.
                 stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints(deviceId || null) });
                 if (cancelled) {

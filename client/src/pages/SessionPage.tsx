@@ -3,8 +3,8 @@
  * modes, switchable mid-session. Full-viewport height.
  *
  * This is the home of the interview loop (originally prototyped in the now-removed App.tsx
- * skeleton). The voice logic (useSmartVoiceTurn + useSpeak), the RTK Query mutations
- * (submitAnswer / getScorecard) and the two turn-taking effects moved here verbatim; the design's
+ * skeleton). The voice logic (useVoiceTurn + useSpeak) and the RTK Query mutations
+ * (submitAnswer / getScorecard) moved here verbatim; the design's
  * mock content is replaced by the real transcript/draft/voice state. What is NOT here is the
  * KICKOFF: /api/interview is fired by the producer (the job interview card on Dashboard / Jobs, or
  * Questions' practice card), which then navigates here with the fresh interview in route state.
@@ -47,7 +47,6 @@ import {
 import { useSessionNav } from "./SessionLayout";
 import {
     cueProblem,
-    defaultVoiceMode,
     diagramsEqual,
     diagramSignature,
     emptyDiagram,
@@ -60,14 +59,7 @@ import {
 import { CODING_PROBLEM_CUE, DIAGRAM_ONLY_ANSWER, type CodeLanguage, type TranscriptLine } from "../constants";
 import { useInterviewSettings, useMicOptions, useNoInputPrompt, useSpeaking, useTurnCountdown } from "../hooks";
 import { useToast } from "../toast/ToastProvider";
-import {
-    pickPreferredVoice,
-    setVoicePrefs,
-    useSmartVoiceTurn,
-    useSpeak,
-    useVoices,
-    type TurnMode,
-} from "../voice/speech";
+import { pickPreferredVoice, setVoicePrefs, useSpeak, useVoices, useVoiceTurn } from "../voice/speech";
 
 // The system-design canvas, lazy so React Flow (and its CSS) only download when a system-design
 // question comes up. Every other interview never pays for it.
@@ -169,32 +161,20 @@ export default function SessionPage() {
     // dispatches; the Settings modal flips it, mid-session is fine.
     const { speak, speaking } = useSpeak(ttsEngine);
 
-    // Smart voice turn-taking, exactly as App.tsx drove it. "manual" = tap to start/stop;
-    // "smart" = VAD notices silence -> "still there?" countdown -> auto stop+submit, and the mic
-    // auto-opens after the AI finishes speaking (the edge effect below). onFinalTranscript is the
-    // COMBINED stop+send: the hook hands us the Whisper text and we submit it like a typed answer.
-    //
-    // The QUESTION'S TYPE decides the mode (allows_smart_voice on its PlanQuestion), the same in a
-    // Practice and a Job interview: behavioral opens in smart with manual still selectable; coding and
-    // system design are manual-only, since their long thinking pauses would trip the silence countdown
-    // and submit a half-answer. A fresh start opens on the first question's rule, a resume on the
-    // payload's, and each advance re-applies it for the new question (see handleSend).
-    const [voiceMode, setVoiceMode] = useState<TurnMode>(() => defaultVoiceMode(nav.question?.allows_smart_voice));
-    const smartVoiceLocked = !(problem?.allows_smart_voice ?? false);
-
     // Which microphone to capture from (micDeviceId, from useInterviewSettings above). "" = system
     // default; a real deviceId pins that exact mic — the picker exists because a wrong default mic
-    // silently recorded nothing on Firefox. Threaded into useSmartVoiceTurn so BOTH the recorder and the
-    // smart-mode VAD open the same device. Seeded from localStorage, so it takes effect from turn one.
+    // silently recorded nothing on Firefox. Threaded into useVoiceTurn so the recorder opens that
+    // device. Seeded from localStorage, so it takes effect from turn one.
     const { micOptions, refresh: refreshMics } = useMicOptions();
 
     // The in-session Settings modal (behind the header gear): mic + live test meter, TTS engine, and
     // the voice/text mode toggle. Open state only — the settings themselves live in the state above.
     const [settingsOpen, setSettingsOpen] = useState(false);
 
-    const { supported, listening, confirming, countdownMs, transcribing, stream, start, stop, cancel, keepListening } =
-        useSmartVoiceTurn({
-            mode: voiceMode,
+    // Voice answers: tap to start, tap to stop. onFinalTranscript is the COMBINED stop+send: the hook
+    // hands us the Whisper text and we submit it like a typed answer.
+    const { supported, listening, transcribing, stream, start, stop, cancel } =
+        useVoiceTurn({
             deviceId: micDeviceId || null,
             onFinalTranscript: (text) => handleSend(text),
             // Answer ended (mic stopped) -> raise the flag NOW, before transcription, so the "…" holds
@@ -208,14 +188,13 @@ export default function SessionPage() {
     const userSpeaking = useSpeaking(stream);
 
     // The "check your mic" watch: the mic is armed but NO sound is coming through it (a wrong/dead mic,
-    // or the candidate never started). Drives a distinct prompt from the smart-mode "still there?"
-    // countdown — that one ends a turn AFTER speech; this one fires when nothing was ever heard, in BOTH
-    // modes. It disarms the instant any sound registers (userSpeaking), so a thinking pause never trips
+    // or the candidate never started). It fires only when nothing was ever heard, and never ends the
+    // turn. It disarms the instant any sound registers (userSpeaking), so a thinking pause never trips
     // it and, once the candidate has spoken, it stays quiet for the rest of the recording. See
     // useNoInputPrompt. `dismissNoInput` hides it when they head to Settings via the prompt's button.
     const { noInput, dismiss: dismissNoInput } = useNoInputPrompt(listening, userSpeaking);
     // The prompt's action: clear it and open Settings (mic picker + live test meter) so they can fix the
-    // input. Changing the mic there re-opens capture on the new device mid-turn (see useSmartVoiceTurn).
+    // input. Changing the mic there re-opens capture on the new device mid-turn (see useVoiceTurn).
     function handleCheckMic() {
         dismissNoInput();
         setSettingsOpen(true);
@@ -284,9 +263,6 @@ export default function SessionPage() {
                 // A coding round resumes into the panel: the problem on the table, and the editor seeded
                 // with the code sent for it — each language's latest as its draft, opening in the language
                 // last sent (marked as sent, so it isn't re-sent unchanged).
-                // Set before the current question is spoken below, so a smart round's mic auto-arms
-                // when that speech ends (the edge effect) and a manual-only round's never does.
-                setVoiceMode(defaultVoiceMode(payload.question?.allows_smart_voice));
                 // A timed interview continues the server's clock (used up already = straight to grading).
                 if (payload.time_limit_seconds) {
                     setTimeLimitMs(payload.time_limit_seconds * 1000);
@@ -434,10 +410,6 @@ export default function SessionPage() {
                 setProblem(res.question);
                 setHasDiagramCanvas(res.question.has_diagram_canvas);
                 setHasCodeEditor(res.question.has_code_editor);
-                // a manual-only question (coding, system design): drop out of smart before it's spoken,
-                // so the mic doesn't auto-arm when the speech ends. One that allows smart keeps the
-                // candidate's current choice.
-                if (!res.question.allows_smart_voice) setVoiceMode("manual");
                 setDiagram(emptyDiagram());
                 setLastSentDiagram(emptyDiagram());
                 // every language starts blank on the new problem
@@ -478,7 +450,7 @@ export default function SessionPage() {
         timeUpRef.current = true;
         setTimeUp(true);
         toast("The interview has ended, submitting your answers...", { variant: "info" });
-        if (listening || confirming) {
+        if (listening) {
             stop();
             return;
         }
@@ -527,58 +499,17 @@ export default function SessionPage() {
         onExpire: handleTimeUp,
     });
 
-    // ── Smart-mode: open the mic ONLY on the AI-finished-speaking EDGE ───────────────────────────
-    // Trigger on the `speaking` true->false EDGE (not merely "not speaking"): there's a brief gap
-    // between an answer submitting and TTS starting where a level check would fire and record over the
-    // AI's turn. prevSpeakingRef remembers last render's value so we only act once the AI has FINISHED.
-    const prevSpeakingRef = useRef(false);
-    useEffect(() => {
-        const wasSpeaking = prevSpeakingRef.current;
-        prevSpeakingRef.current = speaking;
-        // `mode === "voice"` gate: a text-mode answer's TTS also runs through `speaking`, and without
-        // this it would silently re-open the mic behind the composer — the same auto-submit-while-typing
-        // path, just re-armed a turn later. The mic auto-arms only when the voice screen is showing.
-        if (voiceMode !== "smart" || mode !== "voice" || !interviewId || done || ended || timeUp) return;
-        // `!preparing` is the single flow flag standing in for `!transcribing && !answering` (both run
-        // inside its span); `!speaking` still guards the playback half that runs after preparing clears.
-        if (wasSpeaking && !speaking && !preparing && !listening && !confirming) {
-            start();
-        }
-    }, [voiceMode, mode, speaking, preparing, interviewId, done, ended, timeUp, listening, confirming, start]);
-
-    // ── Pause the mic on voice->text, resume it on text->voice ───────────────────────────────────
-    // The voice turn-taking (auto-arm + VAD countdown -> stop+submit) must not run while the candidate
-    // is typing: a still-armed smart-mode mic hits its silence threshold and submits the draft
-    // mid-sentence (the bug this fixes). So LEAVING voice abandons any in-progress recording via
-    // cancel() — stop WITHOUT transcribing/submitting, so the half-answer is discarded, not posted —
-    // which also drops the VAD (its `active` gate is `listening`). RETURNING to voice re-arms the mic,
-    // but only in smart mode (manual always waits for a tap) and only when we're idle mid-interview;
-    // if the AI is mid-utterance the edge effect above arms it once speaking ends. The idle check reuses
-    // the single flow flag (`!preparing`) rather than re-OR-ing transcribing/answering. prevModeRef makes
-    // the body act on the actual voice<->text transition, not every state change that re-runs the effect.
+    // ── Pause the mic on voice->text ─────────────────────────────────────────────────────────────
+    // Switching to text mid-recording abandons the recording via cancel(): stop WITHOUT transcribing or
+    // submitting, so a half-spoken answer is discarded rather than posted while the candidate types.
+    // Switching back to voice waits for a tap, like every turn. prevModeRef makes the body act on the
+    // actual voice->text transition, not every state change that re-runs the effect.
     const prevModeRef = useRef(mode);
     useEffect(() => {
         const prev = prevModeRef.current;
         prevModeRef.current = mode;
-        if (prev === mode) return;
-        if (mode === "text") {
-            if (listening) cancel();
-        } else if (
-            voiceMode === "smart" &&
-            interviewId && !done && !ended && !timeUp &&
-            !speaking && !preparing && !listening && !confirming
-        ) {
-            start();
-        }
-    }, [mode, voiceMode, interviewId, done, ended, timeUp, speaking, preparing, listening, confirming, cancel, start]);
-
-    // ── "Still there?" — any keypress keeps the turn open during the countdown ───────────────────
-    useEffect(() => {
-        if (!confirming) return;
-        const onKey = () => keepListening();
-        window.addEventListener("keydown", onKey);
-        return () => window.removeEventListener("keydown", onKey);
-    }, [confirming, keepListening]);
+        if (prev !== mode && mode === "text" && listening) cancel();
+    }, [mode, listening, cancel]);
 
     // ── Derived view state ───────────────────────────────────────────────────────────────────────
     // Interviewer turns asked so far, oldest-first — drives the right-rail list and the current
@@ -594,7 +525,6 @@ export default function SessionPage() {
             <SessionHeader
                 title={interviewTitle(nav).join(" · ")}
                 mode={mode}
-                smartVoiceLocked={smartVoiceLocked}
                 ended={ended}
                 remainingMs={remainingMs}
                 clockPaused={preparing || speaking || frozen}
@@ -625,18 +555,12 @@ export default function SessionPage() {
                         // TTS begins). Drives the "thinking" indicator AND locks the mic so no new
                         // recording starts mid-preparation. No OR of transcribing/answering -> no gap.
                         preparing={preparing}
-                        voiceMode={voiceMode}
-                        smartVoiceLocked={smartVoiceLocked}
                         supported={supported}
-                        confirming={confirming}
-                        countdownMs={countdownMs}
                         noInput={noInput}
                         done={done}
                         ended={frozen}
                         onToggleMic={() => (listening ? stop() : start())}
                         onCheckMic={handleCheckMic}
-                        onToggleVoiceMode={() => setVoiceMode((m) => (m === "manual" ? "smart" : "manual"))}
-                        onKeepListening={keepListening}
                         onSwitch={() => setMode("text")}
                         onEnd={handleEnd}
                     />

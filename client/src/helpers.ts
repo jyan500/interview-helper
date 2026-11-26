@@ -17,7 +17,7 @@ import type {
     Project,
     SkillItem,
 } from "./api";
-import type { TtsEngine, TurnMode } from "./voice/speech";
+import type { TtsEngine } from "./voice/speech";
 import {
     ANSWER_MODE_STORAGE_KEY,
     AVATAR_ACCEPTED_TYPES,
@@ -483,15 +483,6 @@ export function diagramsEqual(a: DiagramDoc, b: DiagramDoc): boolean {
 }
 
 /**
- * The voice turn-taking mode a session opens in. A round that offers smart mode (behavioral) opens in
- * it; a manual-only round (coding, system design — long thinking pauses would trip the silence
- * countdown) opens in manual. A bank interview has no round (`null`/absent) and keeps manual.
- */
-export function defaultVoiceMode(allowsSmartVoice: boolean | null | undefined): TurnMode {
-    return allowsSmartVoice ? "smart" : "manual";
-}
-
-/**
  * An interviewer message with the coding problem's statement swapped for `cue` — what's spoken and shown
  * in the live session, since the statement itself sits in the coding panel. A message that doesn't
  * quote the statement (a reaction, a probe) comes back unchanged.
@@ -735,9 +726,7 @@ export function displayNameFrom(firstName: string, lastName: string): string {
     return `${firstName.trim()} ${lastName.trim()}`.trim();
 }
 
-// The mic button copy, mirroring App.tsx: manual STOP submits (combined stop+send), smart STOP just
-// stops (the countdown/VAD submits).
-export function micLabel(listening: boolean, voiceMode: TurnMode): string {
-    if (!listening) return "Record your answer";
-    return voiceMode === "manual" ? "Speaking: tap to stop & send" : "Speaking: tap to stop";
+// The mic button copy: STOP submits (the combined stop+send).
+export function micLabel(listening: boolean): string {
+    return listening ? "Speaking: tap to stop & send" : "Record your answer";
 }

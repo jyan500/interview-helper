@@ -14,7 +14,6 @@ import type { AnswerMode } from "../../constants";
 export default function SessionHeader({
     title,
     mode,
-    smartVoiceLocked,
     ended,
     remainingMs,
     clockPaused,
@@ -22,8 +21,6 @@ export default function SessionHeader({
 }: {
     title: string;
     mode: AnswerMode;
-    // the tour's voice-mode step explains a locked toggle differently
-    smartVoiceLocked: boolean;
     ended: boolean;
     // null = untimed: no clock at all
     remainingMs: number | null;
@@ -57,7 +54,7 @@ export default function SessionHeader({
                 </div>
             </div>
             {touring && (
-                <GuidedTour buildSteps={() => sessionTourSteps(mode, smartVoiceLocked)} onEnd={() => setTouring(false)} />
+                <GuidedTour buildSteps={() => sessionTourSteps(mode)} onEnd={() => setTouring(false)} />
             )}
         </>
     );

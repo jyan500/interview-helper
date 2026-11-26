@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranscribeMutation, useTtsMutation } from "../api";
-import { MicVAD } from "@ricky0123/vad-web";
-import { VAD_SPEECH_THRESHOLD, VAD_REDEMPTION_MS, CONFIRM_COUNTDOWN_MS, VAD_ONNX_WASM_BASE } from "../constants";
 import { pickRecordingType, filenameFor, audioConstraints, toSpeechText } from "./helpers";
 
 // ============================ TTS — the OUTPUT adapter ============================
@@ -314,117 +312,35 @@ export function useSpeechRecognition(onResult: (text: string) => void) {
     return { supported, listening, start, stop };
 }
 
-// ============ VAD — the acoustic silence detector (smart-mode endpointing, layer 1) ============
-// The "notice when they've gone quiet" half of smart mode. Everything else (record -> Whisper ->
-// submit) is the useSmartVoiceTurn spine below; this hook only reports the acoustic edges.
-//
-// It is ACOUSTIC ONLY: it answers "is someone talking right now?", NOT "did they say something that
-// MEANS they're done" (that's SEMANTIC endpointing = layer 2, deferred). Detection is delegated to the
-// Silero VAD (@ricky0123/vad-web) rather than a hand-rolled RMS threshold — a small neural model is far
-// more robust in a real room, and it ships its own hysteresis (redemptionFrames), which is the flappy
-// "is this a real pause?" logic we'd otherwise have to get right by hand.
-//
-// MicVAD manages its OWN microphone (a second getUserMedia alongside the recorder's — one permission,
-// shared). It loads an onnx model + wasm at runtime, by default from a CDN, so there's nothing to serve
-// in dev. It exposes onSpeechStart / onSpeechEnd, which we forward as onSpeech / onSilence.
-type VoiceActivityHandlers = {
-    onSilence: () => void; // the model decided speech ended -> open the countdown
-    onSpeech: () => void;  // speech (re)started -> cancel the countdown
-};
-
-export function useVoiceActivity(active: boolean, deviceId: string | null | undefined, handlers: VoiceActivityHandlers) {
-    // Keep the latest handlers in a ref so the VAD's callbacks always call the CURRENT closures (which
-    // capture fresh state) without us tearing down and rebuilding the model every render.
-    const handlersRef = useRef(handlers);
-    handlersRef.current = handlers;
-
-    useEffect(() => {
-        if (!active) return; // not smart mode, or not listening -> don't hold a mic/model
-
-        let vad: MicVAD | null = null;
-        let cancelled = false; // guards the async gap: the effect can be torn down mid-load
-
-        (async () => {
-            try {
-                const instance = await MicVAD.new({
-                    // Worklet + Silero .onnx model: self-hosted from /vad/ (copied into public/vad by
-                    // scripts/copy-vad-assets.mjs) — these are fetched/addModule'd, so Vite serves them fine.
-                    // onnxruntime wasm: dev = CDN, prod = /vad/ — Vite's dev server 500s on /public files
-                    // imported as JS modules (which is how ORT loads its wasm). See VAD_ONNX_WASM_BASE.
-                    baseAssetPath: "/vad/",
-                    onnxWASMBasePath: VAD_ONNX_WASM_BASE,
-                    // Steer the VAD's own mic to the SAME device the recorder uses, so smart-mode
-                    // silence detection listens to the mic that's actually being transcribed. Default
-                    // getStream() would grab the system-default device — a mismatch if the user picked
-                    // a specific mic. audioConstraints(null) reproduces the library's default behaviour.
-                    getStream: () => navigator.mediaDevices.getUserMedia({ audio: audioConstraints(deviceId) }),
-                    positiveSpeechThreshold: VAD_SPEECH_THRESHOLD,
-                    redemptionMs: VAD_REDEMPTION_MS,
-                    onSpeechStart: () => handlersRef.current.onSpeech(),
-                    // onSpeechEnd also hands us the utterance audio (Float32Array @16k); we ignore it and
-                    // keep MediaRecorder as the source for the Whisper blob (layer-1 scope).
-                    onSpeechEnd: () => handlersRef.current.onSilence(),
-                });
-                if (cancelled) { instance.destroy(); return } // torn down before the model finished loading
-                vad = instance;
-                vad.start();
-            } catch (e) {
-                // A load failure (missing assets, unsupported browser) must be VISIBLE, not a silent
-                // unhandled rejection — otherwise smart mode just quietly never detects speech.
-                console.error("VAD failed to initialize:", e);
-            }
-        })();
-
-        return () => {
-            cancelled = true;
-            vad?.destroy(); // releases MicVAD's mic + audio graph
-        };
-        // deviceId in deps: switching mics rebuilds the VAD so it re-opens on the newly chosen device.
-    }, [active, deviceId]);
-}
-
-// ============ Smart voice turn-taking — the layer-1 controller (both modes) ============
-// Capture raw mic audio -> POST to /api/transcribe (Whisper) -> use the text. On top of that spine
-// it adds the turn-taking UX:
-//   - it exposes the live `stream` in state so useVoiceActivity can watch it (smart mode),
-//   - "stop" now means STOP + TRANSCRIBE + SUBMIT in one go (onFinalTranscript), so the UI drops the
-//     separate "Send answer" click for the spoken path,
-//   - a "still there?" countdown sits between VAD silence and the actual submit.
-//
-// Modes:
-//   "manual" — user taps start, taps stop. No VAD, no countdown. (Good for long design answers where
-//              you pause a lot to think — nothing auto-decides you're done.)
-//   "smart"  — VAD watches for silence; silence opens the countdown; expiry submits. App auto-starts
-//              this after the AI stops speaking (the mic-mute turn-taking effect lives up in App).
-export type TurnMode = "manual" | "smart";
-
-export function useSmartVoiceTurn(opts: {
-    mode: TurnMode;
-    onFinalTranscript: (text: string) => void; // App passes handleSend — the COMBINED stop+send
+// ============ Voice turn — record one spoken answer, transcribe it, hand it back ============
+// Capture raw mic audio -> POST to /api/transcribe (Whisper) -> use the text. On top of that spine:
+//   - it exposes the live `stream` in state so the page can watch it (useSpeaking's pulsing mic icon,
+//     useNoInputPrompt's "check your mic"),
+//   - "stop" means STOP + TRANSCRIBE + SUBMIT in one go (onFinalTranscript), so the UI drops the
+//     separate "Send answer" click for the spoken path.
+// The candidate always ends the turn: tap to start, tap to stop. Nothing auto-decides they're done.
+export function useVoiceTurn(opts: {
+    onFinalTranscript: (text: string) => void; // the page passes handleSend — the COMBINED stop+send
     deviceId?: string | null; // chosen mic; null/undefined = system default (see audioConstraints)
     // Fires the instant the recorder stops — i.e. the moment the candidate's answer ENDS, BEFORE
-    // transcription starts. It's the one signal the consumer can't derive itself, because smart mode
-    // ends the turn internally (the countdown), not through a UI tap. Lets the page raise its single
-    // "interviewer is preparing" flag at the true start of the flow, spanning transcription too.
+    // transcription starts. Lets the page raise its single "interviewer is preparing" flag at the true
+    // start of the flow, spanning transcription too.
     onCaptureStopped?: () => void;
 }) {
-    const { mode, onFinalTranscript, deviceId, onCaptureStopped } = opts;
+    const { onFinalTranscript, deviceId, onCaptureStopped } = opts;
     const [transcribe, { isLoading: transcribing }] = useTranscribeMutation();
 
     const [listening, setListening] = useState(false);
-    const [confirming, setConfirming] = useState(false); // in the "still there?" window
-    const [countdownMs, setCountdownMs] = useState(0);   // remaining, for the UI number/ring
-    // The live mic stream while recording, exposed so a consumer (useMicLevel) can meter the input
-    // level — e.g. to light the candidate's waveform / mic border when actual sound comes in. null
-    // whenever we're not recording; the recorder still owns capture, this is just a read-only handle.
+    // The live mic stream while recording, exposed so a consumer (useSpeaking) can watch the input
+    // level — e.g. to pulse the candidate's mic icon when actual sound comes in. null whenever we're
+    // not recording; the recorder still owns capture, this is just a read-only handle.
     const [stream, setStream] = useState<MediaStream | null>(null);
 
     const recorderRef = useRef<MediaRecorder | null>(null);
     const chunksRef = useRef<Blob[]>([]);
-    const countdownRef = useRef<number | null>(null); // the setInterval id for the countdown
 
-    // onFinalTranscript is a fresh closure each render (it captures draft/interviewId in App). Ref it
-    // so `start` below doesn't need it in its dep list and never goes stale — same trick as handlersRef.
+    // onFinalTranscript is a fresh closure each render (it captures draft/interviewId on the page). Ref
+    // it so `start` below doesn't need it in its dep list and never goes stale.
     const onFinalRef = useRef(onFinalTranscript);
     onFinalRef.current = onFinalTranscript;
     // Same treatment for onCaptureStopped, so `start`'s recorder.onstop closure always calls the latest.
@@ -440,9 +356,7 @@ export function useSmartVoiceTurn(opts: {
     // Open the mic + MediaRecorder on the CURRENT deviceId and wire its stop -> transcribe -> submit
     // tail. Extracted from start() so restartCapture (mic swapped mid-turn) can re-open WITHOUT
     // re-tripping the `listening` guard. Throws on a getUserMedia failure so the caller resets the button.
-    // On stop it routes the final text to onFinalRef (submit), NOT setDraft — the combined stop+send. The
-    // VAD runs off its OWN mic (see useVoiceActivity), so we don't hand it this stream; both are steered
-    // to the same device via `deviceId`.
+    // On stop it routes the final text to onFinalRef (submit), NOT setDraft — the combined stop+send.
     const beginCapture = useCallback(async () => {
         // Pin the user-chosen mic (or system default). `exact` fails loudly if it's gone rather
         // than silently recording the wrong device — the silent-capture bug we debugged.
@@ -520,33 +434,19 @@ export function useSmartVoiceTurn(opts: {
         if (changed && listening) restartCapture();
     }, [deviceId, listening, restartCapture]);
 
-    // Clear the countdown timer + its UI if one is running. Shared by stop and keepListening.
-    const clearCountdown = useCallback(() => {
-        if (countdownRef.current !== null) {
-            clearInterval(countdownRef.current);
-            countdownRef.current = null;
-        }
-        setConfirming(false);
-        setCountdownMs(0);
-    }, []);
-
-    // stop = end the turn NOW: fires recorder.onstop -> transcribe -> submit. Called by the manual "stop"
-    // tap AND by the countdown on expiry. Clear the countdown first so a near-simultaneous tick can't
-    // re-enter stop().
+    // stop = end the turn NOW: fires recorder.onstop -> transcribe -> submit. Called by the "stop" tap
+    // and by a timed interview running out of time.
     const stop = useCallback(() => {
-        clearCountdown();
         recorderRef.current?.stop();
         setListening(false);
-    }, [clearCountdown]);
+    }, []);
 
     // cancel = abandon the in-progress recording WITHOUT transcribing or submitting. This is the "pause
     // the mic" the candidate wants when switching from voice to text mid-recording: stop() would fire the
     // transcribe+submit tail (posting a half-answer while they're typing), so instead we DETACH that tail
-    // — the same onstop-nulling trick restartCapture uses to throw away pre-fix audio — and end at idle
-    // rather than re-opening. Releasing `listening` also drops the VAD (its `active` gate), so nothing
-    // keeps listening while they type. Switching back to voice re-arms via start() (see SessionPage).
+    // — the same onstop-nulling trick restartCapture uses to throw away pre-fix audio — and end at idle.
+    // Switching back to voice waits for the next tap, like every other turn.
     const cancel = useCallback(() => {
-        clearCountdown();
         const rec = recorderRef.current;
         if (rec && rec.state !== "inactive") {
             rec.onstop = null; // bypass transcribe+submit — this audio is discarded, not sent
@@ -556,36 +456,7 @@ export function useSmartVoiceTurn(opts: {
         recorderRef.current = null;
         setStream(null); // no live stream to meter while paused
         setListening(false);
-    }, [clearCountdown]);
+    }, []);
 
-    // onSilence (from the VAD) opens the "still there?" countdown; expiry submits via stop().
-    const beginCountdown = useCallback(() => {
-        if (countdownRef.current !== null) return; // already counting
-        setConfirming(true);
-        setCountdownMs(CONFIRM_COUNTDOWN_MS);
-        const startedAt = Date.now();
-        countdownRef.current = window.setInterval(() => {
-            const remaining = CONFIRM_COUNTDOWN_MS - (Date.now() - startedAt);
-            if (remaining <= 0) {
-                stop(); // clears the interval, then stops + submits
-            } else {
-                setCountdownMs(remaining);
-            }
-        }, 100);
-    }, [stop]);
-
-    // The user tapped / pressed a key / the VAD heard speech again: cancel the countdown but DON'T stop
-    // the recorder — the same audio keeps rolling so a resumed sentence stays one continuous answer.
-    const keepListening = useCallback(() => {
-        clearCountdown();
-    }, [clearCountdown]);
-
-    // Wire the VAD to the countdown — only in smart mode, and only while actually listening, so it never
-    // holds a mic during the AI's turn or in manual mode (where silence must never auto-end a turn).
-    useVoiceActivity(mode === "smart" && listening, deviceId, {
-        onSilence: beginCountdown,
-        onSpeech: keepListening,
-    });
-
-    return { supported, listening, confirming, countdownMs, transcribing, stream, start, stop, cancel, keepListening };
+    return { supported, listening, transcribing, stream, start, stop, cancel };
 }

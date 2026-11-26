@@ -427,7 +427,17 @@ rest of the code-cleanup list (stale SCAFFOLD/TODO comments, tests + CI).
 `SessionHeader` (owns the tour state). `micLabel` -> helpers.ts, the `Line` type -> `TranscriptLine` in
 constants.ts. SessionPage 1,220 -> 715 lines; `tsc` + `vite build` clean, not yet tried in a browser.
 **Phase 2 (proposed, not started):** pull SessionPage's state clusters into hooks (code workspace,
-diagram workspace, transcript ids/reveal, the smart-voice mic effects, browser-voice auto-pick).*
+diagram workspace, transcript ids/reveal, browser-voice auto-pick).
+**Smart voice mode REMOVED, Phase 1 (client) DONE** (same branch). Voice is manual tap-to-start /
+tap-to-stop & send for every question. Gone: Silero VAD (`@ricky0123/vad-web` uninstalled,
+`useVoiceActivity`, `scripts/copy-vad-assets.mjs`, `public/vad/`, the VAD constants + the
+predev/prebuild hooks), the "still there?" auto-submit countdown + its keypress effect, the smart/manual
+toggle + its tour step, mic auto-arm after the AI speaks, `defaultVoiceMode`, and `allows_smart_voice`
+on the client's `PlanQuestion`. `useSmartVoiceTurn` -> `useVoiceTurn`. KEPT: the hark speaking
+indicator and the "check your mic" no-input prompt. Voice->text mid-recording still discards the
+recording. `tsc` + `vite build` clean; not yet tried in a browser.
+**Phase 2 (backend, next):** migration dropping `question_types.allows_smart_voice`; remove it from
+`models.py`, `seed.py`, `data/questions.json` and `plan_question` in `tools/interview.py`.*
 
 *2026-11-18: **Google OAuth sign-in / sign-up.** Code DONE, type-checks clean; **not yet run**: needs
 the dashboard config + migration below. Supabase `signInWithOAuth({ provider: "google" })`; the first

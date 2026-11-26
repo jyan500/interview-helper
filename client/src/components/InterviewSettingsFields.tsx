@@ -3,7 +3,7 @@
  * the Interview settings page (set them before an interview starts):
  *
  *   - Mode         — voice ⇆ text.
- *   - Microphone   — which input the recorder + VAD capture from, PLUS a live "test your mic" meter
+ *   - Microphone   — which input the recorder captures from, PLUS a live "test your mic" meter
  *                    (<MicMeter>) so you can confirm the right device is picked BEFORE it's your turn to
  *                    answer.
  *   - Voice        — the TTS engine (neural OpenAI vs. free browser).

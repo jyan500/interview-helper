@@ -1,11 +1,9 @@
 import { Microphone, PencilSimple } from "@phosphor-icons/react";
 import Button from "../Button";
 import LoadingDots from "../LoadingDots";
-import Tooltip from "../Tooltip";
 import ParticipantCell from "./ParticipantCell";
 import { micLabel } from "../../helpers";
 import type { TranscriptLine } from "../../constants";
-import type { TurnMode } from "../../voice/speech";
 
 /* ══════════════════════════════════════════════════════════════════════════
    Voice mode — centre column (mock 2a), wired
@@ -17,18 +15,12 @@ export default function VoiceColumn({
     userSpeaking,
     speaking,
     preparing,
-    voiceMode,
-    smartVoiceLocked,
     supported,
-    confirming,
-    countdownMs,
     noInput,
     done,
     ended,
     onToggleMic,
     onCheckMic,
-    onToggleVoiceMode,
-    onKeepListening,
     onSwitch,
     onEnd,
 }: {
@@ -39,19 +31,12 @@ export default function VoiceColumn({
     userSpeaking: boolean;
     speaking: boolean;
     preparing: boolean;
-    voiceMode: TurnMode;
-    // A manual-only round (coding, system design): the mode toggle stays visible but can't be flipped.
-    smartVoiceLocked: boolean;
     supported: boolean;
-    confirming: boolean;
-    countdownMs: number;
     noInput: boolean;
     done: boolean;
     ended: boolean;
     onToggleMic: () => void;
     onCheckMic: () => void;
-    onToggleVoiceMode: () => void;
-    onKeepListening: () => void;
     onSwitch: () => void;
     onEnd: () => void;
 }) {
@@ -59,18 +44,6 @@ export default function VoiceColumn({
     // round-trip, and TTS synthesis, ending the instant the next question is revealed. One source of
     // truth, so there's no frame where it reads false while a turn is still being prepared.
     const thinking = preparing;
-    const voiceModeButton = (
-        <Button
-            variant="ghost"
-            className="flex items-center gap-2 border-l border-divider disabled:opacity-50"
-            style={{ padding: "13px 18px" }}
-            onClick={onToggleVoiceMode}
-            data-tour="voice-mode"
-            disabled={smartVoiceLocked || listening || confirming || preparing}
-        >
-            Mode: {voiceMode}
-        </Button>
-    );
     // justify-center-SAFE, not plain center: in a scrolling column, plain centering pushes overflow out
     // of BOTH ends, and the top half of a long question can't be scrolled back to. Safe centering centres
     // while it fits and falls back to top-aligned (scrollable) when it doesn't.
@@ -102,26 +75,14 @@ export default function VoiceColumn({
                     role="Candidate"
                     speaking={userSpeaking}
                     className="border-r border-divider"
-                    // The "You" cell's reserved footer slot (below the Speaking/Listening tag) holds one of
-                    // two mutually-exclusive prompts — see ParticipantCell. The slot is ALWAYS present in
-                    // BOTH cells, so a prompt appearing/disappearing changes no height and triggers no
-                    // page-scrollbar layout shift.
-                    //   1. confirming — the smart-mode "still there?" countdown, AFTER speech: a tap, any key
-                    //      (the effect in SessionPage), or this button keeps the turn open.
-                    //   2. noInput — the "check your mic" prompt, when NO sound was ever heard (wrong/dead
-                    //      mic, or never started). Amber (gap tokens) to read as attention, not the accent
-                    //      countdown; its button opens Settings to fix the input.
-                    // They can't both be true (a countdown needs prior speech, noInput needs none), but
-                    // confirming is checked first defensively.
+                    // The "You" cell's reserved footer slot (below the Speaking/Listening tag) holds the
+                    // "check your mic" prompt — see ParticipantCell. The slot is ALWAYS present in BOTH
+                    // cells, so the prompt appearing/disappearing changes no height and triggers no
+                    // page-scrollbar layout shift. It shows when NO sound was ever heard (wrong/dead mic,
+                    // or never started), amber (gap tokens) to read as attention; its button opens
+                    // Settings to fix the input.
                     footer={
-                        confirming ? (
-                            <div className="flex items-center gap-2.5 rounded-md border border-accent px-3 py-1.5 text-[12.5px] text-accent-300">
-                                <span>Still there? {Math.ceil(countdownMs / 1000)}s</span>
-                                <Button variant="ghost" className="text-[12.5px]" onClick={onKeepListening}>
-                                    Keep talking
-                                </Button>
-                            </div>
-                        ) : noInput ? (
+                        noInput ? (
                             <div className="flex items-center gap-2.5 whitespace-nowrap rounded-md border border-gap-border bg-gap-bg px-3 py-1.5 text-[12.5px] text-gap">
                                 <span>Still there?</span>
                                 <Button variant="ghost" className="text-[12.5px] text-gap" onClick={onCheckMic}>
@@ -138,30 +99,19 @@ export default function VoiceColumn({
                 retired and only "End session" remains. */}
             <div className="flex items-center rounded-md border border-divider">
                 {supported && !done && (
-                    <>
-                        <Button
-                            variant="primary"
-                            className="flex items-center gap-[9px] text-[15px] disabled:opacity-50"
-                            style={{ padding: "13px 30px" }}
-                            onClick={onToggleMic}
-                            data-tour="answer-button" // every tour's answer step (tour/steps.ts)
-                            // Locked while the AI is speaking, while a turn is being prepared
-                            // (transcribe/answer/TTS), or once ended — so no new recording starts over any of those.
-                            disabled={speaking || preparing || ended}
-                        >
-                            <Microphone size={17} weight="regular" />
-                            {micLabel(listening, voiceMode)}
-                        </Button>
-                        {/* When the round locks smart mode off, a Tooltip explains why the toggle is disabled.
-                            Only wrapped when locked — an empty Tooltip would still show a blank bubble on hover. */}
-                        {smartVoiceLocked ? (
-                            <Tooltip content="Smart mode is off for this round">
-                                {voiceModeButton}
-                            </Tooltip>
-                        ) : (
-                            voiceModeButton
-                        )}
-                    </>
+                    <Button
+                        variant="primary"
+                        className="flex items-center gap-[9px] text-[15px] disabled:opacity-50"
+                        style={{ padding: "13px 30px" }}
+                        onClick={onToggleMic}
+                        data-tour="answer-button" // every tour's answer step (tour/steps.ts)
+                        // Locked while the AI is speaking, while a turn is being prepared
+                        // (transcribe/answer/TTS), or once ended — so no new recording starts over any of those.
+                        disabled={speaking || preparing || ended}
+                    >
+                        <Microphone size={17} weight="regular" />
+                        {micLabel(listening)}
+                    </Button>
                 )}
                 <Button
                     variant="ghost"
