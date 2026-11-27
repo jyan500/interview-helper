@@ -436,8 +436,8 @@ toggle + its tour step, mic auto-arm after the AI speaks, `defaultVoiceMode`, an
 on the client's `PlanQuestion`. `useSmartVoiceTurn` -> `useVoiceTurn`. KEPT: the hark speaking
 indicator and the "check your mic" no-input prompt. Voice->text mid-recording still discards the
 recording. `tsc` + `vite build` clean; not yet tried in a browser.
-**Phase 2 (backend, next):** migration dropping `question_types.allows_smart_voice`; remove it from
-`models.py`, `seed.py`, `data/questions.json` and `plan_question` in `tools/interview.py`.*
+**Phase 2 (backend) DONE 2026-11-27:** migration `f7b9d1e3a5c8` (Revises `e5a7c9b1d3f6`) drops
+`question_types.allows_smart_voice`; removed from `models.py`, `seed.py`, `data/questions.json` and `plan_question` in `tools/interview.py`. Run `alembic upgrade head` to apply.*
 
 *2026-11-18: **Google OAuth sign-in / sign-up.** Code DONE, type-checks clean; **not yet run**: needs
 the dashboard config + migration below. Supabase `signInWithOAuth({ provider: "google" })`; the first
