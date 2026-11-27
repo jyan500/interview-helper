@@ -36,14 +36,13 @@ export interface InterviewResponse {
 }
 // A plan question as the start/answer/resume responses carry it: its slug and full text, and its
 // question TYPE's flags: whether it shows the diagram canvas (system design) or the code editor
-// (coding), and whether smart voice turn-taking is offered (then the default) or it's manual-only. The
-// SPA never checks type slugs. Per question, so a mixed Practice interview switches as it goes.
+// (coding). The SPA never checks type slugs. Per question, so a mixed Practice interview switches as
+// it goes.
 export interface PlanQuestion {
     slug: string;
     text: string;
     has_diagram_canvas: boolean;
     has_code_editor: boolean;
-    allows_smart_voice: boolean;
 }
 
 // The system-design canvas's wire/storage shape, mirroring DiagramDoc in server/diagram.py (our slim

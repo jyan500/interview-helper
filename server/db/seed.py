@@ -165,7 +165,6 @@ async def seed() -> None:
                 "has_code_editor": type_data["has_code_editor"],
                 "uses_candidate_background": type_data["uses_candidate_background"],
                 "max_followups": type_data["max_followups"],
-                "allows_smart_voice": type_data["allows_smart_voice"],
                 "interviewer_guidance": type_data["interviewer_guidance"],
             }
             qtype, was_new = await _get_or_create(db, QuestionType, slug=type_slug, **fields)

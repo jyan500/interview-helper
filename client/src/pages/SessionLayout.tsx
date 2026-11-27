@@ -29,7 +29,7 @@ import type { PlanQuestion } from "../api";
 //   role / level — human-readable LABELS for the header (both flows carry them).
 //   company / round — a job SIMULATION's header labels instead (null/absent for a bank interview).
 //   question     — FRESH START: the first plan question. Its type flags say whether to open with the
-//                  coding panel or the diagram canvas, and in smart or manual voice mode. A RESUME learns
+//                  coding panel or the diagram canvas. A RESUME learns
 //                  it from the resume payload instead.
 //   timeLimitSeconds — FRESH START: a timed interview's limit (null/absent = untimed, no clock shown).
 //                  A RESUME learns it, and the time already used, from the resume payload.

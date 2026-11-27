@@ -86,14 +86,13 @@ from tools.scoring import aggregate_by_kind, aggregate_scores
 
 def plan_question(slug: str, text: str, qtype: QuestionType) -> dict:
     """The PlanQuestion wire shape the start / answer / resume responses carry: a plan question (never
-    a probe) plus its TYPE's flags, so the SPA picks the workspace (code editor, diagram canvas) and
-    the voice mode per question without ever checking a type slug."""
+    a probe) plus its TYPE's flags, so the SPA picks the workspace (code editor, diagram canvas) per
+    question without ever checking a type slug."""
     return {
         "slug": slug,
         "text": text,
         "has_diagram_canvas": qtype.has_diagram_canvas,
         "has_code_editor": qtype.has_code_editor,
-        "allows_smart_voice": qtype.allows_smart_voice,
     }
 
 

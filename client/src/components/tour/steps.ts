@@ -81,9 +81,8 @@ function answerStep(mode: AnswerMode, deliverable: string, explain: string): Ste
 }
 
 // The interview session itself, for every kind of interview (the header's "How it works"). The answer
-// controls follow the mode: voice shows the mic and the smart/manual toggle, text shows Send answer.
-//   smartVoiceLocked — the round turns smart mode off (coding, system design), so the toggle can't flip
-export function sessionTourSteps(mode: AnswerMode, smartVoiceLocked: boolean): Step[] {
+// controls follow the mode: voice shows the mic, text shows Send answer.
+export function sessionTourSteps(mode: AnswerMode): Step[] {
     const answerSteps: Step[] =
         mode === "voice"
             ? [
@@ -91,20 +90,8 @@ export function sessionTourSteps(mode: AnswerMode, smartVoiceLocked: boolean): S
                       target: "[data-tour='answer-button']",
                       title: "Record your answer",
                       content:
-                          "Press Record your answer when you're ready to speak. The interviewer hears your answer " +
-                          "once it's sent, and replies with a follow-up or the next question.",
-                      placement: "top",
-                  },
-                  {
-                      target: "[data-tour='voice-mode']",
-                      title: "Smart or manual",
-                      content: smartVoiceLocked
-                          ? "This round uses manual mode: press the button again when you're done to send your " +
-                            "answer. Smart mode is off here, since you'll pause to write."
-                          : "In manual mode, press the button again when you're done to send your answer. In smart " +
-                            "mode, recording starts on its own after each question, and your answer is sent " +
-                            "automatically after a short silence. A countdown lets you keep talking if you were " +
-                            "only pausing.",
+                          "Press Record your answer when you're ready to speak, and press it again when you're done " +
+                          "to send it. The interviewer replies with a follow-up or the next question.",
                       placement: "top",
                   },
               ]

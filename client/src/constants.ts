@@ -52,44 +52,18 @@ export const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 export const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 /**
- * Smart voice turn-taking (layer 1) — the tunables for the VAD auto-endpoint experience. They live
- * here, not inline in voice/speech.ts, so the "feel" of the mic is adjustable in ONE place (same rule
- * as API_BASE_URL). All three encode ONE tradeoff: end the turn promptly vs. don't cut someone off
- * mid-thought. Start here if smart mode feels twitchy or sluggish.
- *
- * Acoustic detection is delegated to the Silero VAD (@ricky0123/vad-web), so the first two map onto
- * that library's MicVAD options rather than a hand-rolled RMS threshold:
- *
- *   VAD_SPEECH_THRESHOLD  — MicVAD `positiveSpeechThreshold` (0..1): Silero's speech-probability above
- *                           which a frame counts as speech. ~0.5 is the library default; raise it in a
- *                           noisy room so background hum doesn't read as talking, lower it if soft
- *                           speech gets missed.
- *   VAD_REDEMPTION_MS     — MicVAD `redemptionMs`: how long (ms) of below-threshold audio to wait (the
- *                           model's own hysteresis) before declaring speech ended. Higher = more forgiving
- *                           of short pauses mid-sentence before we even reach the countdown below.
- *   CONFIRM_COUNTDOWN_MS  — the "still there?" grace window. A tap or keypress cancels it; on expiry we
- *                           stop + transcribe + submit. This is the human-scale safety net against a
- *                           thinking pause, layered on top of the model's short redemption window.
- */
-export const VAD_SPEECH_THRESHOLD = 0.5;
-export const VAD_REDEMPTION_MS = 3000;
-export const CONFIRM_COUNTDOWN_MS = 6000;
-
-/**
  * The "check your mic" watchdog. When the mic is armed but NO sound at all comes through it for this
- * long, we raise the "Still there? — check your mic" prompt (useNoInputPrompt). This is a DIFFERENT
- * failure from CONFIRM_COUNTDOWN_MS above: that one ends a turn after the candidate has spoken and then
- * gone quiet; THIS one fires when nothing was ever heard — a candidate who never started, or (the case
- * it really catches) a wrong/dead mic that isn't picking their voice up at all. Keep it generously
- * longer than the countdown so a candidate simply composing their first sentence isn't nagged.
+ * long, we raise the "Still there? — check your mic" prompt (useNoInputPrompt). It fires only when
+ * nothing was ever heard — a candidate who never started, or (the case it really catches) a wrong/dead
+ * mic that isn't picking their voice up at all — and never ends the turn. Keep it generous so a
+ * candidate simply composing their first sentence isn't nagged.
  */
 export const NO_INPUT_TIMEOUT_MS = 10000;
 
 /**
  * Tunables for the candidate's "speaking" indicator (the pulsing mic icon), driven by `hark`
- * watching the live mic stream — see useSpeaking (hooks.ts). This is a DISPLAY signal, unrelated to
- * the Silero VAD above (which does turn-taking); hark just answers "is there speech right now?" with
- * its own built-in hysteresis so the icon doesn't flicker.
+ * watching the live mic stream — see useSpeaking (hooks.ts). This is a DISPLAY signal: hark just
+ * answers "is there speech right now?" with its own built-in hysteresis so the icon doesn't flicker.
  *
  *   HARK_SPEAKING_THRESHOLD_DB — loudness (dBFS, negative) above which hark counts audio as speech.
  *                                hark's default is -50; RAISE toward 0 (e.g. -45) if room noise makes
@@ -100,21 +74,6 @@ export const NO_INPUT_TIMEOUT_MS = 10000;
  */
 export const HARK_SPEAKING_THRESHOLD_DB = -50;
 export const HARK_POLL_INTERVAL_MS = 100;
-
-/**
- * Where MicVAD loads the onnxruntime-web wasm from (its `onnxWASMBasePath`). ORT pulls its wasm glue
- * via a dynamic `import()`, and Vite's DEV server refuses to serve /public files as JS modules ("...
- * should not be imported from source code" → 500) — so in dev we point at a cross-origin CDN, which
- * Vite never intercepts. The prod build serves /public statically with no such block, so it uses the
- * self-hosted copy in /vad/ (from scripts/copy-vad-assets.mjs). The worklet + Silero .onnx model still
- * come from /vad/ in BOTH modes (they're fetched / addModule'd, not imported, so Vite serves them fine).
- *
- * PIN the CDN version to the installed onnxruntime-web (it must match the ORT JS bundled by
- * @ricky0123/vad-web, or the wasm/JS handshake fails) — bump it whenever that dependency upgrades.
- */
-export const VAD_ONNX_WASM_BASE = import.meta.env.DEV
-    ? "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.29.0/dist/"
-    : "/vad/";
 
 /**
  * The chosen microphone persists across sessions in localStorage under this key, so a mic picked once
@@ -167,7 +126,7 @@ export const DASHBOARD_ROWS = 5;
  * (the same loudness library useSpeaking uses), whose volume_change reports the input level in dBFS
  * (~-100 silent .. 0 loud). We map that dB range onto the bar's 0..1 width, so it sits left when you're
  * quiet and "shoots right" as you talk. They live here, not inline, so the meter's feel is adjustable in
- * ONE place (same rule as the VAD/hark tunables above). The bar's motion is smoothed by a CSS width
+ * ONE place (same rule as the hark tunables above). The bar's motion is smoothed by a CSS width
  * transition, so there's no JS smoothing factor to tune.
  *
  *   MIC_LEVEL_FLOOR_DB — dB mapped to an EMPTY bar (0%). At/below this reads as silence. RAISE toward 0
@@ -274,6 +233,19 @@ export const TIME_LOW_WARNING_MS = 60_000;
 
 /** How the candidate answers in an interview: speaking (STT) or typing. */
 export type AnswerMode = "voice" | "text";
+
+// A visible transcript line in the interview session. `id` is a STABLE key so a specific interviewer
+// bubble can be revealed later by id (race-safe even if other lines were appended meanwhile); `pending` =
+// an interviewer turn whose audio is still synthesizing — we withhold the real text until useSpeak's
+// onReady fires so text + voice land together.
+// `diagramUpdated` = a "you" turn that changed the design on the canvas (shows a tag under it).
+export type TranscriptLine = {
+    id: number;
+    who: "interviewer" | "you";
+    text: string;
+    pending?: boolean;
+    diagramUpdated?: boolean;
+};
 
 /**
  * The coding round's editor languages — the slug is what POST /api/answer sends as `language` (and so

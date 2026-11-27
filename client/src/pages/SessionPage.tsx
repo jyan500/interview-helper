@@ -3,8 +3,8 @@
  * modes, switchable mid-session. Full-viewport height.
  *
  * This is the home of the interview loop (originally prototyped in the now-removed App.tsx
- * skeleton). The voice logic (useSmartVoiceTurn + useSpeak), the RTK Query mutations
- * (submitAnswer / getScorecard) and the two turn-taking effects moved here verbatim; the design's
+ * skeleton). The voice logic (useVoiceTurn + useSpeak) and the RTK Query mutations
+ * (submitAnswer / getScorecard) moved here verbatim; the design's
  * mock content is replaced by the real transcript/draft/voice state. What is NOT here is the
  * KICKOFF: /api/interview is fired by the producer (the job interview card on Dashboard / Jobs, or
  * Questions' practice card), which then navigates here with the fresh interview in route state.
@@ -27,21 +27,15 @@
  * answer in progress is sent as the final one (POST /final-answer, no interviewer reply) and the
  * interview is graded on what was submitted (handleTimeUp).
  */
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
-import { Gear, Microphone, PencilSimple, SpeakerHigh, Sparkle, TreeStructure } from "@phosphor-icons/react";
-import type { Icon } from "@phosphor-icons/react";
-import MessageRow from "../components/MessageRow";
-import UserAvatar from "../components/UserAvatar";
 import LoadingDots from "../components/LoadingDots";
 import SettingsModal from "../components/SettingsModal";
 import CodingPanel from "../components/CodingPanel";
-import Button from "../components/Button";
-import Tooltip from "../components/Tooltip";
-import GuidedTour from "../components/tour/GuidedTour";
-import NeedHelpButton from "../components/tour/NeedHelpButton";
-import CountdownClock from "../components/CountdownClock";
-import { sessionTourSteps } from "../components/tour/steps";
+import SessionHeader from "../components/session/SessionHeader";
+import VoiceColumn from "../components/session/VoiceColumn";
+import TextColumn from "../components/session/TextColumn";
+import RightRail from "../components/session/RightRail";
 import {
     useGetScorecardMutation,
     useLazyGetResumeQuery,
@@ -53,7 +47,6 @@ import {
 import { useSessionNav } from "./SessionLayout";
 import {
     cueProblem,
-    defaultVoiceMode,
     diagramsEqual,
     diagramSignature,
     emptyDiagram,
@@ -63,24 +56,10 @@ import {
     sentCodeByLanguage,
     withCodeFence,
 } from "../helpers";
-import { CODING_PROBLEM_CUE, DIAGRAM_ONLY_ANSWER, type AnswerMode, type CodeLanguage } from "../constants";
+import { CODING_PROBLEM_CUE, DIAGRAM_ONLY_ANSWER, type CodeLanguage, type TranscriptLine } from "../constants";
 import { useInterviewSettings, useMicOptions, useNoInputPrompt, useSpeaking, useTurnCountdown } from "../hooks";
 import { useToast } from "../toast/ToastProvider";
-import {
-    pickPreferredVoice,
-    setVoicePrefs,
-    useSmartVoiceTurn,
-    useSpeak,
-    useVoices,
-    type TurnMode,
-} from "../voice/speech";
-
-// A visible transcript line. `id` is a STABLE key so a specific interviewer bubble can be revealed
-// later by id (race-safe even if other lines were appended meanwhile); `pending` = an interviewer
-// turn whose audio is still synthesizing — we withhold the real text until useSpeak's onReady fires
-// so text + voice land together. Same shape App.tsx used.
-// `diagramUpdated` = a "you" turn that changed the design on the canvas (shows a tag under it).
-type Line = { id: number; who: "interviewer" | "you"; text: string; pending?: boolean; diagramUpdated?: boolean };
+import { pickPreferredVoice, setVoicePrefs, useSpeak, useVoices, useVoiceTurn } from "../voice/speech";
 
 // The system-design canvas, lazy so React Flow (and its CSS) only download when a system-design
 // question comes up. Every other interview never pays for it.
@@ -101,7 +80,7 @@ export default function SessionPage() {
     // The candidate's interview settings — answer mode, TTS engine and mic — seeded from localStorage
     // (what they picked on the Interview settings page or last session) and written back on change.
     const { mode, setMode, ttsEngine, setTtsEngine, micDeviceId, setMicDeviceId } = useInterviewSettings();
-    const [transcript, setTranscript] = useState<Line[]>([]);
+    const [transcript, setTranscript] = useState<TranscriptLine[]>([]);
     const [draft, setDraft] = useState("");
     // done = the client-driven loop exhausted the bank (submitAnswer told us). ended = we've kicked
     // off grading + navigation away, used to freeze the UI so nothing double-fires.
@@ -182,35 +161,20 @@ export default function SessionPage() {
     // dispatches; the Settings modal flips it, mid-session is fine.
     const { speak, speaking } = useSpeak(ttsEngine);
 
-    // Smart voice turn-taking, exactly as App.tsx drove it. "manual" = tap to start/stop;
-    // "smart" = VAD notices silence -> "still there?" countdown -> auto stop+submit, and the mic
-    // auto-opens after the AI finishes speaking (the edge effect below). onFinalTranscript is the
-    // COMBINED stop+send: the hook hands us the Whisper text and we submit it like a typed answer.
-    //
-    // The QUESTION'S TYPE decides the mode (allows_smart_voice on its PlanQuestion), the same in a
-    // Practice and a Job interview: behavioral opens in smart with manual still selectable; coding and
-    // system design are manual-only, since their long thinking pauses would trip the silence countdown
-    // and submit a half-answer. A fresh start opens on the first question's rule, a resume on the
-    // payload's, and each advance re-applies it for the new question (see handleSend).
-    const [voiceMode, setVoiceMode] = useState<TurnMode>(() => defaultVoiceMode(nav.question?.allows_smart_voice));
-    const smartVoiceLocked = !(problem?.allows_smart_voice ?? false);
-
     // Which microphone to capture from (micDeviceId, from useInterviewSettings above). "" = system
     // default; a real deviceId pins that exact mic — the picker exists because a wrong default mic
-    // silently recorded nothing on Firefox. Threaded into useSmartVoiceTurn so BOTH the recorder and the
-    // smart-mode VAD open the same device. Seeded from localStorage, so it takes effect from turn one.
+    // silently recorded nothing on Firefox. Threaded into useVoiceTurn so the recorder opens that
+    // device. Seeded from localStorage, so it takes effect from turn one.
     const { micOptions, refresh: refreshMics } = useMicOptions();
 
     // The in-session Settings modal (behind the header gear): mic + live test meter, TTS engine, and
     // the voice/text mode toggle. Open state only — the settings themselves live in the state above.
     const [settingsOpen, setSettingsOpen] = useState(false);
-    // The header's "How it works" tour of the session controls. Mounted only while it runs, so each run
-    // starts again at step 1. (The coding and diagram panels have their own "Need help?" tours.)
-    const [touring, setTouring] = useState(false);
 
-    const { supported, listening, confirming, countdownMs, transcribing, stream, start, stop, cancel, keepListening } =
-        useSmartVoiceTurn({
-            mode: voiceMode,
+    // Voice answers: tap to start, tap to stop. onFinalTranscript is the COMBINED stop+send: the hook
+    // hands us the Whisper text and we submit it like a typed answer.
+    const { supported, listening, transcribing, stream, start, stop, cancel } =
+        useVoiceTurn({
             deviceId: micDeviceId || null,
             onFinalTranscript: (text) => handleSend(text),
             // Answer ended (mic stopped) -> raise the flag NOW, before transcription, so the "…" holds
@@ -224,14 +188,13 @@ export default function SessionPage() {
     const userSpeaking = useSpeaking(stream);
 
     // The "check your mic" watch: the mic is armed but NO sound is coming through it (a wrong/dead mic,
-    // or the candidate never started). Drives a distinct prompt from the smart-mode "still there?"
-    // countdown — that one ends a turn AFTER speech; this one fires when nothing was ever heard, in BOTH
-    // modes. It disarms the instant any sound registers (userSpeaking), so a thinking pause never trips
+    // or the candidate never started). It fires only when nothing was ever heard, and never ends the
+    // turn. It disarms the instant any sound registers (userSpeaking), so a thinking pause never trips
     // it and, once the candidate has spoken, it stays quiet for the rest of the recording. See
     // useNoInputPrompt. `dismissNoInput` hides it when they head to Settings via the prompt's button.
     const { noInput, dismiss: dismissNoInput } = useNoInputPrompt(listening, userSpeaking);
     // The prompt's action: clear it and open Settings (mic picker + live test meter) so they can fix the
-    // input. Changing the mic there re-opens capture on the new device mid-turn (see useSmartVoiceTurn).
+    // input. Changing the mic there re-opens capture on the new device mid-turn (see useVoiceTurn).
     function handleCheckMic() {
         dismissNoInput();
         setSettingsOpen(true);
@@ -300,9 +263,6 @@ export default function SessionPage() {
                 // A coding round resumes into the panel: the problem on the table, and the editor seeded
                 // with the code sent for it — each language's latest as its draft, opening in the language
                 // last sent (marked as sent, so it isn't re-sent unchanged).
-                // Set before the current question is spoken below, so a smart round's mic auto-arms
-                // when that speech ends (the edge effect) and a manual-only round's never does.
-                setVoiceMode(defaultVoiceMode(payload.question?.allows_smart_voice));
                 // A timed interview continues the server's clock (used up already = straight to grading).
                 if (payload.time_limit_seconds) {
                     setTimeLimitMs(payload.time_limit_seconds * 1000);
@@ -333,7 +293,7 @@ export default function SessionPage() {
                         setLastSentCode(sent.last.code);
                     }
                 }
-                const lines: Line[] = [];
+                const lines: TranscriptLine[] = [];
                 for (const turn of payload.turns) {
                     lines.push({ id: nextId(), who: "interviewer", text: shown(turn.question_text) });
                     lines.push({ id: nextId(), who: "you", text: turn.answer, diagramUpdated: turn.diagram_updated });
@@ -450,10 +410,6 @@ export default function SessionPage() {
                 setProblem(res.question);
                 setHasDiagramCanvas(res.question.has_diagram_canvas);
                 setHasCodeEditor(res.question.has_code_editor);
-                // a manual-only question (coding, system design): drop out of smart before it's spoken,
-                // so the mic doesn't auto-arm when the speech ends. One that allows smart keeps the
-                // candidate's current choice.
-                if (!res.question.allows_smart_voice) setVoiceMode("manual");
                 setDiagram(emptyDiagram());
                 setLastSentDiagram(emptyDiagram());
                 // every language starts blank on the new problem
@@ -494,7 +450,7 @@ export default function SessionPage() {
         timeUpRef.current = true;
         setTimeUp(true);
         toast("The interview has ended, submitting your answers...", { variant: "info" });
-        if (listening || confirming) {
+        if (listening) {
             stop();
             return;
         }
@@ -543,58 +499,17 @@ export default function SessionPage() {
         onExpire: handleTimeUp,
     });
 
-    // ── Smart-mode: open the mic ONLY on the AI-finished-speaking EDGE ───────────────────────────
-    // Trigger on the `speaking` true->false EDGE (not merely "not speaking"): there's a brief gap
-    // between an answer submitting and TTS starting where a level check would fire and record over the
-    // AI's turn. prevSpeakingRef remembers last render's value so we only act once the AI has FINISHED.
-    const prevSpeakingRef = useRef(false);
-    useEffect(() => {
-        const wasSpeaking = prevSpeakingRef.current;
-        prevSpeakingRef.current = speaking;
-        // `mode === "voice"` gate: a text-mode answer's TTS also runs through `speaking`, and without
-        // this it would silently re-open the mic behind the composer — the same auto-submit-while-typing
-        // path, just re-armed a turn later. The mic auto-arms only when the voice screen is showing.
-        if (voiceMode !== "smart" || mode !== "voice" || !interviewId || done || ended || timeUp) return;
-        // `!preparing` is the single flow flag standing in for `!transcribing && !answering` (both run
-        // inside its span); `!speaking` still guards the playback half that runs after preparing clears.
-        if (wasSpeaking && !speaking && !preparing && !listening && !confirming) {
-            start();
-        }
-    }, [voiceMode, mode, speaking, preparing, interviewId, done, ended, timeUp, listening, confirming, start]);
-
-    // ── Pause the mic on voice->text, resume it on text->voice ───────────────────────────────────
-    // The voice turn-taking (auto-arm + VAD countdown -> stop+submit) must not run while the candidate
-    // is typing: a still-armed smart-mode mic hits its silence threshold and submits the draft
-    // mid-sentence (the bug this fixes). So LEAVING voice abandons any in-progress recording via
-    // cancel() — stop WITHOUT transcribing/submitting, so the half-answer is discarded, not posted —
-    // which also drops the VAD (its `active` gate is `listening`). RETURNING to voice re-arms the mic,
-    // but only in smart mode (manual always waits for a tap) and only when we're idle mid-interview;
-    // if the AI is mid-utterance the edge effect above arms it once speaking ends. The idle check reuses
-    // the single flow flag (`!preparing`) rather than re-OR-ing transcribing/answering. prevModeRef makes
-    // the body act on the actual voice<->text transition, not every state change that re-runs the effect.
+    // ── Pause the mic on voice->text ─────────────────────────────────────────────────────────────
+    // Switching to text mid-recording abandons the recording via cancel(): stop WITHOUT transcribing or
+    // submitting, so a half-spoken answer is discarded rather than posted while the candidate types.
+    // Switching back to voice waits for a tap, like every turn. prevModeRef makes the body act on the
+    // actual voice->text transition, not every state change that re-runs the effect.
     const prevModeRef = useRef(mode);
     useEffect(() => {
         const prev = prevModeRef.current;
         prevModeRef.current = mode;
-        if (prev === mode) return;
-        if (mode === "text") {
-            if (listening) cancel();
-        } else if (
-            voiceMode === "smart" &&
-            interviewId && !done && !ended && !timeUp &&
-            !speaking && !preparing && !listening && !confirming
-        ) {
-            start();
-        }
-    }, [mode, voiceMode, interviewId, done, ended, timeUp, speaking, preparing, listening, confirming, cancel, start]);
-
-    // ── "Still there?" — any keypress keeps the turn open during the countdown ───────────────────
-    useEffect(() => {
-        if (!confirming) return;
-        const onKey = () => keepListening();
-        window.addEventListener("keydown", onKey);
-        return () => window.removeEventListener("keydown", onKey);
-    }, [confirming, keepListening]);
+        if (prev !== mode && mode === "text" && listening) cancel();
+    }, [mode, listening, cancel]);
 
     // ── Derived view state ───────────────────────────────────────────────────────────────────────
     // Interviewer turns asked so far, oldest-first — drives the right-rail list and the current
@@ -607,34 +522,14 @@ export default function SessionPage() {
 
     return (
         <div className="flex h-screen flex-col bg-bg text-ink">
-            {/* ── Session header (shared) ─────────────────────────────────────── */}
-            <div className="flex h-[54px] items-center justify-between border-b border-divider px-6">
-                <div className="flex items-center gap-3.5">
-                    <span className="font-heading text-[17px] font-medium tracking-[-0.01em]">
-                        {interviewTitle(nav).join(" · ")}
-                    </span>
-                    <span className="tag tag-outline capitalize">{mode}</span>
-                </div>
-                <div className="flex items-center gap-[18px] text-[13px] text-neutral-300">
-                    {!ended && <NeedHelpButton label="How it works" onClick={() => setTouring(true)} disabled={touring} />}
-                    {/* timed interviews only: an untimed one shows no clock */}
-                    {remainingMs !== null && (
-                        <CountdownClock remainingMs={remainingMs} paused={preparing || speaking || frozen} />
-                    )}
-                    <Button
-                        variant="ghost"
-                        icon
-                        aria-label="Settings"
-                        onClick={() => setSettingsOpen(true)}
-                        data-tour="session-settings"
-                    >
-                        <Gear size={17} weight="regular" />
-                    </Button>
-                </div>
-            </div>
-            {touring && (
-                <GuidedTour buildSteps={() => sessionTourSteps(mode, smartVoiceLocked)} onEnd={() => setTouring(false)} />
-            )}
+            <SessionHeader
+                title={interviewTitle(nav).join(" · ")}
+                mode={mode}
+                ended={ended}
+                remainingMs={remainingMs}
+                clockPaused={preparing || speaking || frozen}
+                onOpenSettings={() => setSettingsOpen(true)}
+            />
 
             {/* ── Body: centre column + right rail — or, in a coding round or on a system-design question,
                 the conversation beside the coding panel / diagram canvas (stacked on narrow screens, where
@@ -660,18 +555,12 @@ export default function SessionPage() {
                         // TTS begins). Drives the "thinking" indicator AND locks the mic so no new
                         // recording starts mid-preparation. No OR of transcribing/answering -> no gap.
                         preparing={preparing}
-                        voiceMode={voiceMode}
-                        smartVoiceLocked={smartVoiceLocked}
                         supported={supported}
-                        confirming={confirming}
-                        countdownMs={countdownMs}
                         noInput={noInput}
                         done={done}
                         ended={frozen}
                         onToggleMic={() => (listening ? stop() : start())}
                         onCheckMic={handleCheckMic}
-                        onToggleVoiceMode={() => setVoiceMode((m) => (m === "manual" ? "smart" : "manual"))}
-                        onKeepListening={keepListening}
                         onSwitch={() => setMode("text")}
                         onEnd={handleEnd}
                     />
@@ -745,476 +634,6 @@ export default function SessionPage() {
                 onChangeMic={setMicDeviceId}
                 onMicReady={refreshMics}
             />
-        </div>
-    );
-}
-
-/* ══════════════════════════════════════════════════════════════════════════
-   Voice mode — centre column (mock 2a), wired
-   ══════════════════════════════════════════════════════════════════════ */
-function VoiceColumn({
-    compact,
-    question,
-    listening,
-    userSpeaking,
-    speaking,
-    preparing,
-    voiceMode,
-    smartVoiceLocked,
-    supported,
-    confirming,
-    countdownMs,
-    noInput,
-    done,
-    ended,
-    onToggleMic,
-    onCheckMic,
-    onToggleVoiceMode,
-    onKeepListening,
-    onSwitch,
-    onEnd,
-}: {
-    // Beside the coding panel: half the width, so a smaller question and tighter gutters.
-    compact: boolean;
-    question?: Line;
-    listening: boolean;
-    userSpeaking: boolean;
-    speaking: boolean;
-    preparing: boolean;
-    voiceMode: TurnMode;
-    // A manual-only round (coding, system design): the mode toggle stays visible but can't be flipped.
-    smartVoiceLocked: boolean;
-    supported: boolean;
-    confirming: boolean;
-    countdownMs: number;
-    noInput: boolean;
-    done: boolean;
-    ended: boolean;
-    onToggleMic: () => void;
-    onCheckMic: () => void;
-    onToggleVoiceMode: () => void;
-    onKeepListening: () => void;
-    onSwitch: () => void;
-    onEnd: () => void;
-}) {
-    // "thinking" is just the single flow flag now: it already spans transcription, the answer
-    // round-trip, and TTS synthesis, ending the instant the next question is revealed. One source of
-    // truth, so there's no frame where it reads false while a turn is still being prepared.
-    const thinking = preparing;
-    const voiceModeButton = (
-        <Button
-            variant="ghost"
-            className="flex items-center gap-2 border-l border-divider disabled:opacity-50"
-            style={{ padding: "13px 18px" }}
-            onClick={onToggleVoiceMode}
-            data-tour="voice-mode"
-            disabled={smartVoiceLocked || listening || confirming || preparing}
-        >
-            Mode: {voiceMode}
-        </Button>
-    );
-    // justify-center-SAFE, not plain center: in a scrolling column, plain centering pushes overflow out
-    // of BOTH ends, and the top half of a long question can't be scrolled back to. Safe centering centres
-    // while it fits and falls back to top-aligned (scrollable) when it doesn't.
-    return (
-        <div
-            className={
-                "flex min-h-0 flex-col items-center justify-center-safe overflow-y-auto py-8 " +
-                (compact ? "gap-7 px-8" : "gap-[34px] px-[60px]")
-            }
-        >
-            {/* Current question — the latest interviewer turn, or "thinking…" while we wait on the next */}
-            <div className="max-w-[680px] text-center">
-                <div className="kicker">{thinking ? "Interviewer is thinking" : "Interviewer asked"}</div>
-                <p
-                    className={
-                        "mt-2 whitespace-pre-wrap font-heading font-medium [text-wrap:pretty] " +
-                        (compact ? "text-[22px] leading-[1.3]" : "text-[31px] leading-[1.18]")
-                    }
-                >
-                    {thinking || !question?.text ? <LoadingDots className="text-[26px]" /> : question.text}
-                </p>
-            </div>
-
-            {/* Two participant cells — each pulses its icon while that participant is actually making
-                sound: "You" on real mic input (hark), the interviewer while its TTS plays. */}
-            <div className="grid w-[640px] max-w-full grid-cols-2 rounded-md border border-divider">
-                <ParticipantCell
-                    name="You"
-                    role="Candidate"
-                    speaking={userSpeaking}
-                    className="border-r border-divider"
-                    // The "You" cell's reserved footer slot (below the Speaking/Listening tag) holds one of
-                    // two mutually-exclusive prompts — see ParticipantCell. The slot is ALWAYS present in
-                    // BOTH cells, so a prompt appearing/disappearing changes no height and triggers no
-                    // page-scrollbar layout shift.
-                    //   1. confirming — the smart-mode "still there?" countdown, AFTER speech: a tap, any key
-                    //      (the effect in SessionPage), or this button keeps the turn open.
-                    //   2. noInput — the "check your mic" prompt, when NO sound was ever heard (wrong/dead
-                    //      mic, or never started). Amber (gap tokens) to read as attention, not the accent
-                    //      countdown; its button opens Settings to fix the input.
-                    // They can't both be true (a countdown needs prior speech, noInput needs none), but
-                    // confirming is checked first defensively.
-                    footer={
-                        confirming ? (
-                            <div className="flex items-center gap-2.5 rounded-md border border-accent px-3 py-1.5 text-[12.5px] text-accent-300">
-                                <span>Still there? {Math.ceil(countdownMs / 1000)}s</span>
-                                <Button variant="ghost" className="text-[12.5px]" onClick={onKeepListening}>
-                                    Keep talking
-                                </Button>
-                            </div>
-                        ) : noInput ? (
-                            <div className="flex items-center gap-2.5 whitespace-nowrap rounded-md border border-gap-border bg-gap-bg px-3 py-1.5 text-[12.5px] text-gap">
-                                <span>Still there?</span>
-                                <Button variant="ghost" className="text-[12.5px] text-gap" onClick={onCheckMic}>
-                                    Check your mic
-                                </Button>
-                            </div>
-                        ) : null
-                    }
-                />
-                <ParticipantCell ai name="Interviewer" role="AI · Staff engineer" speaking={speaking} />
-            </div>
-
-            {/* Control cluster — one bordered row, no gaps. Once the bank is exhausted (done) the mic is
-                retired and only "End session" remains. */}
-            <div className="flex items-center rounded-md border border-divider">
-                {supported && !done && (
-                    <>
-                        <Button
-                            variant="primary"
-                            className="flex items-center gap-[9px] text-[15px] disabled:opacity-50"
-                            style={{ padding: "13px 30px" }}
-                            onClick={onToggleMic}
-                            data-tour="answer-button" // every tour's answer step (tour/steps.ts)
-                            // Locked while the AI is speaking, while a turn is being prepared
-                            // (transcribe/answer/TTS), or once ended — so no new recording starts over any of those.
-                            disabled={speaking || preparing || ended}
-                        >
-                            <Microphone size={17} weight="regular" />
-                            {micLabel(listening, voiceMode)}
-                        </Button>
-                        {/* When the round locks smart mode off, a Tooltip explains why the toggle is disabled.
-                            Only wrapped when locked — an empty Tooltip would still show a blank bubble on hover. */}
-                        {smartVoiceLocked ? (
-                            <Tooltip content="Smart mode is off for this round">
-                                {voiceModeButton}
-                            </Tooltip>
-                        ) : (
-                            voiceModeButton
-                        )}
-                    </>
-                )}
-                <Button
-                    variant="ghost"
-                    className="flex items-center gap-2 border-l border-divider"
-                    style={{ padding: "13px 18px" }}
-                    onClick={onSwitch}
-                    data-tour="switch-mode"
-                >
-                    <PencilSimple size={16} weight="regular" />
-                    Switch to text
-                </Button>
-                <Button
-                    variant="ghost"
-                    className="border-l border-divider disabled:opacity-50"
-                    style={{ padding: "13px 20px" }}
-                    onClick={onEnd}
-                    data-tour="end-session"
-                    disabled={ended}
-                >
-                    {ended ? "Ending…" : "End session"}
-                </Button>
-            </div>
-
-            {done && (
-                <p className="m-0 text-[13px] text-accent-300">
-                    That's the last question. End the session to see your scorecard.
-                </p>
-            )}
-
-            <p className="m-0 text-[12.5px] text-neutral-400">
-                Responses are generated by AI and may be wrong. Nothing is shared outside your account.
-            </p>
-        </div>
-    );
-}
-
-// The mic button copy, mirroring App.tsx: manual STOP submits (combined stop+send), smart STOP just
-// stops (the countdown/VAD submits).
-function micLabel(listening: boolean, voiceMode: TurnMode): string {
-    if (!listening) return "Record your answer";
-    return voiceMode === "manual" ? "Speaking: tap to stop & send" : "Speaking: tap to stop";
-}
-
-function ParticipantCell({
-    ai,
-    name,
-    role,
-    speaking,
-    className = "",
-    footer = null,
-}: {
-    ai?: boolean;
-    name: string;
-    role: string;
-    speaking: boolean;
-    className?: string;
-    // Content for the reserved slot below the Speaking/Listening tag (the "You" cell's "Still there?"
-    // countdown). The slot's height is reserved unconditionally in BOTH cells regardless of `footer`,
-    // so toggling its content never reflows the box — that's what kills the layout shift.
-    footer?: ReactNode;
-}) {
-    // Zoom-style status icon — a mic for the candidate, a speaker for the interviewer — that pulses
-    // (accent + filled) while that participant is making sound, idle/neutral otherwise. Fixed-height
-    // slot so the cell doesn't reflow as it toggles.
-    const StatusIcon: Icon = ai ? SpeakerHigh : Microphone;
-    return (
-        <div className={"flex flex-col items-center gap-3 px-[22px] py-[26px] " + className}>
-            {ai ? (
-                <div className="flex h-16 w-16 items-center justify-center rounded-md border border-accent text-accent-300">
-                    <Sparkle size={26} weight="regular" />
-                </div>
-            ) : (
-                // The candidate's picture-or-initials, self-supplied from the store (no prop threading).
-                <UserAvatar className="h-16 w-16 border-neutral-700 text-neutral-400" textClassName="font-heading text-[22px]" />
-            )}
-            <div className="text-center">
-                <div className="font-heading text-[19px]">{name}</div>
-                <div className="text-[12.5px] text-neutral-400">{role}</div>
-            </div>
-            <div className="flex h-[34px] items-center justify-center">
-                <StatusIcon
-                    size={26}
-                    weight={speaking ? "fill" : "regular"}
-                    className={speaking ? "text-accent-300 speaking-pulse" : "text-neutral-600"}
-                />
-            </div>
-            {speaking ? (
-                <span className="tag tag-accent">Speaking</span>
-            ) : (
-                <span className="tag tag-neutral">Listening</span>
-            )}
-            {/* Reserved footer slot — fixed height in BOTH cells so the "Still there?" badge can appear
-                and disappear inside the "You" cell without changing the box's height (no scrollbar flash). */}
-            <div className="mt-4 flex h-[38px] items-center justify-center">{footer}</div>
-        </div>
-    );
-}
-
-/* ══════════════════════════════════════════════════════════════════════════
-   Text mode — centre column (mock 2b), wired
-   ══════════════════════════════════════════════════════════════════════ */
-function TextColumn({
-    transcript,
-    draft,
-    setDraft,
-    waiting,
-    answering,
-    transcribing,
-    coding,
-    canSend,
-    done,
-    ended,
-    onSend,
-    onSwitch,
-    onEnd,
-}: {
-    transcript: Line[];
-    draft: string;
-    setDraft: (v: string) => void;
-    waiting: boolean;
-    answering: boolean;
-    transcribing: boolean;
-    coding: boolean; // a coding round: no word-count target, and the code goes with the answer
-    canSend: boolean;
-    done: boolean;
-    ended: boolean;
-    onSend: () => void;
-    onSwitch: () => void;
-    onEnd: () => void;
-}) {
-    // Keep the newest message in view as the transcript grows.
-    const bottomRef = useRef<HTMLDivElement | null>(null);
-    useEffect(() => {
-        bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-    }, [transcript.length, waiting]);
-
-    const words = draft.trim() ? draft.trim().split(/\s+/).length : 0;
-
-    return (
-        <div className="flex min-h-0 flex-col">
-            {/* Scrolling message list */}
-            <div className="flex flex-1 justify-center overflow-y-auto py-[30px]">
-                <div className="flex w-[720px] max-w-full flex-col gap-[22px] px-4">
-                    {transcript
-                        // Pending interviewer bubbles aren't shown as bubbles — the typing indicator below
-                        // stands in for them until their text is revealed.
-                        .filter((line) => !line.pending)
-                        .map((line) => (
-                            <MessageRow
-                                key={line.id}
-                                who={line.who}
-                                kicker={line.who === "interviewer" ? "Interviewer" : "You"}
-                                text={line.text}
-                            >
-                                {line.diagramUpdated && (
-                                    <span className="tag tag-accent gap-1.5 self-start">
-                                        <TreeStructure size={12} weight="regular" />
-                                        Updated the diagram
-                                    </span>
-                                )}
-                            </MessageRow>
-                        ))}
-
-                    {/* Typing indicator — while the answer is in flight or the interviewer's audio loads */}
-                    {waiting && (
-                        <div className="flex items-center gap-3 text-[13px] text-neutral-400">
-                            <LoadingDots />
-                            <span>Interviewer is typing</span>
-                        </div>
-                    )}
-                    <div ref={bottomRef} />
-                </div>
-            </div>
-
-            {/* Composer (fixed at bottom of the column). Retired once the bank is exhausted. */}
-            <div className="flex justify-center border-t border-divider px-4 pb-5 pt-[18px]">
-                <div className="flex w-[720px] max-w-full flex-col gap-3">
-                    {done ? (
-                        <p className="m-0 rounded-md border border-accent px-3.5 py-3 text-[15px] text-accent-300">
-                            That's the last question. End the session to see your scorecard.
-                        </p>
-                    ) : (
-                        <div className="flex min-h-[78px] flex-col justify-between rounded-md border border-accent px-3.5 py-3">
-                            <textarea
-                                value={draft}
-                                onChange={(e) => setDraft(e.target.value)}
-                                // Enter sends, Shift+Enter makes a newline — matches the hint copy below.
-                                onKeyDown={(e) => {
-                                    if (e.key === "Enter" && !e.shiftKey) {
-                                        e.preventDefault();
-                                        onSend();
-                                    }
-                                }}
-                                rows={2}
-                                placeholder="Type your answer…"
-                                className="m-0 w-full resize-none border-0 bg-transparent p-0 text-[15px] leading-[1.5] text-neutral-100 outline-none placeholder:text-neutral-500"
-                            />
-                            <div className="flex items-center justify-between text-[12.5px] text-neutral-400">
-                                <span>Shift + Enter for a new line</span>
-                                {/* a word target means nothing for a coding answer */}
-                                {!coding && <span>{words} words · aim for 150–250</span>}
-                            </div>
-                        </div>
-                    )}
-                    <div className="flex items-center justify-between">
-                        <div className="flex items-center rounded-md border border-divider">
-                            <Button
-                                variant="ghost"
-                                className="flex items-center gap-2"
-                                style={{ padding: "10px 16px" }}
-                                onClick={onSwitch}
-                                data-tour="switch-mode"
-                            >
-                                <Microphone size={16} weight="regular" />
-                                Switch to voice
-                            </Button>
-                            <Button
-                                variant="ghost"
-                                className="border-l border-divider disabled:opacity-50"
-                                style={{ padding: "10px 18px" }}
-                                onClick={onEnd}
-                                data-tour="end-session"
-                                disabled={ended}
-                            >
-                                {ended ? "Ending…" : "End session"}
-                            </Button>
-                        </div>
-                        {!done && (
-                            <Button
-                                variant="primary"
-                                className="text-[15px] disabled:opacity-50"
-                                style={{ padding: "11px 28px" }}
-                                onClick={onSend}
-                                data-tour="answer-button" // every tour's answer step (tour/steps.ts)
-                                disabled={answering || transcribing || ended || !canSend}
-                            >
-                                {transcribing ? "Transcribing…" : answering ? "Sending…" : "Send answer"}
-                            </Button>
-                        )}
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-}
-
-/* ══════════════════════════════════════════════════════════════════════════
-   Right rail (shared) — question list (from the transcript) + scratchpad + footer
-   ══════════════════════════════════════════════════════════════════════ */
-function RightRail({
-    mode,
-    isResume,
-    interviewerLines,
-    scoring,
-}: {
-    mode: AnswerMode;
-    isResume: boolean;
-    interviewerLines: Line[];
-    scoring: boolean;
-}) {
-    // A private, local-only scratchpad (not persisted — deliberately, it's throwaway thinking space).
-    const [scratch, setScratch] = useState("");
-
-    // Scrolls on its own: the "This session" list grows every turn and must not stretch the page.
-    return (
-        <div className="hidden min-h-0 flex-col gap-[22px] overflow-y-auto border-l border-divider p-5 lg:flex">
-            {/* This session — the interviewer turns asked so far, newest = current. No total: an
-                interview's length isn't fixed (follow-ups are dynamic), so this just grows as we go. */}
-            <div>
-                <div className="kicker">This session</div>
-                <div className="mt-2.5 flex flex-col gap-[9px] text-[13px]">
-                    {interviewerLines.length === 0 ? (
-                        <span className="text-neutral-400">{isResume ? "Resuming..." : "Waiting for the first question…"}</span>
-                    ) : (
-                        interviewerLines.map((q, i) => {
-                            const isCurrent = i === interviewerLines.length - 1;
-                            return (
-                                <div key={q.id} className="flex gap-2.5">
-                                    <span className={"w-4 font-heading " + (isCurrent ? "text-accent-300" : "")}>
-                                        {String(i + 1).padStart(2, "0")}
-                                    </span>
-                                    <span className={isCurrent ? "[text-wrap:pretty]" : "text-neutral-400 [text-wrap:pretty]"}>
-                                        {q.pending ? <LoadingDots/> : q.text}
-                                    </span>
-                                </div>
-                            );
-                        })
-                    )}
-                </div>
-            </div>
-
-            {/* Scratchpad — real, editable, local to this browser tab */}
-            <div data-tour="scratchpad">
-                <div className="kicker">Scratchpad</div>
-                <textarea
-                    value={scratch}
-                    onChange={(e) => setScratch(e.target.value)}
-                    placeholder="Jot notes while you think…"
-                    className="mt-2.5 min-h-[120px] w-full resize-none rounded-md border border-divider bg-transparent p-3 text-[13px] leading-[1.5] text-neutral-300 outline-none placeholder:text-neutral-500 focus:border-neutral-600"
-                />
-            </div>
-
-            {/* Voice controls (mic + test meter, TTS engine, mode) now live in the header-gear Settings
-                modal, so the rail's footer is just the text-mode grading note. */}
-            {mode === "text" && (
-                <div className="mt-auto text-[12.5px] leading-[1.5] text-neutral-400">
-                    {scoring
-                        ? "Grading your answers…"
-                        : "Feedback and a score are generated when you end the session."}
-                </div>
-            )}
         </div>
     );
 }
