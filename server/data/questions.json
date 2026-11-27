@@ -380,7 +380,6 @@
       "has_code_editor": false,
       "uses_candidate_background": true,
       "max_followups": 2,
-      "allows_smart_voice": true,
       "interviewer_guidance": "Probe for structure (situation, task, action, result), for the candidate's OWN contribution (I versus we), and for concrete, measurable outcomes. If the story stays general, ask for the specific moment, decision, or number.",
       "rubric": {
         "dimensions": [
@@ -398,7 +397,6 @@
       "has_code_editor": true,
       "uses_candidate_background": false,
       "max_followups": 6,
-      "allows_smart_voice": false,
       "interviewer_guidance": "The candidate first explains an approach, then writes code in an editor; submitted code arrives as a fenced code block in their message. Never reveal the solution or write code for them. Give a small hint only if they are clearly stuck or ask for one. Probe: brute force versus optimal, time and space complexity, edge cases, tracing the problem's own example through their code, and any bug you can see in the submitted code. Keep probing until they have submitted working code and stated its complexity. The candidate may code in ANY language they choose; accept it as-is. Never ask them to switch or translate to another language.",
       "rubric": {
         "dimensions": [
@@ -417,7 +415,6 @@
       "has_code_editor": false,
       "uses_candidate_background": false,
       "max_followups": 8,
-      "allows_smart_voice": false,
       "interviewer_guidance": "Let the candidate lead, and let them drive the requirements. Probe in the natural order of a real design interview: functional and non-functional requirements, core entities and API, the high-level design, then deep dives on scaling, the data model, consistency, failure modes, and the tradeoffs behind each choice. Push harder on deep dives and tradeoffs for senior candidates.",
       "rubric": {
         "dimensions": [

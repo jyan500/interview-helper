@@ -325,12 +325,9 @@ class QuestionType(Base, TimestampMixin):
     #   interviewer_guidance  prose for the persona: what to probe on an answer of this kind.
     #   max_followups         the probe budget while a question of this kind is on the table (coding
     #                         needs approach -> code -> complexity -> edge cases; behavioral far fewer).
-    #   allows_smart_voice    whether the SPA offers "smart" voice turn-taking on it. Off for coding and
-    #                         system design: long thinking pauses would auto-submit a half-answer.
     # Its grading rubric hangs off it too (Rubric.question_type_id).
     interviewer_guidance: Mapped[str] = mapped_column(Text)
     max_followups: Mapped[int] = mapped_column(Integer)
-    allows_smart_voice: Mapped[bool] = mapped_column(Boolean, default=False)
 
     rubric: Mapped[Rubric | None] = relationship(back_populates="question_type", lazy="raise")
 
